@@ -20,6 +20,6 @@ luac.out
 /deps/
 .tests/
 
-# Harness (managed in a separate private repository)
-CLAUDE.md
-.claude/
+# Personal agent instructions
+CLAUDE.local.md
+.claude/settings.local.json
