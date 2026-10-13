@@ -1,0 +1,25 @@
+# OS
+.DS_Store
+
+# Editor / Vim
+*.swp
+*.swo
+tags
+doc/tags
+
+# Lua
+*.luac
+luac.out
+
+# Environment / local
+.env
+.direnv/
+.luarc.json
+
+# Test / dependency artifacts
+/deps/
+.tests/
+
+# Harness (managed in a separate private repository)
+CLAUDE.md
+.claude/
