@@ -24,12 +24,12 @@ stdout は常に 1 つの JSON オブジェクト。stderr はログ。panic 等
 { "ok": false, "error": { "code": "E_GH_AUTH", "message": "...", "hint": "run gh auth login", "retryable": false, "details": {} } }
 ```
 
-Lua は `error.code` で分岐する。終了コードはシェル利用者とテスト向け。
+Lua は `error.code` で分岐する。`details` は常にオブジェクト（無ければ `{}`）、`hint` は無ければ省略。終了コードはシェル利用者とテスト向け。
 
 | 終了コード | 意味 | code |
 |---|---|---|
 | 0 | 成功（部分成功を含む） | |
-| 1 | 引数誤り | |
+| 1 | 引数誤り | `E_USAGE` |
 | 2 | 検証 | `E_INVALID`、`E_NOT_COMMENTABLE` |
 | 3 | 不在 | `E_NO_SESSION`、`E_NO_COMMENT`、`E_NO_TARGET` |
 | 4 | 外部ツール | `E_GIT`、`E_GH`、`E_GH_AUTH`、`E_GH_MISSING`、`E_GH_PENDING_REVIEW`、`E_HERDR`、`E_HERDR_MISSING`、`E_AMBIGUOUS` |

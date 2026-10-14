@@ -1,0 +1,5 @@
+#!/bin/sh
+case "$1" in
+  --version) echo "herdr 0.0.0-fake" ;;
+  *) echo "fake herdr: unsupported: $*" >&2; exit 1 ;;
+esac

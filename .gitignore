@@ -23,3 +23,7 @@ luac.out
 # Personal agent instructions
 CLAUDE.local.md
 .claude/settings.local.json
+
+# Rust
+target/
+*.snap.new
