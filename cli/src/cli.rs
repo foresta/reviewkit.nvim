@@ -87,4 +87,13 @@ pub enum Command {
     Health,
     /// Print the JSON Schema of every type in the contract.
     Schema,
+    /// Open, resume, list and close review sessions.
+    #[command(subcommand)]
+    Session(crate::commands::session::SessionCommand),
+    /// Inspect the targets of a session.
+    #[command(subcommand)]
+    Target(crate::commands::target::TargetCommand),
+    /// Read file contents of a session's base side.
+    #[command(subcommand)]
+    File(crate::commands::file::FileCommand),
 }

@@ -1,5 +1,8 @@
+pub mod file;
 pub mod health;
 pub mod schema;
+pub mod session;
+pub mod target;
 pub mod version;
 
 use crate::cli::Command;
@@ -12,5 +15,8 @@ pub fn dispatch(ctx: &Context, command: Command) -> Result<Response> {
         Command::Version => version::run(ctx),
         Command::Health => health::run(ctx),
         Command::Schema => schema::run(ctx),
+        Command::Session(command) => session::run(ctx, command),
+        Command::Target(command) => target::run(ctx, command),
+        Command::File(command) => file::run(ctx, command),
     }
 }
