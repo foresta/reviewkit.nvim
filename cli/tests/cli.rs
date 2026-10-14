@@ -72,7 +72,16 @@ fn schema_lists_contract_types() {
     let body = json(&output);
     assert_eq!(body["data"]["schema_version"], 1);
     let defs = &body["data"]["schema"]["$defs"];
-    for name in ["VersionInfo", "HealthInfo", "Error", "ErrorCode"] {
+    for name in [
+        "VersionInfo",
+        "HealthInfo",
+        "Error",
+        "ErrorCode",
+        "Session",
+        "Target",
+        "Comment",
+        "SinkResult",
+    ] {
         assert!(defs.get(name).is_some(), "missing $defs.{name}");
     }
 }

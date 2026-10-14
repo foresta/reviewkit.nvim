@@ -1,10 +1,10 @@
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
 use crate::context::{Context, Tools};
 use crate::error::{Error, Result};
+use crate::store::{StateDir, env_non_empty};
 
 #[derive(Debug, Parser)]
 #[command(name = "reviewkit", version, about, disable_help_subcommand = true)]
@@ -49,15 +49,7 @@ impl GlobalArgs {
             return Err(Error::invalid(format!("--cwd is not a directory: {}", cwd.display())));
         }
 
-        let state_dir = self
-            .state_dir
-            .clone()
-            .or_else(|| env_non_empty("REVIEWKIT_STATE_DIR").map(PathBuf::from))
-            .or_else(|| env_non_empty("XDG_STATE_HOME").map(|dir| Path::new(&dir).join("reviewkit")))
-            .or_else(|| std::env::home_dir().map(|home| home.join(".local").join("state").join("reviewkit")))
-            .ok_or_else(|| {
-                Error::invalid("cannot determine the state directory").hint("set --state-dir or $REVIEWKIT_STATE_DIR")
-            })?;
+        let state_dir = StateDir::resolve(self.state_dir.clone())?;
 
         let log_level = self
             .log_level
@@ -76,12 +68,6 @@ impl GlobalArgs {
             },
         })
     }
-}
-
-/// Empty counts as unset so that `VAR= reviewkit ...` behaves like an unset
-/// VAR for every variable, instead of each call site deciding differently.
-fn env_non_empty(name: &str) -> Option<OsString> {
-    std::env::var_os(name).filter(|v| !v.is_empty())
 }
 
 /// An explicit override wins even when the file does not exist, so that a

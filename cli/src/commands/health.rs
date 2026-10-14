@@ -22,8 +22,8 @@ pub fn run(ctx: &Context) -> Result<Response> {
         },
         gh_auth,
         state_dir: StateDirStatus {
-            writable: state_dir_writable(&ctx.state_dir),
-            path: ctx.state_dir.clone(),
+            writable: state_dir_writable(ctx.state_dir.as_path()),
+            path: ctx.state_dir.as_path().to_path_buf(),
         },
     })
 }
