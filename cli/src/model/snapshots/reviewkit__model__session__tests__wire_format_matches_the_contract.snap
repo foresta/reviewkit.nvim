@@ -1,0 +1,238 @@
+---
+source: cli/src/model/session.rs
+expression: full_session()
+---
+{
+  "schema_version": 1,
+  "id": "pr/github.com/o/r/7",
+  "rev": 0,
+  "state_path": "/state/sessions/pr/github.com/o/r/7/session.json",
+  "repo": {
+    "root": "/repo",
+    "host": "github.com",
+    "owner": "o",
+    "name": "r",
+    "remote_url": "https://github.com/o/r.git"
+  },
+  "source": {
+    "kind": "pr",
+    "number": 7,
+    "url": "https://github.com/o/r/pull/7",
+    "title": "Title",
+    "author": "alice",
+    "state": "OPEN",
+    "head_ref": "feature",
+    "base_ref": "main",
+    "base_oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "node_id": "PR_1",
+    "worktree": "/state/repos/k/pr/7"
+  },
+  "base": {
+    "ref": "main",
+    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "head": {
+    "ref": "feature",
+    "sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "dirty": false
+  },
+  "targets": [
+    {
+      "id": "t_1",
+      "path": "src/a.rs",
+      "old_path": null,
+      "status": "modified",
+      "reason": "changed",
+      "base_blob": "dddddddddddddddddddddddddddddddddddddddd",
+      "head_blob": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "binary": false,
+      "too_large": false,
+      "viewed": true,
+      "stats": {
+        "added": 2,
+        "removed": 1
+      },
+      "hunks": [
+        {
+          "base_start": 3,
+          "base_count": 1,
+          "head_start": 3,
+          "head_count": 2
+        }
+      ],
+      "commentable": {
+        "base": [
+          [
+            1,
+            6
+          ]
+        ],
+        "head": [
+          [
+            1,
+            7
+          ]
+        ]
+      },
+      "range": null
+    },
+    {
+      "id": "t_2",
+      "path": "src/b.rs",
+      "old_path": "src/old.rs",
+      "status": "type",
+      "reason": "thread",
+      "base_blob": null,
+      "head_blob": null,
+      "binary": true,
+      "too_large": false,
+      "viewed": false,
+      "stats": {
+        "added": 0,
+        "removed": 0
+      },
+      "hunks": [],
+      "commentable": {
+        "base": [],
+        "head": []
+      },
+      "range": {
+        "start": 1,
+        "end": 3
+      }
+    }
+  ],
+  "comments": [
+    {
+      "id": "c_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "path": "src/a.rs",
+      "side": "head",
+      "line": 4,
+      "start_line": 3,
+      "kind": "suggestion",
+      "body": "use x",
+      "suggestion": "let x = 1;",
+      "reply_to": null,
+      "anchor": {
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "blob": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "context": {
+          "before": [
+            "fn f() {"
+          ],
+          "lines": [
+            "  let y = 2;",
+            "  let x = 2;"
+          ],
+          "after": [
+            "}"
+          ]
+        }
+      },
+      "stale": false,
+      "commentable": {
+        "github": false,
+        "reason": "outside_diff"
+      },
+      "last_error": {
+        "sink": "github",
+        "code": "E_GH",
+        "message": "boom",
+        "at": "2026-01-02T03:04:05.000000Z"
+      },
+      "created_at": "2026-01-02T03:04:05.000000Z",
+      "updated_at": "2026-01-02T03:04:05.000000Z"
+    }
+  ],
+  "decision": {
+    "event": "request_changes",
+    "body": "please",
+    "updated_at": "2026-01-02T03:04:05.000000Z"
+  },
+  "threads": [
+    {
+      "id": "PRRT_1",
+      "path": "src/a.rs",
+      "subject_type": "line",
+      "side": "base",
+      "start_side": "base",
+      "line": 2,
+      "start_line": null,
+      "original_line": 2,
+      "resolved": false,
+      "outdated": true,
+      "comments": [
+        {
+          "id": "PRRC_1",
+          "author": "bob",
+          "body": "why?",
+          "created_at": "2026-01-02T03:04:05.000000Z",
+          "url": "https://github.com/o/r/pull/7#discussion_r1"
+        }
+      ]
+    }
+  ],
+  "thread_actions": [
+    {
+      "thread_id": "PRRT_1",
+      "action": "resolve"
+    }
+  ],
+  "viewed": {
+    "src/a.rs": {
+      "blob": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "at": "2026-01-02T03:04:05.000000Z"
+    }
+  },
+  "last_submit": {
+    "sink": "herdr",
+    "at": "2026-01-02T03:04:05.000000Z",
+    "result": {
+      "sink": "herdr",
+      "at": "2026-01-02T03:04:05.000000Z",
+      "url": null,
+      "sent": [
+        {
+          "comment_id": "c_1"
+        }
+      ],
+      "failed": [
+        {
+          "comment_id": null,
+          "error": {
+            "code": "E_HERDR",
+            "message": "pane gone",
+            "retryable": false,
+            "details": {}
+          }
+        }
+      ],
+      "skipped": [
+        {
+          "comment_id": "c_2",
+          "reason": "not_supported"
+        }
+      ],
+      "thread_actions": [
+        {
+          "thread_id": "PRRT_1",
+          "action": "unresolve",
+          "status": "failed"
+        }
+      ],
+      "decision": "not_applicable",
+      "summary": "1 sent, 1 skipped, 1 failed"
+    }
+  },
+  "etags": {
+    "targets": "",
+    "comments": "",
+    "decision": "",
+    "threads": "",
+    "thread_actions": "",
+    "viewed": ""
+  },
+  "created_at": "2026-01-02T03:04:05.000000Z",
+  "updated_at": "2026-01-02T03:04:05.000000Z"
+}

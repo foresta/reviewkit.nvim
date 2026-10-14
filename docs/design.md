@@ -112,7 +112,7 @@ Reason = "outside_diff" | "stale" | "binary" | "not_supported"
 CommentInput { path, side, line, start_line?, kind?, body, suggestion?, reply_to? }
                             -- core が anchor / commentable / id を埋める
 CommentPatch { line?, start_line?, kind?, body?, suggestion? }
-                            -- line を変えると stale が消える
+                            -- 省略は変更なし。start_line / suggestion は null で解除。line を変えると stale が消える
 
 Decision { event: "approve|request_changes|comment", body, updated_at }
                             -- event は GitHub の PullRequestReviewEvent と 1:1

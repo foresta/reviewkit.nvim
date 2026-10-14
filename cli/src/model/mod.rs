@@ -1,4 +1,29 @@
+pub mod comment;
+pub mod decision;
 pub mod health;
+pub mod hunk;
+pub mod pr_info;
+pub mod session;
+pub mod sink;
+pub mod target;
+pub mod thread;
+
+pub use comment::{
+    Anchor, AnchorContext, Comment, CommentInput, CommentKind, CommentPatch, Commentable, LastError, Reason,
+};
+pub use decision::{Decision, DecisionEvent};
+pub use health::{HealthInfo, StateDirStatus, ToolStatus, ToolsStatus};
+pub use hunk::Hunk;
+pub use pr_info::{Check, PrInfo, TimelineItem, TimelineKind};
+pub use session::{
+    Etags, HeadRef, LastSubmit, PrState, Repo, RevRef, Session, SessionSummary, Side, Source, ThreadAction,
+    ThreadActionKind, Viewed,
+};
+pub use sink::{
+    AgentType, DecisionStatus, Failed, SendStatus, Sent, SinkResult, Skipped, SubmitOptions, ThreadActionResult,
+};
+pub use target::{CommentableRanges, Range, Stats, Target, TargetReason, TargetStatus};
+pub use thread::{SubjectType, Thread, ThreadComment};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -18,6 +43,13 @@ pub struct VersionInfo {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Contract {
     pub version: VersionInfo,
-    pub health: health::HealthInfo,
+    pub health: HealthInfo,
     pub error: crate::error::Error,
+    pub session: Session,
+    pub session_summary: SessionSummary,
+    pub comment_input: CommentInput,
+    pub comment_patch: CommentPatch,
+    pub pr_info: PrInfo,
+    pub submit_options: SubmitOptions,
+    pub sink_result: SinkResult,
 }
