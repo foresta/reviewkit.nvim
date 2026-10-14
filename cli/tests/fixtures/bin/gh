@@ -1,0 +1,10 @@
+#!/bin/sh
+case "$1" in
+  --version) echo "gh version 0.0.0-fake" ;;
+  auth)
+    if [ "${GH_FAKE_AUTH:-1}" = "0" ]; then
+      echo "no oauth token found for github.com" >&2; exit 1
+    fi
+    echo "gho_fake" ;;
+  *) echo "fake gh: unsupported: $*" >&2; exit 1 ;;
+esac

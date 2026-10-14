@@ -1,0 +1,28 @@
+---
+source: cli/tests/cli.rs
+expression: body
+---
+{
+  "data": {
+    "gh_auth": true,
+    "state_dir": {
+      "path": "[path]",
+      "writable": true
+    },
+    "tools": {
+      "gh": {
+        "path": "[path]",
+        "version": "gh version 0.0.0-fake"
+      },
+      "git": {
+        "path": "[path]",
+        "version": "git version 0.0.0-fake"
+      },
+      "herdr": {
+        "path": "[path]",
+        "version": "herdr 0.0.0-fake"
+      }
+    }
+  },
+  "ok": true
+}
