@@ -8,6 +8,9 @@ Neovim 上でコードレビューを完結させるための、小さな部品�
 - 他人の PR のレビュー（送り先: GitHub の review）
 - AI エージェントが書いたコードのレビュー（送り先: herdr 上のエージェントへのプロンプト）
 
+実装は **Rust の CLI `reviewkit`** と **Neovim 側の Lua** の 2 つに分かれる（D7）。
+言語とツールは `docs/tech-stack.md`、型と API は `docs/design.md`。
+
 ## 全体像
 
 ```
@@ -41,7 +44,7 @@ View は Core のイベントを購読して描くだけ。Source と Sink は�
 
 | 部品 | 責務 | 依存 | 置き換え・拡張の例 |
 |---|---|---|---|
-| **core** | Session の生成・破棄。Target / Comment / Decision の保持。変更イベントの発火。Source / Sink の登録口 | なし（純 Lua） | ― |
+| **core** | Session の生成・破棄。Target / Comment / Decision の保持と永続化。変更イベントの発火。Source / Sink の登録口 | なし | ― |
 | **source-local** | 作業ツリーや任意の 2 リビジョン間の差分から Target を作る | lib/git | base の指定（HEAD、merge-base、任意 ref） |
 | **source-pr** | PR 番号 / URL から base と head を取得し、ファイルを実体化して Target を作る。既存スレッドも Target の付帯情報として取り込む。差分の計算は lib/git に寄せる | lib/gh、lib/git | GitLab / 他ホスティング |
 | **source-graph**（将来） | 変更が影響する呼び出し元・参照元を解析し、diff 外の箇所を Target に追加する | LSP / treesitter | 依存グラフの深さ・方向の設定 |
@@ -64,6 +67,23 @@ core / view が内側、source / sink が外側。外側の部品は core の公
 source-local と source-pr の違いは「base / head をどう決めるか」と「ファイルをどこに実体化するか」だけで、
 差分の計算は両者とも lib/git に寄せる。
 
+## 実装の境界
+
+```
+ Neovim (Lua)                                 reviewkit CLI (Rust)
+ ┌──────────────────────────┐   argv + stdin  ┌─────────────────────────────┐
+ │ orchestrator  :Review …  │ ──────────────▶ │ cli    (JSON の封筒)          │
+ │ core shim    cache+events│ ◀────────────── │ core   Session の状態・永続化 │
+ │ view-diff / view-queue   │  stdout JSON    │ source local / pr            │
+ └──────────────────────────┘                 │ sink   herdr / github        │
+                                              │ lib    git / gh / herdr      │
+                                              └─────────────────────────────┘
+```
+
+- core・source・sink・lib は Rust の CLI。Session の状態と永続化は CLI が持ち、変更コマンドは更新後の Session 全体を返す
+- view・orchestrator と、CLI を呼んで `User` autocmd を発火する薄い core shim は Lua。Lua は Session を書き換えない
+- CLI は Neovim を知らない。Neovim 以外のフロントエンド（コーディングエージェントのスキル等）からも同じ CLI を使える
+
 ## データの流れ
 
 1. Orchestrator が Source を選び、Session を開始する
@@ -77,10 +97,10 @@ source-local と source-pr の違いは「base / head をどう決めるか」�
 
 ## 部品間の契約（概念）
 
-型定義は次フェーズで確定する。ここでは各データが**何を持たなければならないか**だけ決める。
+型定義と CLI の形は `docs/design.md` で確定している。ここでは各データが**何を持たなければならないか**だけ書く。
 
-- **Target**: どのファイルのどの範囲を読むべきか。`path`、範囲、比較元 `base_ref` と比較先 `head_ref`、拾った理由（変更 / 影響範囲 / 既存スレッド）。
-  複数 Source からの Target は同じ Session に混ざる
+- **Target**: どのファイルのどの範囲を読むべきか。`path`、範囲、拾った理由（変更 / 影響範囲 / 既存スレッド）。
+  比較元 / 比較先は Session が 1 組持ち、複数 Source からの Target は同じ Session の同じ base / head に混ざる
 - **Comment**: どこに何を言ったか。`path`、`side`（base / head）、行と開始行、本文、種類（指摘 / 提案 / 質問 など）、対象の ref。
   `side` と ref は GitHub 送信に必須なので、AI 向けでも必ず持たせる
 - **Decision**: Session に 1 つ。`approve` / `request_changes` / `comment` と総評本文。queue の要素ではない。
@@ -90,20 +110,13 @@ source-local と source-pr の違いは「base / head をどう決めるか」�
 
 連携の仕組みは 2 つに限定する。
 
-- **イベント**: `User` autocmd。`ReviewTargetsChanged` / `ReviewQueueChanged` / `ReviewDecisionChanged` / `ReviewSessionClosed`。View と Sink はこれだけを購読する
-- **登録**: `core.register_source(name, impl)` / `core.register_sink(name, impl)`。Orchestrator は名前で選ぶ
-
-## 既存資産の扱い
-
-- **herdr-send-queue.nvim**: `core/herdr.lua`（送信 transport）と `review/format.lua`（プロンプト整形）が sink-herdr の中身になる。
-  queue と view は新 core / view-queue に吸収する。移行が終わるまでは独立プラグインとして並存させる
-- **agent-review.nvim**（MIT）: `pr/` 配下（gh.lua、mirror.lua、review.lua、threads.lua）が source-pr と sink-github の参考実装。
-  `session.lua` が view-diff の参考実装。書き起こしではなく移植で始める
+- **イベント**: `User` autocmd。`ReviewTargetsChanged` / `ReviewQueueChanged` / `ReviewDecisionChanged` / `ReviewSessionClosed` など。View はこれだけを購読する
+- **登録**: Rust 側の Source / Sink は CLI に組み込み、Lua 側の Sink は `core.register_sink(name, impl)` で足す。Orchestrator は名前で選ぶ
 
 ## 配布単位
 
-**最初は 1 リポジトリ**に全部品を置き、`lua/reviewkit/{core,lib,source,view,sink}/` のディレクトリ境界で分ける。
-部品間の呼び出しは `require("reviewkit.core")` のような公開モジュール経由に限り、内部モジュールを越境して呼ばない。
+**最初は 1 リポジトリ**に全部品を置く。Rust は `cli/src/{core,source,sink,ext}/`（ext が lib 層）、Lua は `lua/reviewkit/{view,sink}/` と `core.lua` で、それぞれディレクトリ境界で分ける。
+部品間の呼び出しは公開モジュール経由に限り、内部モジュールを越境して呼ばない。
 
 別リポジトリへ切り出す条件は「その部品に外部の利用者が付いた」か「依存（gh、herdr など）の有無で導入可否が分かれる」の
 どちらか。source-graph のように重い依存を持つものは、最初から別リポジトリの候補。切り出す際は `reviewkit-<name>.nvim` の接頭辞で揃える。
@@ -117,18 +130,15 @@ source-local と source-pr の違いは「base / head をどう決めるか」�
 - **D3. Decision は queue の要素ではなく Session の属性。** PR 全体に 1 つしか無く、寿命も送り先もコメントと違うため
 - **D4. Sink は部分的な失敗を返す。** GitHub は差分行と前後 3 行にしかコメントを置けない。
   diff 外へのコメントは AI には送れて GitHub には送れない。core はこの差を隠さず、Sink の結果で queue を更新する
-- **D5. 連携手段はイベントと登録の 2 つだけ。** 部品が増えても結合点を増やさないため
+- **D5. 連携手段はイベントと登録の 2 つだけ。** 部品が増えても結合点を増やさないため。
+  Lua が Session ファイルを監視して他インスタンスの変更を拾うのは、契約に載せた `state_path` 経由の「イベント」の一種とみなす
 - **D6. AI との対話は範囲外。** 対話は herdr pane 内のエージェントと直接行う。本ワークフローは「送る」までを担う
+- **D7. core・source・sink・lib は Rust の CLI、view・orchestrator は Lua。** ロジックの正しさを型と `cargo test` で守るため。
+  境界は「argv + stdin JSON → stdout JSON」の 1 回実行コマンドに限定し、Neovim の ABI には結合しない。
+  状態は CLI が持ち、Lua は返ってきた Session をキャッシュしてイベントを発火するだけにする
 
 ## 未決事項
 
-- Comment の「種類」の集合（指摘 / 提案 / 質問 / 称賛）と、GitHub の suggestion ブロックへの対応
-- PR の head が進んだときの Comment の追従（行ずれの扱い）
-- Session の永続化形式と置き場所（state ディレクトリ配下、PR 単位）
+- PR の head が進んだときの Comment の追従で、行テキストによる自動再アンカーをどこまでやるか
 - view-diff を自前で持つか、codediff.nvim 等に委譲する口を設けるか
-
-## 次のステップ
-
-1. Target / Comment / Decision / Session の型定義と、core の公開 API を `docs/design.md` に書く
-2. source-local と sink-herdr で縦に 1 本通す（herdr-send-queue からの移植）
-3. source-pr と sink-github を agent-review.nvim から移植する
+- source-graph を同じ CLI のサブコマンドにするか、別バイナリにするか

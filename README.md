@@ -4,8 +4,9 @@ A kit of small, composable parts for doing code review inside Neovim — reviewi
 other people's pull requests and reviewing code written by AI coding agents with the
 same workflow.
 
-> Status: design phase. No code yet. See [`docs/architecture.md`](./docs/architecture.md)
-> (Japanese) for the architecture.
+> Status: design phase. No code yet. See [`docs/architecture.md`](./docs/architecture.md),
+> [`docs/tech-stack.md`](./docs/tech-stack.md) and [`docs/design.md`](./docs/design.md)
+> (Japanese) for the design.
 
 ## Concept
 
@@ -27,23 +28,37 @@ Source (pick what to read)  →  Core (session, queue, decision)  →  Sink (sen
 Each part can be replaced or evolved on its own. Future sources (for example, picking up
 the code affected by a change via a dependency graph) plug into the same core.
 
+## How it is built
+
+The core, sources and sinks live in a **Rust CLI** (`reviewkit`) that speaks JSON over
+stdin/stdout and owns the session state. The **Lua** side is the Neovim frontend: the
+diff view, the comment queue UI, and the `:Review` commands. Neovim never mutates the
+session directly; it calls the CLI and redraws from the session it gets back.
+
+Because the CLI knows nothing about Neovim, the same binary can drive a review from
+other frontends (an editor, a script, a coding-agent skill).
+
 ## Planned layout
 
 ```
+cli/                  Rust: reviewkit CLI (core, source, sink, git/gh/herdr wrappers)
 lua/reviewkit/
-  core/     session, targets, queue, decision, events
-  lib/      git, gh, herdr wrappers
-  source/   local, pr
-  view/     diff layout, annotations, queue list / input
-  sink/     herdr, github
+  cli.lua core.lua    thin shim: run the CLI, cache the session, fire User autocmds
+  types.lua           LuaCATS types generated from the CLI's JSON schema
+  view/               diff layout, annotations, queue list / input
+  orchestrator.lua    :Review commands and default keymaps
 ```
 
 ## Requirements (planned)
 
 - Neovim >= 0.12
+- The `reviewkit` binary: install from GitHub Releases, or build with a Rust toolchain
+  (`cargo build --release`; plugin managers can run this as a build step)
 - `git`
 - `gh` CLI, authenticated (for pull requests)
 - [herdr](https://herdr.dev/) CLI (for sending to a coding agent)
+
+macOS and Linux. Windows is not supported.
 
 ## Related
 
