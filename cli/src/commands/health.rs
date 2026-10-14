@@ -29,22 +29,9 @@ pub fn run(ctx: &Context) -> Result<Response> {
 }
 
 fn tool_status(path: Option<&Path>) -> ToolStatus {
-    let version = path.and_then(|p| {
-        let output = Command::new(p).arg("--version").stdin(Stdio::null()).output().ok()?;
-        if !output.status.success() {
-            log::debug!("{} --version exited with {}", p.display(), output.status);
-            return None;
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout
-            .lines()
-            .next()
-            .map(|line| line.trim().to_string())
-            .filter(|line| !line.is_empty())
-    });
     ToolStatus {
         path: path.map(Path::to_path_buf),
-        version,
+        version: path.and_then(crate::ext::tool::version),
     }
 }
 

@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use serde::Serialize;
 
 use crate::error::{Error, Result};
+use crate::model::Session;
 
 #[derive(Debug, Default, Serialize)]
 pub struct Response {
@@ -19,6 +20,14 @@ impl Response {
                 .map_err(|err| Error::internal(format!("cannot serialize response: {err}")))?,
             session: None,
         })
+    }
+
+    pub fn with_session(data: impl Serialize, session: &Session) -> Result<Self> {
+        let mut response = Self::new(data)?;
+        response.session = Some(
+            serde_json::to_value(session).map_err(|err| Error::internal(format!("cannot serialize session: {err}")))?,
+        );
+        Ok(response)
     }
 }
 
