@@ -1,4 +1,5 @@
 local config = require("reviewkit.config")
+local log = require("reviewkit.log")
 local types = require("reviewkit.types")
 
 local M = {}
@@ -140,8 +141,10 @@ function M.run(args, opts, cb)
     vim.schedule(function()
       local envelope, decode_err = decode(res)
       if decode_err then
+        log.add("error", table.concat(args, " ") .. " -> " .. decode_err.code .. ": " .. decode_err.message)
         return cb(decode_err)
       end
+      log.add("info", table.concat(args, " ") .. " -> ok")
       cb(nil, envelope)
     end)
   end)

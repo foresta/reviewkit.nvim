@@ -282,6 +282,23 @@ function M.target(path)
   return nil
 end
 
+--- The session path of a buffer, or nil when it is outside the worktree.
+--- Both sides are resolved through realpath because `:edit` resolves
+--- symlinks (macOS `/var` → `/private/var`) while a worktree recorded from
+--- user input may not be.
+---@param name string absolute buffer name
+---@return string? path
+function M.relpath(name)
+  local session = state.session
+  if not session or name == "" then
+    return nil
+  end
+  local worktree = session.source.worktree
+  local real_root = vim.uv.fs_realpath(worktree) or worktree
+  local real_name = vim.uv.fs_realpath(name) or name
+  return vim.fs.relpath(real_root, real_name) or vim.fs.relpath(worktree, name)
+end
+
 --- Synchronous, from the cached commentable ranges: the view calls this on
 --- every cursor move, so it must not spawn anything.
 ---@param path string
