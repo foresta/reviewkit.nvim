@@ -2,7 +2,7 @@ use clap::Subcommand;
 use serde::Serialize;
 
 use crate::context::Context;
-use crate::core::TOO_LARGE_BYTES;
+use crate::core::{TOO_LARGE_BYTES, files};
 use crate::envelope::Response;
 use crate::error::Result;
 use crate::ext::git::{Repository, SystemGit};
@@ -35,10 +35,12 @@ pub fn run(ctx: &Context, command: FileCommand) -> Result<Response> {
     match command {
         FileCommand::Base { session, path } => {
             let session = store.load(&session)?;
+            files::check_path(&path)?;
             let git = SystemGit::new(ctx.tools.git.as_deref())?;
             let repo = Repository::at(&git, session.repo.root.clone());
             let rev = &session.base.sha;
-            if !repo.is_blob(rev, &path) {
+            let path = files::base_git_path(&session, &path);
+            if !repo.is_blob(rev, path) {
                 return Response::new(BaseFile {
                     exists: false,
                     binary: false,
@@ -46,17 +48,10 @@ pub fn run(ctx: &Context, command: FileCommand) -> Result<Response> {
                     lines: None,
                 });
             }
-            let bytes = repo.read_blob(rev, &path)?;
+            let bytes = repo.read_blob(rev, path)?;
             let binary = is_binary(&bytes);
             let too_large = bytes.len() > TOO_LARGE_BYTES;
-            let lines = (!binary && !too_large).then(|| {
-                let text = String::from_utf8_lossy(&bytes);
-                let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-                if text.ends_with('\n') {
-                    lines.pop();
-                }
-                lines
-            });
+            let lines = (!binary && !too_large).then(|| files::split_lines(&String::from_utf8_lossy(&bytes)));
             Response::new(BaseFile {
                 exists: true,
                 binary,

@@ -3,7 +3,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::core::{TOO_LARGE_BYTES, commentable, time};
+use crate::core::{TOO_LARGE_BYTES, commentable, time, viewed};
 use crate::error::{Error, Result};
 use crate::ext::diffparse::{self, Patch};
 use crate::ext::git::{RawChange, Repository};
@@ -115,7 +115,7 @@ pub fn refresh(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
     if head_sha.is_none() {
         for path in repo.untracked()? {
             match untracked_target(repo, &path.to_string_lossy()) {
-                Ok(target) => targets.push(target),
+                Ok(target) => push_untracked(&mut targets, target),
                 // A file that vanished or cannot be read is not worth failing
                 // the whole session for.
                 Err(err) => log::warn!("skipping untracked {}: {err}", path.to_string_lossy()),
@@ -124,10 +124,6 @@ pub fn refresh(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
     }
     for (i, target) in targets.iter_mut().enumerate() {
         target.id = format!("t_{}", i + 1);
-        target.viewed = session
-            .viewed
-            .get(&target.path)
-            .is_some_and(|v| Some(&v.blob) == target.head_blob.as_ref());
     }
 
     session.base = RevRef {
@@ -140,6 +136,7 @@ pub fn refresh(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
         sha: head_sha,
     };
     session.targets = targets;
+    viewed::refresh_flags(session);
     Ok(())
 }
 
@@ -218,6 +215,19 @@ fn target_from_change(change: RawChange, patch: Patch, repo: &Repository<'_>, he
         },
         range: None,
     }
+}
+
+/// A path deleted in the index but recreated untracked would otherwise be
+/// two Targets; it is really one modified file, so the untracked view wins
+/// and keeps the deleted entry's base blob and base ranges.
+fn push_untracked(targets: &mut Vec<Target>, mut untracked: Target) {
+    if let Some(index) = targets.iter().position(|t| t.path == untracked.path) {
+        let deleted = targets.remove(index);
+        untracked.status = TargetStatus::Modified;
+        untracked.base_blob = deleted.base_blob;
+        untracked.commentable.base = deleted.commentable.base;
+    }
+    targets.push(untracked);
 }
 
 fn untracked_target(repo: &Repository<'_>, path: &str) -> Result<Target> {

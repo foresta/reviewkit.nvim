@@ -8,6 +8,14 @@ pub struct Decision {
     pub updated_at: String,
 }
 
+/// stdin of `decision set`; core adds `updated_at`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DecisionInput {
+    pub event: DecisionEvent,
+    #[serde(default)]
+    pub body: String,
+}
+
 /// 1:1 with GitHub's PullRequestReviewEvent, lowercased.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

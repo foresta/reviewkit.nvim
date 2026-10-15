@@ -1,3 +1,5 @@
+pub mod comment;
+pub mod decision;
 pub mod file;
 pub mod health;
 pub mod schema;
@@ -5,10 +7,12 @@ pub mod session;
 pub mod target;
 pub mod version;
 
+use std::io::Read;
+
 use crate::cli::Command;
 use crate::context::Context;
 use crate::envelope::Response;
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 pub fn dispatch(ctx: &Context, command: Command) -> Result<Response> {
     match command {
@@ -18,5 +22,20 @@ pub fn dispatch(ctx: &Context, command: Command) -> Result<Response> {
         Command::Session(command) => session::run(ctx, command),
         Command::Target(command) => target::run(ctx, command),
         Command::File(command) => file::run(ctx, command),
+        Command::Comment(command) => comment::run(ctx, command),
+        Command::Decision(command) => decision::run(ctx, command),
     }
+}
+
+/// Bodies travel on stdin so shells never have to quote them. Empty stdin
+/// is rejected as invalid input rather than read as an empty document.
+pub fn stdin_json<T: serde::de::DeserializeOwned>() -> Result<T> {
+    let mut raw = String::new();
+    std::io::stdin().read_to_string(&mut raw)?;
+    if raw.trim().is_empty() {
+        return Err(
+            Error::invalid("expected a JSON object on stdin").hint("pipe the body: echo '{...}' | reviewkit ...")
+        );
+    }
+    serde_json::from_str(&raw).map_err(|err| Error::invalid(format!("invalid JSON on stdin: {err}")))
 }

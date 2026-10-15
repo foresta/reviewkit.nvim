@@ -1,87 +1,8 @@
-use std::path::{Path, PathBuf};
-use std::process::Command as Process;
+mod common;
 
 use assert_cmd::Command;
-
-/// A throwaway repository with two commits, so HEAD~1..HEAD covers a
-/// modification, an addition, a deletion and a rename.
-struct Repo {
-    dir: tempfile::TempDir,
-}
-
-impl Repo {
-    fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = Self { dir };
-        repo.git(&["init", "-q", "-b", "main"]);
-        repo.write("keep.txt", "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n");
-        repo.write("old.txt", "one\ntwo\nthree\n");
-        repo.write("gone.txt", "gone\n");
-        repo.git(&["add", "-A"]);
-        repo.git(&["commit", "-q", "-m", "base"]);
-        repo.write("keep.txt", "a\nb\nC\nd\ne\nf\ng\nh\ni\nj\nk\n");
-        repo.git(&["mv", "old.txt", "new.txt"]);
-        repo.git(&["rm", "-q", "gone.txt"]);
-        repo.write("added.txt", "new1\nnew2");
-        repo.git(&["add", "-A"]);
-        repo.git(&["commit", "-q", "-m", "head"]);
-        repo
-    }
-
-    fn path(&self) -> &Path {
-        self.dir.path()
-    }
-
-    fn write(&self, name: &str, content: &str) {
-        std::fs::write(self.path().join(name), content).unwrap();
-    }
-
-    fn git(&self, args: &[&str]) {
-        let status = Process::new(real_git())
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-            .args(args)
-            .current_dir(self.path())
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?} failed");
-    }
-}
-
-fn real_git() -> PathBuf {
-    which::which("git").expect("git on PATH")
-}
-
-fn reviewkit(state: &tempfile::TempDir, repo: &Repo) -> Command {
-    let mut cmd = Command::cargo_bin("reviewkit").unwrap();
-    cmd.env("REVIEWKIT_GIT", real_git())
-        .env("REVIEWKIT_GH", "/nonexistent/gh")
-        .env("REVIEWKIT_HERDR", "/nonexistent/herdr")
-        .arg("--state-dir")
-        .arg(state.path())
-        .arg("--cwd")
-        .arg(repo.path());
-    cmd
-}
-
-fn json(output: &std::process::Output) -> serde_json::Value {
-    assert!(
-        output.status.success(),
-        "exit {:?}\nstdout: {}\nstderr: {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("stdout is JSON")
-}
-
-fn target<'a>(session: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
-    session["targets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|t| t["path"] == path)
-        .unwrap_or_else(|| panic!("no target {path}"))
-}
+use common::{Repo, json, real_git, reviewkit, target};
+use std::process::Command as Process;
 
 #[test]
 fn open_local_between_two_commits_lists_every_change() {
@@ -429,4 +350,27 @@ fn bad_base_leaves_no_session_directory_behind() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert!(!state.path().join("sessions").exists());
+}
+
+#[test]
+fn a_file_deleted_in_the_index_but_recreated_untracked_is_one_modified_target() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.git(&["rm", "-q", "--cached", "keep.txt"]);
+    let session = &json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local"])
+            .output()
+            .unwrap(),
+    )["session"];
+    let keeps: Vec<&serde_json::Value> = session["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["path"] == "keep.txt")
+        .collect();
+    assert_eq!(keeps.len(), 1);
+    assert_eq!(keeps[0]["status"], "modified");
+    assert_eq!(keeps[0]["base_blob"].as_str().unwrap().len(), 40);
+    assert_eq!(keeps[0]["commentable"]["base"], serde_json::json!([[1, 11]]));
 }
