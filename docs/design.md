@@ -97,6 +97,7 @@ Thread {                    -- 読み取り専用。GitHub から取り込んだ
 
 Comment {
   id: "c_<ulid>"   path   side: "base"|"head"   line: int   start_line: int|null
+                            -- path は side によらず Target.path（head 側の名前）。base 側の実体は Target.old_path で引く
   kind: "issue|suggestion|question|praise|nit"          -- 既定 issue
   body: string   suggestion: string|null                -- ```suggestion ブロック用。sink-github が整形する
   reply_to: thread_id|null
@@ -116,6 +117,7 @@ CommentPatch { line?, start_line?, kind?, body?, suggestion? }
 
 Decision { event: "approve|request_changes|comment", body, updated_at }
                             -- event は GitHub の PullRequestReviewEvent と 1:1
+DecisionInput { event, body? }                        -- decision set の stdin。updated_at は core が付ける
 
 PrInfo {                    -- 表示しないが保持する PR の付帯情報。Session には載せず pr show で取り出す
   title, body, author, url, created_at, updated_at
@@ -179,7 +181,7 @@ reviewkit comment update --session ID --id CID (stdin: CommentPatch) -> session
 reviewkit comment remove --session ID --id CID                       -> session
 reviewkit comment list   --session ID [--path P]                     -> data: Comment[]
 
-reviewkit decision set   --session ID (stdin: Decision)  -> session
+reviewkit decision set   --session ID (stdin: DecisionInput)  -> session
 reviewkit decision clear --session ID                    -> session
 
 reviewkit sink list                                      -> data: { name, available, reason }[]

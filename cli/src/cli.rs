@@ -96,4 +96,10 @@ pub enum Command {
     /// Read file contents of a session's base side.
     #[command(subcommand)]
     File(crate::commands::file::FileCommand),
+    /// Queue, edit and list review comments.
+    #[command(subcommand)]
+    Comment(crate::commands::comment::CommentCommand),
+    /// Set or clear the review decision.
+    #[command(subcommand)]
+    Decision(crate::commands::decision::DecisionCommand),
 }
