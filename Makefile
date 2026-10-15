@@ -34,13 +34,13 @@ check-rust:
 # lua-language-server reads $VIMRUNTIME from .luarc.json; CI shells do not set it.
 check-lua: export VIMRUNTIME ?= $(shell $(NVIM) --clean --headless +'echo $$VIMRUNTIME' +q 2>&1)
 check-lua: deps $(DEBUG_BIN)
-	stylua --check lua tests scripts
+	stylua --check lua plugin tests scripts
 	lua-language-server --check . --checklevel=Warning
 	$(NVIM) -l scripts/gen-types.lua --check --bin $(DEBUG_BIN)
 
 fmt:
 	cargo fmt --all
-	stylua lua tests scripts
+	stylua lua plugin tests scripts
 
 gen-types: $(DEBUG_BIN)
 	$(NVIM) -l scripts/gen-types.lua --bin $(DEBUG_BIN)

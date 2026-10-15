@@ -1,0 +1,273 @@
+local helpers = require("tests.helpers")
+local eq = MiniTest.expect.equality
+
+local T = MiniTest.new_set()
+local child, dir, worktree
+
+local function rules(extra)
+  local session = helpers.session({ source = { worktree = worktree }, repo = { root = worktree } })
+  local list = {
+    { match = { "session open --local", "--base HEAD~1" }, body = { ok = true, data = vim.NIL, session = session } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = session } },
+  }
+  vim.list_extend(list, extra or {})
+  return list
+end
+
+T["orchestrator"] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      dir = helpers.fake_dir()
+      worktree = helpers.fake_dir()
+      vim.fn.mkdir(worktree .. "/src", "p")
+      vim.fn.writefile({ "l1", "l2", "l3", "l4", "l5", "l6" }, worktree .. "/src/a.rs")
+      child = helpers.child(dir)
+      child.lua(
+        "_G.notices = {}; vim.notify = function(msg, level) table.insert(_G.notices, { msg = msg, level = level }) end"
+      )
+    end,
+    post_case = function()
+      child.stop()
+    end,
+  },
+})
+
+local function wait_notice(pattern)
+  child.lua(
+    ("vim.wait(5000, function() for _, n in ipairs(_G.notices) do if n.msg:find(%q, 1, true) then return true end end return false end, 20)"):format(
+      pattern
+    )
+  )
+  return child.lua_get("_G.notices")
+end
+
+T["orchestrator"][":Review diff opens a session and lists targets in the quickfix"] = function()
+  helpers.respond(dir, rules())
+  child.cmd("Review diff HEAD~1")
+  local notices = wait_notice("1 file to review")
+  eq(#notices >= 1, true)
+  eq(child.lua_get("vim.fn.getqflist({ title = 1 }).title"), "reviewkit targets")
+  local items = child.lua_get("vim.fn.getqflist()")
+  eq(#items, 1)
+  eq(items[1].lnum, 3)
+  eq(child.lua_get("vim.fn.maparg('<leader>rc', 'n') ~= ''"), true)
+end
+
+T["orchestrator"]["comment() reads the cursor line, parses the kind and queues through the CLI"] = function()
+  local after = helpers.session({
+    source = { worktree = worktree },
+    rev = 2,
+    comments = {
+      {
+        id = "c_1",
+        path = "src/a.rs",
+        side = "head",
+        line = 4,
+        kind = "nit",
+        body = "tighten",
+        stale = false,
+        start_line = vim.NIL,
+      },
+    },
+    etags = { comments = "c1" },
+  })
+  helpers.respond(
+    dir,
+    rules({ { match = { "comment add" }, body = { ok = true, data = { id = "c_1" }, session = after } } })
+  )
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 4, 0 })")
+  child.lua("require('reviewkit.orchestrator').comment()")
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'nit: tighten' })")
+  child.cmd("write")
+  wait_notice("queued src/a.rs:4")
+  -- The worktree watcher may interleave a refresh, so the add is searched for.
+  local added
+  for _, call in ipairs(helpers.calls(dir)) do
+    if call.args[1] == "comment" and call.args[2] == "add" then
+      added = call
+    end
+  end
+  if not added then
+    error("no comment add call; notices: " .. vim.inspect(child.lua_get("_G.notices")))
+  end
+  local input = vim.json.decode(added.stdin)
+  eq(input.kind, "nit")
+  eq(input.body, "tighten")
+  eq(input.line, 4)
+  eq(input.start_line, nil)
+  -- The annotation shows up on the file buffer once the queue changed.
+  child.lua("vim.wait(1000, function() return #require('reviewkit.core').comments() == 1 end, 20)")
+  local marks =
+    child.lua_get("#vim.api.nvim_buf_get_extmarks(0, vim.api.nvim_create_namespace('reviewkit_annotate'), 0, -1, {})")
+  eq(marks, 1)
+end
+
+T["orchestrator"]["ReviewSubmit resolves E_AMBIGUOUS through vim.ui.select and retries with the target"] = function()
+  local result = {
+    sink = "herdr",
+    at = "t",
+    url = vim.NIL,
+    sent = {},
+    failed = {},
+    skipped = {},
+    thread_actions = {},
+    decision = "not_applicable",
+    summary = "0 sent, 0 failed",
+  }
+  helpers.respond(
+    dir,
+    rules({
+      {
+        match = { "submit --session", "w9:p3" },
+        body = { ok = true, data = result, session = helpers.session({ source = { worktree = worktree }, rev = 3 }) },
+      },
+      {
+        match = { "submit --session" },
+        body = {
+          ok = false,
+          error = {
+            code = "E_AMBIGUOUS",
+            message = "pick one",
+            retryable = false,
+            details = { candidates = { { pane_id = "w9:p3", agent = "claude", agent_status = "idle" } } },
+          },
+        },
+        exit = 4,
+      },
+    })
+  )
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("vim.ui.select = function(items, _, on_choice) _G.offered = items; on_choice(items[1]) end")
+  child.cmd("ReviewSubmit herdr")
+  wait_notice("0 sent, 0 failed")
+  eq(child.lua_get("_G.offered[1].pane_id"), "w9:p3")
+  local calls = helpers.calls(dir)
+  local last = calls[#calls]
+  eq(vim.json.decode(last.stdin).target, "w9:p3")
+end
+
+T["orchestrator"]["ReviewClose! purges and reports"] = function()
+  helpers.respond(
+    dir,
+    rules({ { match = { "session close", "--purge" }, body = { ok = true, data = { closed = true } } } })
+  )
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("ReviewClose!")
+  wait_notice("review closed")
+  eq(child.lua_get("require('reviewkit.core').session()"), vim.NIL)
+end
+
+T["orchestrator"]["commands without a session only notify"] = function()
+  child.cmd("ReviewSubmit")
+  child.cmd("ReviewClose")
+  child.cmd("Review refresh")
+  local notices = child.lua_get("_G.notices")
+  eq(#notices, 3)
+  eq(#helpers.calls(dir), 0)
+end
+
+T["orchestrator"]["set_keymaps = false leaves the keys alone but keeps <Plug> maps"] = function()
+  helpers.respond(dir, rules())
+  child.lua("require('reviewkit').setup({ set_keymaps = false })")
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  eq(child.lua_get("vim.fn.maparg('<leader>rc', 'n')"), "")
+  eq(child.lua_get("vim.fn.maparg('<Plug>(reviewkit-comment)', 'n') ~= ''"), true)
+end
+
+T["orchestrator"]["ReviewSubmit clipboard goes through submit apply and fills the register"] = function()
+  local with_comment = helpers.session({
+    source = { worktree = worktree },
+    rev = 2,
+    comments = {
+      {
+        id = "c_1",
+        path = "src/a.rs",
+        side = "head",
+        line = 4,
+        kind = "issue",
+        body = "copy me",
+        stale = false,
+        start_line = vim.NIL,
+      },
+    },
+    etags = { comments = "c1" },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = with_comment } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = with_comment } },
+    {
+      match = { "submit apply" },
+      body = {
+        ok = true,
+        data = { sink = "clipboard", summary = "1 sent, 0 failed" },
+        session = helpers.session({ source = { worktree = worktree }, rev = 3 }),
+      },
+    },
+  })
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("ReviewSubmit clipboard")
+  wait_notice("clipboard: 1 sent")
+  eq(child.lua_get("vim.fn.getreg('+'):find('1. src/a.rs:4\\ncopy me', 1, true) ~= nil"), true)
+  local applied
+  for _, call in ipairs(helpers.calls(dir)) do
+    if call.args[1] == "submit" and call.args[2] == "apply" then
+      applied = call
+    end
+  end
+  eq(vim.json.decode(applied.stdin).sent[1].comment_id, "c_1")
+end
+
+T["orchestrator"]["decision picker then input window sets the decision"] = function()
+  helpers.respond(
+    dir,
+    rules({
+      {
+        match = { "decision set" },
+        body = {
+          ok = true,
+          data = vim.NIL,
+          session = helpers.session({
+            source = { worktree = worktree },
+            rev = 2,
+            decision = { event = "approve", body = "ship it", updated_at = "t" },
+            etags = { decision = "d1" },
+          }),
+        },
+      },
+    })
+  )
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("vim.ui.select = function(items, _, on_choice) on_choice(items[1]) end")
+  child.lua("require('reviewkit.orchestrator').decision()")
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'ship it' })")
+  child.cmd("write")
+  child.lua("vim.wait(5000, function() return require('reviewkit.core').decision() ~= nil end, 20)")
+  eq(child.lua_get("require('reviewkit.core').decision().event"), "approve")
+  local set
+  for _, call in ipairs(helpers.calls(dir)) do
+    if call.args[1] == "decision" and call.args[2] == "set" then
+      set = call
+    end
+  end
+  eq(vim.json.decode(set.stdin), { event = "approve", body = "ship it" })
+end
+
+T["orchestrator"]["close clears annotations and empties our quickfix list"] = function()
+  helpers.respond(dir, rules({ { match = { "session close" }, body = { ok = true, data = { closed = true } } } }))
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("ReviewClose")
+  wait_notice("review closed")
+  eq(child.lua_get("vim.fn.getqflist({ title = 1 }).title"), "reviewkit (closed)")
+  eq(#child.lua_get("vim.fn.getqflist()"), 0)
+end
+
+return T

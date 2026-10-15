@@ -35,7 +35,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: latest
-          args: --check lua tests scripts
+          args: --check lua plugin tests scripts
       - name: Install lua-language-server
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

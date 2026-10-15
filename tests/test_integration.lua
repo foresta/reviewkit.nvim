@@ -76,4 +76,58 @@ T["real binary: open, comment, submit through a Lua sink"] = function()
   child.stop()
 end
 
+T["real binary: :Review diff → comment → :ReviewSubmit herdr reaches a fake herdr"] = function()
+  local bin = vim.env.REVIEWKIT_REAL_BIN
+  if not bin or bin == "" then
+    MiniTest.skip("REVIEWKIT_REAL_BIN is not set")
+  end
+  local repo = temp_repo()
+  local state_dir = helpers.fake_dir()
+  local herdr_dir = helpers.fake_dir()
+  local root = vim.uv.fs_realpath(repo)
+  local f = assert(io.open(herdr_dir .. "/agents.json", "w"))
+  f:write(vim.json.encode({
+    result = {
+      agents = { { pane_id = "w1:p1", agent = "claude", agent_status = "idle", cwd = root, foreground_cwd = root } },
+    },
+  }))
+  f:close()
+  local child = MiniTest.new_child_neovim()
+  child.restart({ "-u", helpers.root .. "/scripts/minimal_init.lua" })
+  child.lua(([[
+    vim.env.REVIEWKIT_BIN = %q
+    vim.env.REVIEWKIT_HERDR = %q
+    vim.env.FAKE_HERDR_DIR = %q
+    require("reviewkit").setup({ cli = { state_dir = %q } })
+    _G.notices = {}
+    vim.notify = function(msg) table.insert(_G.notices, msg) end
+    vim.fn.chdir(%q)
+  ]]):format(bin, helpers.root .. "/cli/tests/fixtures/bin/herdr", herdr_dir, state_dir, repo))
+  local function wait_notice(pattern)
+    child.lua(
+      ("vim.wait(10000, function() for _, n in ipairs(_G.notices) do if n:find(%q, 1, true) then return true end end return false end, 20)"):format(
+        pattern
+      )
+    )
+  end
+  child.cmd("Review diff HEAD")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. repo .. "/f.txt")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 2, 0 })")
+  child.lua("require('reviewkit.orchestrator').comment()")
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'question: why B?' })")
+  child.cmd("write")
+  wait_notice("queued f.txt:2")
+  child.cmd("ReviewSubmit herdr")
+  wait_notice("1 sent")
+  local sent = io.open(herdr_dir .. "/last_text", "r")
+  local text = sent and sent:read("*a") or ""
+  if sent then
+    sent:close()
+  end
+  eq(text:find("1. @f.txt#L2 (question)\nwhy B?", 1, true) ~= nil, true)
+  eq(#child.lua_get("require('reviewkit.core').comments()"), 0)
+  child.stop()
+end
+
 return T
