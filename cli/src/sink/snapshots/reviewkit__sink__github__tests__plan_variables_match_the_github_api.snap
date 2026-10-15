@@ -1,0 +1,31 @@
+---
+source: cli/src/sink/github.rs
+expression: plan.variables
+---
+{
+  "action0": "PRRT_2",
+  "body": "please",
+  "commit": "cccccccccccccccccccccccccccccccccccccccc",
+  "event": "REQUEST_CHANGES",
+  "prId": "PR_node",
+  "reply0": {
+    "body": "body of c_5",
+    "pullRequestReviewThreadId": "PRRT_1"
+  },
+  "threads": [
+    {
+      "body": "body of c_1",
+      "line": 3,
+      "path": "src/a.rs",
+      "side": "RIGHT"
+    },
+    {
+      "body": "body of c_2\n\n```suggestion\nlet x = 1;\n```",
+      "line": 10,
+      "path": "src/a.rs",
+      "side": "LEFT",
+      "startLine": 8,
+      "startSide": "LEFT"
+    }
+  ]
+}

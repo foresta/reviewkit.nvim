@@ -29,7 +29,7 @@ end, {
   nargs = "?",
   desc = "reviewkit: send the queue through a sink (default: herdr)",
   complete = function()
-    return { "herdr", "clipboard" }
+    return { "herdr", "github", "clipboard" }
   end,
 })
 

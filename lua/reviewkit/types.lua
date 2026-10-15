@@ -173,6 +173,26 @@ M.SCHEMA_VERSION = 1
 ---@field terminal_title_stripped? string
 ---@field workspace_id? string
 
+---@class reviewkit.Plan
+---@field actions reviewkit.PlannedAction[]
+---@field event? string
+---@field mutation string
+---@field replies reviewkit.PlannedReply[]
+---@field skipped reviewkit.Skipped[]
+---@field thread_comment_ids string[] Comment ids in the order of `variables.threads`.
+---@field variables table
+
+---@class reviewkit.PlannedAction
+---@field action reviewkit.ThreadActionKind
+---@field alias string
+---@field thread_id string
+
+---@class reviewkit.PlannedReply
+---@field alias string
+---@field body string
+---@field comment_id string
+---@field thread_id string
+
 --- Kept in `pr.json`, not in the session, so the envelope stays small.
 ---@class reviewkit.PrInfo
 ---@field author string
