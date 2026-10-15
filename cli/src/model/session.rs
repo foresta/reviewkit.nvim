@@ -102,7 +102,7 @@ pub struct HeadRef {
 
 /// base / head is the vocabulary of the whole contract; GitHub's LEFT / RIGHT
 /// exists only inside sink-github.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     Base,

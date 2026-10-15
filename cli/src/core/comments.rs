@@ -67,10 +67,9 @@ pub fn add(session: &mut Session, input: CommentInput, file: Option<SideFile>) -
 /// exists there, which only matters if the line moves.
 pub fn update(session: &mut Session, id: &str, patch: CommentPatch, file: Option<SideFile>) -> Result<()> {
     let index = find(session, id)?;
-    let moved = patch.line.is_some_and(|line| line != session.comments[index].line)
-        || patch
-            .start_line
-            .is_some_and(|start| start != session.comments[index].start_line);
+    // Any explicit position re-anchors, even the same number: that is how a
+    // stale comment is confirmed against the current text.
+    let moved = patch_moves_line(&patch);
     let (line, start_line) = {
         let comment = &session.comments[index];
         (

@@ -65,7 +65,7 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
             if !full.is_file() {
                 return Ok(None);
             }
-            (std::fs::read(&full)?, repo.hash_object(path).ok())
+            (std::fs::read(&full)?, repo.hash_object_write(path).ok())
         }
     };
     let binary = is_binary(&bytes);

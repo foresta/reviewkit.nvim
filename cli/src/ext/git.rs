@@ -172,6 +172,27 @@ impl<'a> Repository<'a> {
         Ok(text(&self.run(&args)?))
     }
 
+    /// Zero-context hunks between two blob ids, used to follow a comment's
+    /// line across a change of the file it sits in.
+    pub fn diff_blobs(&self, old: &str, new: &str) -> Result<Vec<crate::model::Hunk>> {
+        let out = self.run(&[
+            "diff",
+            "-U0",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            old,
+            new,
+        ])?;
+        Ok(crate::ext::diffparse::parse(&text(&out))
+            .into_iter()
+            .next()
+            .map(|patch| patch.hunks)
+            .unwrap_or_default())
+    }
+
     /// Nested repositories are listed as `dir/` and are not files to review.
     pub fn untracked(&self) -> Result<Vec<OsString>> {
         let out = self.run(&["ls-files", "--others", "--exclude-standard", "-z"])?;
@@ -190,6 +211,15 @@ impl<'a> Repository<'a> {
 
     pub fn hash_object(&self, path: &str) -> Result<String> {
         let out = self.run(&["hash-object", "--", path])?;
+        Ok(text(&out).trim_end().to_string())
+    }
+
+    /// `-w` stores the blob: a working-tree file has no commit to pin, and
+    /// following a comment later needs the old content to diff against. Only
+    /// commented files are stored; the objects dangle and `git gc` collects
+    /// them like any stash leftover.
+    pub fn hash_object_write(&self, path: &str) -> Result<String> {
+        let out = self.run(&["hash-object", "-w", "--", path])?;
         Ok(text(&out).trim_end().to_string())
     }
 
