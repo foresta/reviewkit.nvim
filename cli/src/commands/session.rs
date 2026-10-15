@@ -20,6 +20,14 @@ pub enum SessionCommand {
     },
     /// List stored sessions, newest first.
     List,
+    /// Re-run the source: recompute targets and follow comments whose lines moved.
+    Refresh {
+        #[arg(long, value_name = "ID")]
+        session: String,
+        /// Accepted for forward compatibility; the whole session is recomputed regardless.
+        #[arg(long, value_name = "PATH")]
+        path: Vec<String>,
+    },
     /// Close a session. With --purge, delete its state.
     Close {
         #[arg(long, value_name = "ID")]
@@ -54,6 +62,11 @@ pub fn run(ctx: &Context, command: SessionCommand) -> Result<Response> {
             let session = store.load(&session)?;
             Response::with_session(serde_json::Value::Null, &session)
         }
+        SessionCommand::Refresh { session, .. } => {
+            let git = SystemGit::new(ctx.tools.git.as_deref())?;
+            let (session, ()) = store.update(&session, |s| refresh(&git, s))?;
+            Response::with_session(serde_json::Value::Null, &session)
+        }
         SessionCommand::List => {
             let summaries: Vec<SessionSummary> = store.list()?.iter().map(|s| s.summary()).collect();
             Response::new(summaries)
@@ -69,6 +82,16 @@ pub fn run(ctx: &Context, command: SessionCommand) -> Result<Response> {
     }
 }
 
+fn refresh(git: &SystemGit, session: &mut crate::model::Session) -> Result<()> {
+    match &session.source {
+        Source::Local { worktree, .. } => {
+            let repo = Repository::at(git, worktree.clone());
+            local::refresh(session, &repo)
+        }
+        Source::Pr { .. } => Err(Error::invalid("refreshing PR sessions is not implemented yet")),
+    }
+}
+
 #[derive(Serialize)]
 struct Closed {
     closed: bool,
@@ -77,13 +100,7 @@ struct Closed {
 fn open(ctx: &Context, store: &Store, args: OpenArgs) -> Result<Response> {
     let git = SystemGit::new(ctx.tools.git.as_deref())?;
     let session = if let Some(id) = args.session {
-        let (session, ()) = store.update(&id, |session| match &session.source {
-            Source::Local { worktree, .. } => {
-                let repo = Repository::at(&git, worktree.clone());
-                local::refresh(session, &repo)
-            }
-            Source::Pr { .. } => Err(Error::invalid("resuming PR sessions is not implemented yet")),
-        })?;
+        let (session, ()) = store.update(&id, |session| refresh(&git, session))?;
         session
     } else {
         let repo = Repository::discover(&git, &ctx.cwd)?;

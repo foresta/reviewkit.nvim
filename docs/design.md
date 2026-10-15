@@ -169,6 +169,7 @@ reviewkit session open --session ID                      -> session   再開
 reviewkit session get     --session ID                   -> session
 reviewkit session list    [--cwd]                        -> data: SessionSummary[]
 reviewkit session refresh --session ID [--path P ...]    -> session   Source 再実行。base / head が動いたら再アンカー。PR は pr.json も取り直す
+                                                                     --path は将来の部分更新用で、現状は受け取るだけで全体を再計算する
 reviewkit session close   --session ID [--purge]         -> data: { closed: true }   purge で worktree と state を消す
 
 reviewkit target list --session ID                       -> data: Target[]
@@ -223,10 +224,14 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       [�
 - local の再計算: orchestrator が worktree と `.git` を `vim.uv.new_fs_event` で監視し（デバウンス）、`BufWritePost` と
   `FocusGained` でも `refresh` を呼ぶ。エージェントは Neovim の外でファイルを書くため、バッファの保存だけでは足りない。
   `base_spec` が `HEAD` のように動く指定なら、commit で base も動くので `refresh` が base 側も追従する
-- `comment add` で `anchor` に対象行と前後 2 行のテキストを保存する
+- `comment add` で `anchor` に対象行と前後 2 行のテキストを保存する。作業ツリー側の blob は `git hash-object -w` で
+  object store に書く（後で差分を取るため。dangling object として `git gc` が回収する）
 - `refresh` で side の sha（作業ツリーなら blob）が変わったとき: `git diff -U0 <old> <new> -- path` の hunk で、
-  上にある分だけ `line` をずらす。範囲が hunk と交差すれば `stale`。ずらした先の行テキストが `anchor.context.lines` と
-  一致しなければ `stale`。blob が同じなら何もしない。base 側のコメントも同じ規則で base の変化に追従する
+  上にある分だけ `line` をずらす。ずらした先の行テキストが `anchor.context.lines` と一致すれば追従する。範囲が hunk と
+  交差していても、周囲の edit 分だけずらした位置に `context`（before / lines / after）がそのまま見つかれば追従する
+  （末尾改行の追加など）。見つからなければ `stale`。追従できた時点で `stale` は解ける。blob が同じなら何もしない。
+  base 側のコメントも同じ規則で base の変化に追従する。rename された path のコメントは新しい path に付け替える。
+  blob の差分が取れないとき（blob が無い、古い blob が gc で消えた）は、今の位置の行テキストと `anchor.context.lines` の一致だけで判定する
 - `stale` の扱い: view は薄く表示、sink-github は `skipped(stale)`、sink-herdr は「行がずれた可能性あり」を添えて送る。
   `comment update` で `line` を付け直すと解消する
 

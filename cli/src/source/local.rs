@@ -3,7 +3,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::core::{TOO_LARGE_BYTES, commentable, time, viewed};
+use crate::core::{TOO_LARGE_BYTES, anchor, commentable, time, viewed};
 use crate::error::{Error, Result};
 use crate::ext::diffparse::{self, Patch};
 use crate::ext::git::{RawChange, Repository};
@@ -85,8 +85,8 @@ fn new_session(id: String, repo: &Repository<'_>, spec: &LocalSpec) -> Session {
     )
 }
 
-/// Re-runs the diff and rebuilds `targets`, `base` and `head`. Comments are
-/// not re-anchored here; line shifting on refresh lives in core.
+/// Re-runs the diff, rebuilds `targets`, `base` and `head`, then follows
+/// every comment across whatever changed on its side.
 pub fn refresh(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
     let Source::Local {
         base_spec, head_spec, ..
@@ -137,7 +137,7 @@ pub fn refresh(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
     };
     session.targets = targets;
     viewed::refresh_flags(session);
-    Ok(())
+    anchor::reanchor(session, repo)
 }
 
 /// A typechange (symlink → file) is printed as two blocks for one path;
