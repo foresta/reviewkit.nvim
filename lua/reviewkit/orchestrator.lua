@@ -166,16 +166,20 @@ end
 ---@param session reviewkit.Session
 local function announce(session)
   local n = #session.targets
-  local what = session.source.kind == "local" and (session.source.base_spec .. ".." .. session.source.head_spec)
-    or session.id
+  local what
+  if session.source.kind == "local" then
+    what = session.source.base_spec .. ".." .. session.source.head_spec
+  else
+    what = ("#%d %s"):format(session.source.number, session.source.title)
+  end
   notify(("%s: %d file%s to review"):format(what, n, n == 1 and "" or "s"))
 end
 
----@param base string
----@param head? string
-function M.review_diff(base, head)
+--- Opens a session of either kind and shows its targets.
+---@param spec reviewkit.OpenSpec
+local function open(spec)
   attach()
-  core.open({ kind = "local", base = base, head = head, cwd = vim.fn.getcwd() }, function(err, session)
+  core.open(spec, function(err, session)
     if err then
       return notify_error(err)
     end
@@ -183,6 +187,17 @@ function M.review_diff(base, head)
     require("reviewkit.view.queue").show_targets()
     vim.cmd("botright copen")
   end)
+end
+
+---@param base string
+---@param head? string
+function M.review_diff(base, head)
+  open({ kind = "local", base = base, head = head, cwd = vim.fn.getcwd() })
+end
+
+---@param pr string number or URL
+function M.review_pr(pr)
+  open({ kind = "pr", pr = pr, cwd = vim.fn.getcwd() })
 end
 
 ---@param id? string
@@ -456,10 +471,10 @@ function M.command(args)
     M.resume(args[2])
   elseif sub == "refresh" then
     M.refresh()
-  elseif sub == "pr" then
-    notify("PR sessions are not available yet")
+  elseif sub == "pr" and args[2] then
+    M.review_pr(args[2])
   else
-    notify("usage: :Review diff <base> [<head>] | resume [id] | refresh")
+    notify("usage: :Review diff <base> [<head>] | pr <number|url> | resume [id] | refresh")
   end
 end
 

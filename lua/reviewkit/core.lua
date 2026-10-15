@@ -179,20 +179,20 @@ end
 ---@field kind "local"|"pr"
 ---@field base? string
 ---@field head? string
----@field number? integer
+---@field pr? string|integer number or URL
 ---@field cwd? string
 
 ---@param spec reviewkit.OpenSpec
 ---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
 function M.open(spec, cb)
-  if spec.kind ~= "local" then
-    return vim.schedule(function()
-      cb({ code = "E_INVALID", message = "only local sessions are supported yet", retryable = false, details = {} })
-    end)
-  end
-  local args = { "session", "open", "--local", "--base", spec.base or "HEAD" }
-  if spec.head then
-    vim.list_extend(args, { "--head", spec.head })
+  local args
+  if spec.kind == "pr" then
+    args = { "session", "open", "--pr", tostring(spec.pr) }
+  else
+    args = { "session", "open", "--local", "--base", spec.base or "HEAD" }
+    if spec.head then
+      vim.list_extend(args, { "--head", spec.head })
+    end
   end
   cli.call(args, { cwd = spec.cwd }, function(err, envelope)
     take_session(err, envelope, cb)
@@ -375,6 +375,24 @@ function M.set_viewed(path, on, cb)
     table.insert(args, "--undo")
   end
   mutate(args, nil, cb)
+end
+
+--- Conversation and checks of a pull request session, kept beside the
+--- session rather than in it; `nil` for local sessions.
+---@param cb fun(err: reviewkit.Error?, info: reviewkit.PrInfo?)
+function M.pr_info(cb)
+  local session, err = require_session()
+  if not session then
+    return vim.schedule(function()
+      cb(err)
+    end)
+  end
+  cli.call({ "pr", "show", "--session", session.id }, {}, function(run_err, envelope)
+    if run_err then
+      return cb(run_err)
+    end
+    cb(nil, envelope and envelope.data or nil)
+  end)
 end
 
 --- A sink registered here runs in Lua (clipboard, a custom integration);

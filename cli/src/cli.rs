@@ -102,6 +102,9 @@ pub enum Command {
     /// Set or clear the review decision.
     #[command(subcommand)]
     Decision(crate::commands::decision::DecisionCommand),
+    /// Pull request details kept beside the session.
+    #[command(subcommand)]
+    Pr(crate::commands::pr::PrCommand),
     /// List sinks and their targets.
     #[command(subcommand)]
     Sink(crate::commands::sink::SinkCommand),

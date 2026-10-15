@@ -115,10 +115,14 @@ impl<'a> Repository<'a> {
         Ok(text(&out).trim_end().to_string())
     }
 
+    /// Read from config rather than `remote get-url`, which applies
+    /// `url.<x>.insteadOf` rewrites: a proxy or test rewrite must change
+    /// where fetches go, not which repository this is.
     pub fn remote_url(&self, name: &str) -> Option<String> {
-        self.run(&["remote", "get-url", name])
+        self.run(&["config", "--get", &format!("remote.{name}.url")])
             .ok()
             .map(|out| text(&out).trim_end().to_string())
+            .filter(|url| !url.is_empty())
     }
 
     fn range_args<'b>(base: &'b str, head: Option<&'b str>) -> Vec<&'b str> {
@@ -240,6 +244,119 @@ impl<'a> Repository<'a> {
             .map(|out| text(&out).trim_end() == "blob")
             .unwrap_or(false)
     }
+
+    pub fn has_commit(&self, sha: &str) -> bool {
+        self.run(&["cat-file", "-e", &format!("{sha}^{{commit}}")]).is_ok()
+    }
+
+    pub fn merge_base(&self, a: &str, b: &str) -> Result<String> {
+        let out = self.run(&["merge-base", a, b])?;
+        Ok(text(&out).trim_end().to_string())
+    }
+
+    pub fn rev_parse(&self, rev: &str) -> Option<String> {
+        self.run(&["rev-parse", "--verify", "--quiet", rev])
+            .ok()
+            .map(|out| text(&out).trim_end().to_string())
+    }
+
+    /// A bare clone from the user's checkout: no network, and objects are
+    /// hard-linked so the mirror starts cheap. The user's repository is
+    /// only read.
+    pub fn clone_bare(git: &'a dyn Git, source_root: &Path, mirror: &Path, remote_url: &str) -> Result<Self> {
+        let parent = mirror
+            .parent()
+            .ok_or_else(|| Error::internal("mirror path has no parent"))?;
+        std::fs::create_dir_all(parent)?;
+        git.run(
+            parent,
+            &[
+                "clone",
+                "--bare",
+                "--quiet",
+                &source_root.to_string_lossy(),
+                &mirror.to_string_lossy(),
+            ],
+        )
+        .inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(mirror);
+        })?;
+        let repo = Self::at(git, mirror.to_path_buf());
+        repo.run(&["remote", "set-url", "origin", remote_url])?;
+        Ok(repo)
+    }
+
+    /// An empty bare repository pointing at the remote, for when no local
+    /// checkout of that repository is at hand to seed from.
+    pub fn init_bare(git: &'a dyn Git, mirror: &Path, remote_url: &str) -> Result<Self> {
+        std::fs::create_dir_all(mirror)?;
+        git.run(mirror, &["init", "--quiet", "--bare"])?;
+        let repo = Self::at(git, mirror.to_path_buf());
+        repo.run(&["remote", "add", "origin", remote_url])?;
+        Ok(repo)
+    }
+
+    pub fn fetch(&self, remote: &str, refspecs: &[String]) -> Result<()> {
+        let mut args = vec!["fetch", "--quiet", "--no-tags", remote];
+        args.extend(refspecs.iter().map(String::as_str));
+        self.run(&args).map(|_| ())
+    }
+
+    /// The worktree is reviewkit's own, so tracked changes in it are
+    /// overwritten to put it at the requested commit; untracked files are
+    /// left alone. A worktree whose `.git` points at a vanished mirror is
+    /// recreated rather than reported, since nothing in it is the user's.
+    pub fn worktree_checkout(&self, dir: &Path, sha: &str) -> Result<()> {
+        if dir.join(".git").exists()
+            && self
+                .git
+                .run(dir, &["checkout", "--quiet", "--force", "--detach", sha])
+                .is_ok()
+        {
+            return Ok(());
+        }
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = self.run(&["worktree", "prune"]);
+        self.run(&[
+            "worktree",
+            "add",
+            "--quiet",
+            "--force",
+            "--detach",
+            &dir.to_string_lossy(),
+            sha,
+        ])
+        .map(|_| ())
+    }
+
+    pub fn worktree_remove(&self, dir: &Path) {
+        if self
+            .run(&["worktree", "remove", "--force", &dir.to_string_lossy()])
+            .is_err()
+        {
+            let _ = std::fs::remove_dir_all(dir);
+            let _ = self.run(&["worktree", "prune"]);
+        }
+    }
+}
+
+/// `https://host/owner/name(.git)`, `ssh://git@host/owner/name` and
+/// `git@host:owner/name(.git)`. Anything else is left unparsed rather than
+/// guessed.
+pub fn parse_remote_url(url: &str) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    let rest = if let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) {
+        rest.split_once('/')
+            .map(|(host, path)| (host.split('@').next_back().unwrap_or(host), path))
+    } else if let Some(rest) = url.strip_prefix("ssh://") {
+        let rest = rest.split_once('@').map(|(_, r)| r).unwrap_or(rest);
+        rest.split_once('/')
+    } else {
+        url.split_once('@').and_then(|(_, r)| r.split_once(':'))
+    }?;
+    let (host, path) = rest;
+    let path = path.trim_end_matches('/').trim_end_matches(".git");
+    let (owner, name) = path.rsplit_once('/')?;
+    Some((Some(host.to_string()), Some(owner.to_string()), Some(name.to_string())))
 }
 
 /// `:<old mode> <new mode> <old sha> <new sha> <status>[score]\0<path>\0`
@@ -291,6 +408,22 @@ fn text(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_urls_parse_to_host_owner_name() {
+        let expect = Some((
+            Some("github.com".into()),
+            Some("foresta".into()),
+            Some("reviewkit.nvim".into()),
+        ));
+        assert_eq!(
+            parse_remote_url("https://github.com/foresta/reviewkit.nvim.git"),
+            expect
+        );
+        assert_eq!(parse_remote_url("git@github.com:foresta/reviewkit.nvim.git"), expect);
+        assert_eq!(parse_remote_url("ssh://git@github.com/foresta/reviewkit.nvim"), expect);
+        assert_eq!(parse_remote_url("/local/path"), None);
+    }
 
     #[test]
     fn raw_entries_parse_modify_rename_and_typechange() {

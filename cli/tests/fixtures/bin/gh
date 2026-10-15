@@ -1,10 +1,44 @@
-#!/bin/sh
-case "$1" in
-  --version) echo "gh version 0.0.0-fake" ;;
-  auth)
-    if [ "${GH_FAKE_AUTH:-1}" = "0" ]; then
-      echo "no oauth token found for github.com" >&2; exit 1
-    fi
-    echo "gho_fake" ;;
-  *) echo "fake gh: unsupported: $*" >&2; exit 1 ;;
-esac
+#!/usr/bin/env python3
+# Rules: $FAKE_GH_DIR/responses.json, a list of
+#   { "match": ["substring of argv or stdin", ...], "body": <json> | "raw": "text", "stderr": "", "exit": n }
+# First rule whose every match is found wins; calls go to calls.jsonl.
+# Without FAKE_GH_DIR only --version and `auth token` are answered.
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+joined = " ".join(args)
+stdin = "" if sys.stdin.isatty() else sys.stdin.read()
+fake_dir = os.environ.get("FAKE_GH_DIR")
+
+if fake_dir:
+    with open(os.path.join(fake_dir, "calls.jsonl"), "a") as log:
+        log.write(json.dumps({"args": args, "stdin": stdin}) + "\n")
+
+if args[:1] == ["--version"]:
+    print("gh version 0.0.0-fake")
+    sys.exit(0)
+if args[:2] == ["auth", "token"]:
+    if os.environ.get("GH_FAKE_AUTH", "1") == "0":
+        sys.stderr.write("no oauth token found for github.com\n")
+        sys.exit(1)
+    print("gho_fake")
+    sys.exit(0)
+
+rules = []
+if fake_dir and os.path.exists(os.path.join(fake_dir, "responses.json")):
+    with open(os.path.join(fake_dir, "responses.json")) as f:
+        rules = json.load(f)
+
+for rule in rules:
+    if all(m in joined or m in stdin for m in rule.get("match", [])):
+        if "raw" in rule:
+            sys.stdout.write(rule["raw"])
+        elif "body" in rule:
+            sys.stdout.write(json.dumps(rule["body"]))
+        sys.stderr.write(rule.get("stderr", ""))
+        sys.exit(rule.get("exit", 0))
+
+sys.stderr.write("fake gh: no rule for: " + joined + "\n")
+sys.exit(2)
