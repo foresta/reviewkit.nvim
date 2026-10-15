@@ -83,19 +83,25 @@ impl Store {
         self.with_lock(id, || {
             std::fs::remove_dir_all(&dir)?;
             Ok(())
-        })
+        })?;
+        self.remove_empty_parents(&dir);
+        Ok(())
     }
 
     /// `session open` semantics in one lock: resume when the session exists,
-    /// create it otherwise, then apply the refresh either way.
+    /// create it otherwise, then apply the refresh either way. A first open
+    /// that fails before its first save leaves only a lock file behind;
+    /// `list` would skip it, but it should not exist at all.
     pub fn open_or_create<T>(
         &self,
         id: &str,
         init: impl FnOnce() -> Result<Session>,
         apply: impl FnOnce(&mut Session) -> Result<T>,
     ) -> Result<(Session, T)> {
-        std::fs::create_dir_all(self.dir.session_dir(id)?)?;
-        self.with_lock(id, || {
+        let dir = self.dir.session_dir(id)?;
+        let created = !dir.exists();
+        std::fs::create_dir_all(&dir)?;
+        let result = self.with_lock(id, || {
             let mut session = if self.exists(id) {
                 self.load(id)?
             } else {
@@ -112,7 +118,12 @@ impl Store {
             let value = apply(&mut session)?;
             self.commit(&mut session)?;
             Ok((session, value))
-        })
+        });
+        if result.is_err() && created && !self.exists(id) {
+            let _ = std::fs::remove_dir_all(&dir);
+            self.remove_empty_parents(&dir);
+        }
+        result
     }
 
     pub fn list(&self) -> Result<Vec<Session>> {
@@ -123,6 +134,19 @@ impl Store {
         }
         sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(sessions)
+    }
+
+    /// Session ids nest directories (`pr/<host>/<owner>/<repo>/<n>`); the
+    /// intermediate ones are only worth keeping while a session lives under them.
+    fn remove_empty_parents(&self, dir: &Path) {
+        let root = self.dir.sessions_dir();
+        let mut current = dir.parent();
+        while let Some(parent) = current {
+            if parent == root || std::fs::remove_dir(parent).is_err() {
+                break;
+            }
+            current = parent.parent();
+        }
     }
 
     fn commit(&self, session: &mut Session) -> Result<()> {

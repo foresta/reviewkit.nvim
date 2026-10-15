@@ -36,6 +36,21 @@ impl StateDir {
         self.0.join("repos")
     }
 
+    /// `<state>/repos/<host>/<owner>/<name>/mirror.git`
+    pub fn mirror_dir(&self, host: &str, owner: &str, name: &str) -> PathBuf {
+        self.repos_dir().join(host).join(owner).join(name).join("mirror.git")
+    }
+
+    /// `<state>/repos/<host>/<owner>/<name>/pr/<number>`
+    pub fn pr_worktree(&self, host: &str, owner: &str, name: &str, number: u64) -> PathBuf {
+        self.repos_dir()
+            .join(host)
+            .join(owner)
+            .join(name)
+            .join("pr")
+            .join(number.to_string())
+    }
+
     /// Session ids are slash-separated (`pr/<host>/<owner>/<repo>/<n>`) and map
     /// to nested directories, so each component is validated as a plain
     /// directory name.

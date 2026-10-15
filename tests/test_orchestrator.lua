@@ -270,4 +270,34 @@ T["orchestrator"]["close clears annotations and empties our quickfix list"] = fu
   eq(#child.lua_get("vim.fn.getqflist()"), 0)
 end
 
+T["orchestrator"][":Review pr opens a pull request session and pr_info reads pr.json"] = function()
+  local pr_session = helpers.session({
+    id = "pr/github.com/o/r/7",
+    source = {
+      kind = "pr",
+      number = 7,
+      url = "https://github.com/o/r/pull/7",
+      title = "Add k",
+      author = "alice",
+      state = "OPEN",
+      head_ref = "feature",
+      base_ref = "main",
+      base_oid = string.rep("b", 40),
+      node_id = "PR_1",
+      worktree = worktree,
+    },
+    head = { ref = "feature", sha = string.rep("c", 40), dirty = false },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --pr 7" }, body = { ok = true, data = vim.NIL, session = pr_session } },
+    { match = { "pr show" }, body = { ok = true, data = { title = "Add k", timeline = {}, checks = {} } } },
+  })
+  child.cmd("Review pr 7")
+  wait_notice("#7 Add k: 1 file to review")
+  child.lua("require('reviewkit.core').pr_info(_G.finish)")
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err, nil)
+  eq(d.results[1].title, "Add k")
+end
+
 return T

@@ -81,7 +81,8 @@ Target {                    -- 実ファイルは <source.worktree>/<path>。Lua
   stats: { added, removed }
   hunks: Hunk[]
   commentable: { base: [[start, end], ...], head: [[start, end], ...] }   -- GitHub の ±3 行。結合・クリップ済み
-  range: { start, end } | null                                            -- reason が thread / impact のとき
+  range: { start, end } | null                                            -- reason が thread / impact のとき。
+                                                                          -- diff 外のスレッドは head に存在するファイルだけ Target になる
 }
 
 Hunk { base_start, base_count, head_start, head_count }
@@ -161,8 +162,9 @@ reviewkit version                                        -> { version, schema_ve
 reviewkit health [--cwd]                                 -> { tools: { git, gh, herdr }, gh_auth, state_dir }
 reviewkit schema                                         -> JSON Schema（全型）
 
-reviewkit session open --pr <number|url> [--cwd] [--remote origin]
+reviewkit session open --pr <number|url> [--cwd]
                                                          -> session   gh でメタ取得、bare mirror + worktree、targets、threads
+                                                            番号は --cwd の origin のリポジトリ。URL ならそのリポジトリ（origin と違ってもよい）
 reviewkit session open --local [--base REV] [--head REV|worktree] [--cwd]
                                                          -> session   既存があれば再開して refresh
 reviewkit session open --session ID                      -> session   再開
