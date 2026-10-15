@@ -102,4 +102,9 @@ pub enum Command {
     /// Set or clear the review decision.
     #[command(subcommand)]
     Decision(crate::commands::decision::DecisionCommand),
+    /// List sinks and their targets.
+    #[command(subcommand)]
+    Sink(crate::commands::sink::SinkCommand),
+    /// Send the queue through a sink, or apply a client-side sink's result.
+    Submit(crate::commands::submit::SubmitArgs),
 }

@@ -7,6 +7,7 @@ pub mod error;
 pub mod ext;
 pub mod logging;
 pub mod model;
+pub mod sink;
 pub mod source;
 pub mod store;
 

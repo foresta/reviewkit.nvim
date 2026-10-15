@@ -1,3 +1,4 @@
+pub mod apply;
 pub mod commentable;
 pub mod comments;
 pub mod etags;

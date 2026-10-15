@@ -149,7 +149,8 @@ SinkResult {
 - SinkResult の適用（D4）: `sent` は queue から消す。`failed` は `last_error` を付けて残す。`skipped` はそのまま。
   `thread_actions` は `sent` のものだけ消す。`decision` は `sent` のときだけ消す。`last_submit` に結果を記録する
 - sink-github で Decision が無く comments がある場合は `event = comment`、本文空で送る（行コメントは review の一部としてしか送れない）
-- sink-herdr のプロンプトは header、Decision の本文（あれば）、番号付きのコメント（`@path#L1-L2` 形式。`plain` は `path:1-2`）の順
+- sink-herdr のプロンプトは header、Decision の本文（あれば）、番号付きのコメント（`@path#L1-L2` 形式。`plain` は `path:1-2`）の順。
+  Decision の event は送れないので、本文が空の Decision は `skipped` として残る
 
 ## 4. CLI サブコマンド
 
@@ -186,8 +187,9 @@ reviewkit decision clear --session ID                    -> session
 
 reviewkit sink list                                      -> data: { name, available, reason }[]
 reviewkit sink targets --sink herdr [--cwd]              -> data: { agents[], panes[] }   picker 用
-reviewkit submit --session ID --sink github|herdr [--dry-run] (stdin: SubmitOptions?)
+reviewkit submit --session ID --sink github|herdr [--dry-run] [--options -]
                                                          -> data: SinkResult（dry-run は data.preview）, session
+                                                            --options - のときだけ stdin から SubmitOptions を読む
 reviewkit submit apply --session ID (stdin: SinkResult の sent / failed / skipped / thread_actions / decision)
                                                          -> session   Lua 側 sink の結果を core に適用。at / summary は core が補う
 
