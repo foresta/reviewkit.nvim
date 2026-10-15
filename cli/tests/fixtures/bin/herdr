@@ -1,5 +1,18 @@
 #!/bin/sh
-case "$1" in
-  --version) echo "herdr 0.0.0-fake" ;;
+# FAKE_HERDR_DIR holds agents.json / panes.json; every call is appended to calls.log.
+# FAKE_HERDR_FAIL=1 makes agent prompt / pane send-text exit 1.
+dir="${FAKE_HERDR_DIR:-}"
+if [ -n "$dir" ]; then
+  printf '%s\n' "$*" >> "$dir/calls.log"
+fi
+case "$1 $2" in
+  "--version ")  echo "herdr 0.0.0-fake" ;;
+  "agent list")  cat "$dir/agents.json" ;;
+  "pane list")   cat "$dir/panes.json" ;;
+  "agent prompt"|"pane send-text")
+    if [ -n "${FAKE_HERDR_SLEEP:-}" ]; then sleep "$FAKE_HERDR_SLEEP"; fi
+    if [ "${FAKE_HERDR_FAIL:-0}" = "1" ]; then echo "pane gone" >&2; exit 1; fi
+    printf '%s' "$4" > "$dir/last_text"
+    printf '%s' "$3" > "$dir/last_target" ;;
   *) echo "fake herdr: unsupported: $*" >&2; exit 1 ;;
 esac

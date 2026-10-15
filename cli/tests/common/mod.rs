@@ -84,3 +84,9 @@ pub fn target<'a>(session: &'a serde_json::Value, path: &str) -> &'a serde_json:
         .find(|t| t["path"] == path)
         .unwrap_or_else(|| panic!("no target {path}"))
 }
+
+pub fn fixture_bin(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/bin")
+        .join(name)
+}
