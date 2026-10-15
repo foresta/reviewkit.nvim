@@ -55,6 +55,7 @@ pub struct Contract {
     pub sink_result: SinkResult,
     pub sink_info: crate::sink::SinkInfo,
     pub herdr_preview: crate::sink::herdr::Preview,
+    pub github_plan: crate::sink::github::Plan,
     pub herdr_candidate: crate::sink::herdr::Candidate,
     pub herdr_agent: crate::ext::herdr::Agent,
     pub herdr_pane: crate::ext::herdr::Pane,

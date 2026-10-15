@@ -63,6 +63,9 @@ end
 local lua_type
 
 local function is_nullable(prop)
+  if type(prop) ~= "table" then
+    return false
+  end
   if type(prop.type) == "table" then
     return vim.tbl_contains(prop.type, "null")
   end
@@ -98,6 +101,10 @@ local function non_null(prop)
 end
 
 lua_type = function(prop)
+  -- `true` is the JSON Schema for "anything".
+  if type(prop) ~= "table" then
+    return "any"
+  end
   if prop["$ref"] then
     return ref_name(prop["$ref"])
   end
@@ -127,6 +134,13 @@ lua_type = function(prop)
   elseif t == "boolean" then
     return "boolean"
   elseif t == "array" then
+    if prop.prefixItems then
+      local parts = {}
+      for _, item in ipairs(prop.prefixItems) do
+        table.insert(parts, lua_type(item))
+      end
+      return "[" .. table.concat(parts, ", ") .. "]"
+    end
     if prop.minItems and prop.minItems == prop.maxItems and prop.minItems <= 4 then
       local item = lua_type(prop.items or {})
       local parts = {}

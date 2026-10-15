@@ -1,0 +1,5 @@
+---
+source: cli/src/sink/github.rs
+expression: plan.mutation
+---
+mutation($prId: ID!, $commit: GitObjectID, $event: PullRequestReviewEvent!, $body: String, $threads: [DraftPullRequestReviewThread], $reply0: AddPullRequestReviewThreadReplyInput!, $action0: ID!) { review: addPullRequestReview(input: {pullRequestId: $prId, commitOID: $commit, event: $event, body: $body, threads: $threads}) { pullRequestReview { id url } } reply0: addPullRequestReviewThreadReply(input: $reply0) { comment { id url } } action0: resolveReviewThread(input: {threadId: $action0}) { thread { id isResolved } } }

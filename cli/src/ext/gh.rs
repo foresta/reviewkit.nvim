@@ -13,7 +13,56 @@ use crate::store::env_non_empty;
 /// The seam for tests: source-pr and sink-github talk to this trait, the
 /// binary talks to `SystemGh`.
 pub trait Gh {
-    fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<Vec<u8>>;
+    /// Exit status and both streams: GraphQL answers partial failures with
+    /// exit 1 and a body that still carries the successful parts.
+    fn run_raw(&self, args: &[&str], stdin: Option<&str>) -> Result<RawOutput>;
+
+    fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<Vec<u8>> {
+        let what = args.iter().take(2).copied().collect::<Vec<_>>().join(" ");
+        let out = self.run_raw(args, stdin)?;
+        if out.success {
+            return Ok(out.stdout);
+        }
+        Err(classify_failure(&what, &out))
+    }
+}
+
+pub struct RawOutput {
+    pub success: bool,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// gh's own wording is the only signal that a token is missing; GraphQL
+/// errors arrive as a JSON body with exit 1 and describe the request, not
+/// the connection.
+pub fn classify_failure(what: &str, out: &RawOutput) -> Error {
+    let text = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if text.contains("gh auth login") || text.contains("not logged into") {
+        return Error::new(ErrorCode::EGhAuth, format!("gh is not logged in: {text}")).hint("run `gh auth login`");
+    }
+    if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&out.stdout)
+        && let Some(message) = body["errors"][0]["message"].as_str()
+    {
+        return graphql_error(message);
+    }
+    let detail = if text.is_empty() {
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    } else {
+        text
+    };
+    let err = Error::new(ErrorCode::EGh, format!("gh {what} failed: {detail}"));
+    if looks_transient(&detail) { err.retryable() } else { err }
+}
+
+/// A review left pending in the web UI blocks `addPullRequestReview`; it
+/// gets its own code so the client can say what to do about it.
+pub fn graphql_error(message: &str) -> Error {
+    if message.to_ascii_lowercase().contains("pending review") {
+        return Error::new(ErrorCode::EGhPendingReview, format!("GraphQL: {message}"))
+            .hint("submit or discard the pending review on GitHub first");
+    }
+    Error::new(ErrorCode::EGh, format!("GraphQL: {message}"))
 }
 
 pub struct SystemGh {
@@ -43,7 +92,7 @@ impl SystemGh {
 }
 
 impl Gh for SystemGh {
-    fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<Vec<u8>> {
+    fn run_raw(&self, args: &[&str], stdin: Option<&str>) -> Result<RawOutput> {
         let what = args.iter().take(2).copied().collect::<Vec<_>>().join(" ");
         log::debug!("gh {what}");
         let mut child = Command::new(&self.path)
@@ -78,32 +127,11 @@ impl Gh for SystemGh {
                 Err(err) => return Err(Error::new(ErrorCode::EGh, format!("gh {what}: {err}"))),
             }
         };
-        let stdout = stdout.join().unwrap_or_default();
-        let stderr = stderr.join().unwrap_or_default();
-        if !status.success() {
-            let text = String::from_utf8_lossy(&stderr).trim().to_string();
-            // gh's own wording is the only signal that a token is missing.
-            if text.contains("gh auth login") || text.contains("not logged into") {
-                return Err(
-                    Error::new(ErrorCode::EGhAuth, format!("gh is not logged in: {text}")).hint("run `gh auth login`")
-                );
-            }
-            // GraphQL errors arrive as a JSON body with exit 1; they describe
-            // the request (not found, bad query), not the connection.
-            if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&stdout)
-                && let Some(message) = body["errors"][0]["message"].as_str()
-            {
-                return Err(Error::new(ErrorCode::EGh, format!("GraphQL: {message}")));
-            }
-            let detail = if text.is_empty() {
-                String::from_utf8_lossy(&stdout).trim().to_string()
-            } else {
-                text
-            };
-            let err = Error::new(ErrorCode::EGh, format!("gh {what} failed: {detail}"));
-            return Err(if looks_transient(&detail) { err.retryable() } else { err });
-        }
-        Ok(stdout)
+        Ok(RawOutput {
+            success: status.success(),
+            stdout: stdout.join().unwrap_or_default(),
+            stderr: stderr.join().unwrap_or_default(),
+        })
     }
 }
 
@@ -247,8 +275,10 @@ pub fn pr_meta(gh: &dyn Gh, repo: &RepoRef, number: u64) -> Result<PrMeta> {
 }
 
 /// One query for everything the session keeps about a pull request;
-/// threads page at 100, the rest is read from the first page.
+/// threads page at 100. Reviews and thread comments take the newest 100,
+/// which is what reconciling an interrupted submit has to see.
 const QUERY: &str = r#"query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       id title body createdAt updatedAt url
@@ -258,10 +288,10 @@ const QUERY: &str = r#"query($owner: String!, $name: String!, $number: Int!, $cu
         nodes {
           id path line startLine originalLine diffSide startDiffSide
           isResolved isOutdated subjectType
-          comments(first: 100) { nodes { id body createdAt url author { login } } }
+          comments(last: 100) { nodes { id body createdAt url author { login } } }
         }
       }
-      reviews(first: 100) { nodes { state body submittedAt url author { login } } }
+      reviews(last: 100) { nodes { state body submittedAt url author { login } } }
       comments(first: 100) { nodes { body createdAt url author { login } } }
       commits(last: 1) {
         nodes { commit { oid statusCheckRollup { state contexts(first: 100) { nodes {
@@ -274,32 +304,54 @@ const QUERY: &str = r#"query($owner: String!, $name: String!, $number: Int!, $cu
   }
 }"#;
 
+pub struct GraphqlResponse {
+    pub data: serde_json::Value,
+    pub errors: Vec<serde_json::Value>,
+}
+
+/// Runs one GraphQL document and returns data and errors together, because
+/// a mutation with several aliased fields can succeed in part.
+pub fn graphql(gh: &dyn Gh, host: &str, query: &str, variables: serde_json::Value) -> Result<GraphqlResponse> {
+    let body = serde_json::json!({ "query": query, "variables": variables }).to_string();
+    let mut args = vec!["api", "graphql", "--input", "-"];
+    if host != "github.com" {
+        args.extend(["--hostname", host]);
+    }
+    let out = gh.run_raw(&args, Some(&body))?;
+    match serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+        Ok(mut body) if body.get("data").is_some() || body.get("errors").is_some() => Ok(GraphqlResponse {
+            data: body["data"].take(),
+            errors: body["errors"].as_array().cloned().unwrap_or_default(),
+        }),
+        _ if out.success => Err(Error::new(ErrorCode::EGh, "unexpected output from gh api graphql")),
+        _ => Err(classify_failure("api graphql", &out)),
+    }
+}
+
 pub struct PrDetails {
     pub info: PrInfo,
     pub threads: Vec<Thread>,
+    /// The authenticated user, so a reconcile only matches what this user
+    /// posted.
+    pub viewer: String,
 }
 
 pub fn pr_details(gh: &dyn Gh, repo: &RepoRef, number: u64, fetched_at: String) -> Result<PrDetails> {
     let mut cursor: Option<String> = None;
     let mut threads = Vec::new();
     let mut info: Option<PrInfo> = None;
+    let mut viewer = String::new();
     loop {
-        let body = serde_json::json!({
-            "query": QUERY,
-            "variables": { "owner": repo.owner, "name": repo.name, "number": number, "cursor": cursor },
-        })
-        .to_string();
-        let mut args = vec!["api", "graphql", "--input", "-"];
-        if repo.host != "github.com" {
-            args.extend(["--hostname", repo.host.as_str()]);
+        let variables =
+            serde_json::json!({ "owner": repo.owner, "name": repo.name, "number": number, "cursor": cursor });
+        let response = graphql(gh, &repo.host, QUERY, variables)?;
+        if let Some(message) = response.errors.first().and_then(|e| e["message"].as_str()) {
+            return Err(graphql_error(message));
         }
-        let out = gh.run(&args, Some(&body))?;
-        let parsed: serde_json::Value = serde_json::from_slice(&out)
-            .map_err(|err| Error::new(ErrorCode::EGh, format!("unexpected output from gh api graphql: {err}")))?;
-        if let Some(message) = parsed["errors"][0]["message"].as_str() {
-            return Err(Error::new(ErrorCode::EGh, format!("GraphQL: {message}")));
+        if let Some(login) = response.data["viewer"]["login"].as_str() {
+            viewer = login.to_string();
         }
-        let pr = &parsed["data"]["repository"]["pullRequest"];
+        let pr = &response.data["repository"]["pullRequest"];
         if pr.is_null() {
             return Err(Error::new(ErrorCode::EGh, format!("pull request #{number} not found")));
         }
@@ -322,6 +374,7 @@ pub fn pr_details(gh: &dyn Gh, repo: &RepoRef, number: u64, fetched_at: String) 
     Ok(PrDetails {
         info: info.expect("set on the first page"),
         threads,
+        viewer,
     })
 }
 

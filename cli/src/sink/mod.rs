@@ -1,3 +1,4 @@
+pub mod github;
 pub mod herdr;
 
 use serde::{Deserialize, Serialize};
@@ -15,9 +16,17 @@ pub struct SinkInfo {
 /// guess which names `submit --sink` accepts.
 pub fn list(ctx: &Context) -> Vec<SinkInfo> {
     let herdr = ctx.tools.herdr.as_deref().is_some_and(std::path::Path::is_file);
-    vec![SinkInfo {
-        name: "herdr".into(),
-        available: herdr,
-        reason: (!herdr).then(|| "herdr is not installed or not on PATH".to_string()),
-    }]
+    let gh = ctx.tools.gh.as_deref().is_some_and(std::path::Path::is_file);
+    vec![
+        SinkInfo {
+            name: "herdr".into(),
+            available: herdr,
+            reason: (!herdr).then(|| "herdr is not installed or not on PATH".to_string()),
+        },
+        SinkInfo {
+            name: "github".into(),
+            available: gh,
+            reason: (!gh).then(|| "gh is not installed or not on PATH".to_string()),
+        },
+    ]
 }
