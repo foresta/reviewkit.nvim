@@ -1,0 +1,436 @@
+local cli = require("reviewkit.cli")
+local config = require("reviewkit.config")
+
+local M = {}
+
+---@alias reviewkit.Event
+---| "ReviewSessionOpened"
+---| "ReviewTargetsChanged"
+---| "ReviewQueueChanged"
+---| "ReviewDecisionChanged"
+---| "ReviewThreadsChanged"
+---| "ReviewViewedChanged"
+---| "ReviewSubmitted"
+---| "ReviewSessionClosed"
+
+---@class reviewkit.LuaSink
+---@field submit fun(session: reviewkit.Session, opts: table, cb: fun(err: reviewkit.Error?, result: reviewkit.SinkResult?))
+
+local state = {
+  session = nil, ---@type reviewkit.Session?
+  watcher = nil, ---@type uv.uv_fs_event_t?
+  debounce = nil, ---@type uv.uv_timer_t?
+  watched_id = nil, ---@type string?
+  sinks = {}, ---@type table<string, reviewkit.LuaSink>
+}
+
+local WATCH_DEBOUNCE_MS = 150
+
+---@param event reviewkit.Event
+---@param data? table
+local function fire(event, data)
+  local payload = vim.tbl_extend("force", {
+    session_id = state.session and state.session.id or nil,
+    rev = state.session and state.session.rev or nil,
+  }, data or {})
+  vim.api.nvim_exec_autocmds("User", { pattern = event, data = payload, modeline = false })
+end
+
+local sections = {
+  { etag = "targets", event = "ReviewTargetsChanged" },
+  { etag = "comments", event = "ReviewQueueChanged" },
+  { etag = "decision", event = "ReviewDecisionChanged" },
+  { etag = "threads", event = "ReviewThreadsChanged" },
+  { etag = "thread_actions", event = "ReviewThreadsChanged" },
+  { etag = "viewed", event = "ReviewViewedChanged" },
+}
+
+--- Replaces the cache and fires one event per changed section. Threads and
+--- thread actions share an event, so it fires at most once per response.
+--- A response older than the cache (a slow mutation answered after the
+--- watcher already pulled a newer rev) is dropped so events never run
+--- backwards.
+---@param session reviewkit.Session
+---@param extra? { submitted?: reviewkit.SinkResult }
+---@return boolean accepted
+local function accept(session, extra)
+  local previous = state.session
+  -- The same id with a different created_at is a session purged and
+  -- reopened elsewhere; its rev restarted, so it counts as a new session.
+  local opened = previous == nil or previous.id ~= session.id or previous.created_at ~= session.created_at
+  if previous and not opened and session.rev < previous.rev then
+    return false
+  end
+  if previous and opened then
+    fire("ReviewSessionClosed")
+  end
+  state.session = session
+  if opened then
+    fire("ReviewSessionOpened")
+  end
+  local fired = {}
+  for _, section in ipairs(sections) do
+    local before = previous and not opened and previous.etags[section.etag] or nil
+    if before ~= session.etags[section.etag] and not fired[section.event] then
+      fired[section.event] = true
+      fire(section.event)
+    end
+  end
+  if extra and extra.submitted then
+    fire("ReviewSubmitted", { result = extra.submitted })
+  end
+  return true
+end
+
+local function stop_watching()
+  state.watched_id = nil
+  if state.watcher then
+    state.watcher:stop()
+    state.watcher:close()
+    state.watcher = nil
+  end
+  if state.debounce then
+    state.debounce:stop()
+    state.debounce:close()
+    state.debounce = nil
+  end
+end
+
+--- Other Neovim instances write the same session.json (temp + rename), so
+--- the directory is watched rather than the file, whose inode changes on
+--- every save. Bursts are debounced before one `session get`.
+local function watch(session)
+  stop_watching()
+  local dir = vim.fs.dirname(session.state_path)
+  local watcher = vim.uv.new_fs_event()
+  local debounce = vim.uv.new_timer()
+  if not watcher or not debounce then
+    return
+  end
+  state.watcher = watcher
+  state.debounce = debounce
+  state.watched_id = session.id
+  local id = session.id
+  local ok, start_err = watcher:start(dir, {}, function(err, filename)
+    if err or (filename and filename ~= "session.json") then
+      return
+    end
+    debounce:stop()
+    debounce:start(WATCH_DEBOUNCE_MS, 0, function()
+      vim.schedule(function()
+        if not state.session or state.session.id ~= id then
+          return
+        end
+        cli.run({ "session", "get", "--session", id }, {}, function(get_err, envelope)
+          if get_err or not envelope or not envelope.session then
+            return
+          end
+          if state.session and state.session.id == id then
+            accept(envelope.session)
+          end
+        end)
+      end)
+    end)
+  end)
+  if not ok then
+    stop_watching()
+    vim.notify_once("[reviewkit] cannot watch " .. dir .. ": " .. tostring(start_err), vim.log.levels.WARN)
+  end
+end
+
+---@param err reviewkit.Error?
+---@param envelope reviewkit.Envelope?
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+---@param extra? { submitted?: reviewkit.SinkResult }
+local function take_session(err, envelope, cb, extra)
+  if err then
+    return cb(err)
+  end
+  local session = envelope and envelope.session
+  if not session then
+    return cb({ code = "E_INTERNAL", message = "the CLI returned no session", retryable = false, details = {} })
+  end
+  -- A dropped (older) response still reports the submit it carried; the
+  -- caller always receives what the cache holds now, never a stale copy.
+  if not accept(session, extra) and extra and extra.submitted then
+    fire("ReviewSubmitted", { result = extra.submitted })
+  end
+  if state.watched_id ~= state.session.id then
+    watch(state.session)
+  end
+  cb(nil, state.session)
+end
+
+local function require_session()
+  if not state.session then
+    return nil,
+      {
+        code = "E_NO_SESSION",
+        message = "no review session is open",
+        hint = ":Review diff or :Review pr first",
+        retryable = false,
+        details = {},
+      }
+  end
+  return state.session
+end
+
+---@class reviewkit.OpenSpec
+---@field kind "local"|"pr"
+---@field base? string
+---@field head? string
+---@field number? integer
+---@field cwd? string
+
+---@param spec reviewkit.OpenSpec
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.open(spec, cb)
+  if spec.kind ~= "local" then
+    return vim.schedule(function()
+      cb({ code = "E_INVALID", message = "only local sessions are supported yet", retryable = false, details = {} })
+    end)
+  end
+  local args = { "session", "open", "--local", "--base", spec.base or "HEAD" }
+  if spec.head then
+    vim.list_extend(args, { "--head", spec.head })
+  end
+  cli.call(args, { cwd = spec.cwd }, function(err, envelope)
+    take_session(err, envelope, cb)
+  end)
+end
+
+---@param id string
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.resume(id, cb)
+  cli.call({ "session", "open", "--session", id }, {}, function(err, envelope)
+    take_session(err, envelope, cb)
+  end)
+end
+
+---@param opts? table
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.refresh(opts, cb)
+  local session, err = require_session()
+  if not session then
+    return vim.schedule(function()
+      cb(err)
+    end)
+  end
+  cli.call({ "session", "refresh", "--session", session.id }, {}, function(run_err, envelope)
+    take_session(run_err, envelope, cb)
+  end)
+end
+
+---@param opts? { purge?: boolean }
+---@param cb fun(err: reviewkit.Error?)
+function M.close(opts, cb)
+  opts = opts or {}
+  local session, err = require_session()
+  if not session then
+    return vim.schedule(function()
+      cb(err)
+    end)
+  end
+  local args = { "session", "close", "--session", session.id }
+  if opts.purge then
+    table.insert(args, "--purge")
+  end
+  cli.call(args, {}, function(run_err)
+    if run_err then
+      return cb(run_err)
+    end
+    stop_watching()
+    fire("ReviewSessionClosed")
+    state.session = nil
+    cb(nil)
+  end)
+end
+
+---@return reviewkit.Session?
+function M.session()
+  return state.session
+end
+
+---@return reviewkit.Target[]
+function M.targets()
+  return state.session and state.session.targets or {}
+end
+
+---@return reviewkit.Comment[]
+function M.comments()
+  return state.session and state.session.comments or {}
+end
+
+---@return reviewkit.Decision?
+function M.decision()
+  return state.session and state.session.decision or nil
+end
+
+---@return reviewkit.Thread[]
+function M.threads()
+  return state.session and state.session.threads or {}
+end
+
+---@param path string
+---@return reviewkit.Target?
+function M.target(path)
+  for _, target in ipairs(M.targets()) do
+    if target.path == path then
+      return target
+    end
+  end
+  return nil
+end
+
+--- Synchronous, from the cached commentable ranges: the view calls this on
+--- every cursor move, so it must not spawn anything.
+---@param path string
+---@param side reviewkit.Side
+---@param line integer
+---@return boolean
+function M.is_commentable(path, side, line)
+  local target = M.target(path)
+  if not target or target.binary then
+    return false
+  end
+  for _, range in ipairs(target.commentable[side] or {}) do
+    if line >= range[1] and line <= range[2] then
+      return true
+    end
+  end
+  return false
+end
+
+local function mutate(args, stdin, cb)
+  local session, err = require_session()
+  if not session then
+    return vim.schedule(function()
+      cb(err)
+    end)
+  end
+  local full = { args[1], args[2], "--session", session.id }
+  for i = 3, #args do
+    table.insert(full, args[i])
+  end
+  cli.call(full, { stdin = stdin }, function(run_err, envelope)
+    take_session(run_err, envelope, function(take_err, taken)
+      cb(take_err, taken, envelope and envelope.data or nil)
+    end)
+  end)
+end
+
+---@param input reviewkit.CommentInput
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?, data?: { id: string })
+function M.add_comment(input, cb)
+  mutate({ "comment", "add" }, input, cb)
+end
+
+---@param id string
+---@param patch reviewkit.CommentPatch
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.update_comment(id, patch, cb)
+  mutate({ "comment", "update", "--id", id }, patch, cb)
+end
+
+---@param id string
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.remove_comment(id, cb)
+  mutate({ "comment", "remove", "--id", id }, nil, cb)
+end
+
+---@param decision reviewkit.DecisionInput
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.set_decision(decision, cb)
+  mutate({ "decision", "set" }, decision, cb)
+end
+
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.clear_decision(cb)
+  mutate({ "decision", "clear" }, nil, cb)
+end
+
+---@param path string
+---@param on boolean
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.set_viewed(path, on, cb)
+  local args = { "target", "viewed", "--path", path }
+  if not on then
+    table.insert(args, "--undo")
+  end
+  mutate(args, nil, cb)
+end
+
+--- A sink registered here runs in Lua (clipboard, a custom integration);
+--- its result goes through `submit apply` so the queue is updated by the
+--- same rules as for the built-in sinks.
+---@param name string
+---@param impl reviewkit.LuaSink
+function M.register_sink(name, impl)
+  state.sinks[name] = impl
+end
+
+---@param sink string
+---@param opts? table
+---@param cb fun(err: reviewkit.Error?, result: reviewkit.SinkResult?, session: reviewkit.Session?)
+function M.submit(sink, opts, cb)
+  local session, err = require_session()
+  if not session then
+    return vim.schedule(function()
+      cb(err)
+    end)
+  end
+  opts = opts or {}
+  local lua_sink = state.sinks[sink]
+  if lua_sink then
+    return lua_sink.submit(session, opts, function(sink_err, result)
+      if sink_err then
+        return cb(sink_err)
+      end
+      if type(result) ~= "table" then
+        return cb({
+          code = "E_INVALID",
+          message = "sink " .. sink .. " returned no result",
+          retryable = false,
+          details = {},
+        })
+      end
+      result.sink = result.sink or sink
+      cli.call({ "submit", "apply", "--session", session.id }, { stdin = result }, function(run_err, envelope)
+        take_session(run_err, envelope, function(take_err, taken)
+          cb(take_err, envelope and envelope.data or nil, taken)
+        end, { submitted = envelope and envelope.data or nil })
+      end)
+    end)
+  end
+  local args = { "submit", "--session", session.id, "--sink", sink }
+  local stdin = nil
+  local sink_defaults = config.get().sinks[sink]
+  local merged = vim.tbl_extend("force", sink_defaults or {}, opts)
+  if next(merged) ~= nil then
+    vim.list_extend(args, { "--options", "-" })
+    stdin = merged
+  end
+  cli.call(args, { stdin = stdin }, function(run_err, envelope)
+    take_session(run_err, envelope, function(take_err, taken)
+      cb(take_err, envelope and envelope.data or nil, taken)
+    end, { submitted = envelope and envelope.data or nil })
+  end)
+end
+
+--- `User` autocmd subscription. Returns the autocmd id so a view can remove it.
+---@param event reviewkit.Event
+---@param fn fun(args: { data: { session_id?: string, rev?: integer, result?: reviewkit.SinkResult } })
+---@param group? integer
+---@return integer
+function M.on(event, fn, group)
+  return vim.api.nvim_create_autocmd("User", { pattern = event, group = group, callback = fn })
+end
+
+--- Test seam: drops the cache and the watcher without talking to the CLI.
+function M._reset()
+  stop_watching()
+  state.session = nil
+  state.sinks = {}
+end
+
+return M

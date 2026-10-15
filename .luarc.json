@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime": { "version": "LuaJIT" },
+  "workspace": {
+    "library": ["$VIMRUNTIME/lua", ".tests/deps/mini.nvim/lua"],
+    "checkThirdParty": false,
+    "ignoreDir": [".tests", "target", "cli"]
+  },
+  "diagnostics": {
+    "globals": ["vim", "MiniTest"],
+    "libraryFiles": "Disable"
+  },
+  "type": { "checkTableShape": true }
+}
