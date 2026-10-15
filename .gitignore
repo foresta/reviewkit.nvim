@@ -14,7 +14,6 @@ luac.out
 # Environment / local
 .env
 .direnv/
-.luarc.json
 
 # Test / dependency artifacts
 /deps/
@@ -27,3 +26,6 @@ CLAUDE.local.md
 # Rust
 target/
 *.snap.new
+
+# Built CLI placed by install.lua
+/bin/

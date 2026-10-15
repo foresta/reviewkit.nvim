@@ -243,7 +243,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       [�
 lua/reviewkit/
   init.lua            setup(opts)
   config.lua          既定値
-  cli.lua             バイナリ解決、run(args, { stdin? }, cb(err, data, session))、封筒の解釈、version 照合
+  cli.lua             バイナリ解決、run(args, { stdin? }, cb(err, envelope))、封筒の解釈、version 照合
   core.lua            state を持つ唯一の Lua モジュール。キャッシュ、etags 差分で User autocmd、state_path の監視、Lua 側 sink の登録
   types.lua           生成された LuaCATS + SCHEMA_VERSION
   health.lua          :checkhealth reviewkit
@@ -273,7 +273,7 @@ core.add_comment(input, cb) / core.update_comment(id, patch, cb) / core.remove_c
 core.set_decision(decision, cb) / core.clear_decision(cb)
 core.set_viewed(path, on, cb)
 core.pr_info(cb)               -- PrInfo。表示は持たないが取り出せる
-core.submit(sink, opts, cb)  -- Rust 側 sink は submit。Lua 登録 sink は impl.submit(session, cb) の結果を submit apply に渡す
+core.submit(sink, opts, cb)  -- Rust 側 sink は submit。Lua 登録 sink は impl.submit(session, opts, cb) の結果を submit apply に渡す
 core.register_sink(name, impl)
 core.on(event, fn)           -- User autocmd の薄い包み
 ```

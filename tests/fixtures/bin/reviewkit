@@ -1,0 +1,60 @@
+#!/usr/bin/env -S nvim --clean -l
+-- Rules: $FAKE_REVIEWKIT_DIR/responses.json, a list of
+--   { match = { "substring of argv or stdin", ... }, body = <envelope> | raw = "text", exit = n }
+-- First rule whose every `match` is found wins; calls go to calls.jsonl.
+local dir = os.getenv("FAKE_REVIEWKIT_DIR")
+local args = {}
+for i = 1, #arg do
+  args[i] = arg[i]
+end
+local joined = table.concat(args, " ")
+local stdin = io.stdin:read("*a") or ""
+
+if dir then
+  local log = io.open(dir .. "/calls.jsonl", "a")
+  if log then
+    log:write(vim.json.encode({ args = args, stdin = stdin }), "\n")
+    log:close()
+  end
+end
+
+local rules = {}
+if dir then
+  local f = io.open(dir .. "/responses.json", "r")
+  if f then
+    rules = vim.json.decode(f:read("*a"))
+    f:close()
+  end
+end
+
+local function matches(rule)
+  for _, needle in ipairs(rule.match or {}) do
+    if not (joined:find(needle, 1, true) or stdin:find(needle, 1, true)) then
+      return false
+    end
+  end
+  return true
+end
+
+for _, rule in ipairs(rules) do
+  if matches(rule) then
+    if rule.raw then
+      io.stdout:write(rule.raw)
+    else
+      io.stdout:write(vim.json.encode(rule.body))
+      io.stdout:write("\n")
+    end
+    os.exit(rule.exit or 0)
+  end
+end
+
+if joined:find("version", 1, true) then
+  io.stdout:write(vim.json.encode({ ok = true, data = { version = "0.0.0-stub", schema_version = 1 } }), "\n")
+  os.exit(0)
+end
+
+io.stdout:write(vim.json.encode({
+  ok = false,
+  error = { code = "E_INTERNAL", message = "stub reviewkit: no rule for: " .. joined, retryable = false, details = {} },
+}), "\n")
+os.exit(70)
