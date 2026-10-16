@@ -3,6 +3,7 @@ local core = require("reviewkit.core")
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("reviewkit_annotate")
+local ns_range = vim.api.nvim_create_namespace("reviewkit_commentable")
 
 ---@param buf integer
 ---@return string? path
@@ -19,6 +20,7 @@ function M.refresh(buf)
     return
   end
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  vim.api.nvim_buf_clear_namespace(buf, ns_range, 0, -1)
   local session = core.session()
   if not session then
     return
@@ -28,6 +30,20 @@ function M.refresh(buf)
     return
   end
   local last = vim.api.nvim_buf_line_count(buf)
+  local target = core.target(path)
+  if target and not vim.b[buf].reviewkit_placeholder then
+    -- A sign rather than a line highlight: diff mode already colours the
+    -- lines, and a second background would hide its add / change colours.
+    for _, range in ipairs(target.commentable[side] or {}) do
+      for line = range[1], math.min(range[2], last) do
+        pcall(vim.api.nvim_buf_set_extmark, buf, ns_range, line - 1, 0, {
+          sign_text = "▏",
+          sign_hl_group = "DiagnosticHint",
+          priority = 1,
+        })
+      end
+    end
+  end
   -- Outdated threads have no line; they are left to the thread list
   -- rather than guessed onto one.
   for _, t in ipairs(session.threads or {}) do
@@ -80,6 +96,7 @@ function M.clear_all()
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(buf) then
       vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+      vim.api.nvim_buf_clear_namespace(buf, ns_range, 0, -1)
     end
   end
 end
@@ -88,6 +105,7 @@ function M.attach()
   local group = vim.api.nvim_create_augroup("reviewkit_annotate", { clear = true })
   core.on("ReviewQueueChanged", M.refresh_all, group)
   core.on("ReviewThreadsChanged", M.refresh_all, group)
+  core.on("ReviewTargetsChanged", M.refresh_all, group)
   core.on("ReviewSessionOpened", M.refresh_all, group)
   core.on("ReviewSessionClosed", M.clear_all, group)
   vim.api.nvim_create_autocmd({ "BufWinEnter", "BufReadPost" }, {

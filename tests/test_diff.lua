@@ -488,6 +488,22 @@ T["diff"]["the placeholder of an added file's base side refuses comments"] = fun
   eq(notices[#notices].msg:find("no file to comment on", 1, true) ~= nil, true)
 end
 
+T["diff"]["commentable lines carry a sign on each side, placeholders none"] = function()
+  open_review()
+  local ns = "vim.api.nvim_create_namespace('reviewkit_commentable')"
+  local rows = ("vim.tbl_map(function(m) return m[2] end, vim.api.nvim_buf_get_extmarks(vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().%%s), %s, 0, -1, {}))"):format(
+    ns
+  )
+  eq(child.lua_get(rows:format("right")), { 0, 1, 2, 3, 4, 5 })
+  eq(child.lua_get(rows:format("left")), { 0, 1, 2, 3, 4, 5 })
+  child.lua("require('reviewkit.view.diff').step(1)")
+  wait(
+    "require('reviewkit.view.diff')._state().path == 'src/b.rs' and not require('reviewkit.view.diff')._state().showing"
+  )
+  eq(child.lua_get(rows:format("left")), {})
+  eq(child.lua_get(rows:format("right")), { 0, 1 })
+end
+
 T["diff"]["closing the review closes the diff tab"] = function()
   open_review(nil, { { match = { "session close" }, body = { ok = true, data = { closed = true } } } })
   eq(child.lua_get("#vim.api.nvim_list_tabpages()"), 2)
