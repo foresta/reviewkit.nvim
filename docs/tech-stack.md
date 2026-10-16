@@ -43,7 +43,8 @@ Neovim の ABI と LuaJIT に結合せず、配布が `cargo install` かバイ�
 - 全モジュールに LuaCATS 注釈を付ける。契約の型 `lua/reviewkit/types.lua` は手書きせず、
   `reviewkit schema`（JSON Schema）を `nvim -l scripts/gen-types.lua` で変換した出力をコミットする。CI でずれを検出する
 - 型チェックは `lua-language-server --check lua/`（`.luarc.json` で Neovim のランタイム定義を指定）。整形は `stylua`
-- `vim.diff` は使わない。hunk は CLI が Target に載せて返し、view は再計算しない
+- `vim.diff` は使わない。hunk は CLI が Target に載せて返し、view は再計算しない。
+  左右の表示の位置合わせだけは Neovim の diff モード（`diffthis`）に任せる
 - Neovim >= 0.12。`vim.system`、`vim.uv`、`vim.pack` を前提にする
 
 ## テスト
