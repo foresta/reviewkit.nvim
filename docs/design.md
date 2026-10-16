@@ -250,7 +250,8 @@ lua/reviewkit/
   types.lua           生成された LuaCATS + SCHEMA_VERSION
   health.lua          :checkhealth reviewkit
   install.lua         ensure()（cargo build → <plugin>/bin/）
-  view/diff.lua       タブ・左右ウィンドウ・次 / 前の移動。base 側は file base で取得した読み取り専用バッファ
+  view/diff.lua       タブ・左右ウィンドウ・次 / 前の移動。base 側は file base で取得した読み取り専用バッファ。
+                      左右の位置合わせと色付けは Neovim の diff モード（diffthis）。hunk 間の移動とコメント可否は Target から
   view/annotate.lua   extmark の注釈（stale は薄く）
   view/queue.lua      一覧（quickfix 既定、float も可）
   view/input.lua      入力窓

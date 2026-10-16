@@ -12,6 +12,7 @@ local state = {
   debounce = nil, ---@type uv.uv_timer_t?
   refreshing = false,
   refresh_again = false,
+  mapped_bufs = {}, ---@type table<integer, true>
 }
 
 ---@param err reviewkit.Error
@@ -135,6 +136,7 @@ local function attach()
   local group = vim.api.nvim_create_augroup("reviewkit_orchestrator", { clear = true })
   require("reviewkit.view.queue").attach()
   require("reviewkit.view.annotate").attach()
+  require("reviewkit.view.diff").attach()
   core.register_sink("clipboard", require("reviewkit.sink.clipboard") --[[@as reviewkit.LuaSink]])
   core.on("ReviewSessionOpened", function()
     local session = core.session()
@@ -184,8 +186,10 @@ local function open(spec)
       return notify_error(err)
     end
     announce(session)
+    require("reviewkit.view.diff").open()
     require("reviewkit.view.queue").show_targets()
     vim.cmd("botright copen")
+    vim.cmd("wincmd p")
   end)
 end
 
@@ -209,6 +213,7 @@ function M.resume(id)
         return notify_error(err)
       end
       announce(session)
+      require("reviewkit.view.diff").open()
       require("reviewkit.view.queue").show_targets()
     end)
   end
@@ -247,19 +252,17 @@ end
 
 ---@param buf integer
 ---@return string? path
----@return reviewkit.Session? session
-local function path_in_session(buf)
-  local session = core.session()
-  if not session then
+---@return reviewkit.Side side
+local function location(buf)
+  if not core.session() then
     notify("no review session is open")
-    return nil
+    return nil, "head"
   end
-  local rel = core.relpath(vim.api.nvim_buf_get_name(buf))
-  if not rel then
+  local path, side = require("reviewkit.view.diff").location(buf)
+  if not path then
     notify("this buffer is not inside the review worktree")
-    return nil
   end
-  return rel, session
+  return path, side
 end
 
 --- `kind:` on the first line sets the kind, so one input window covers
@@ -280,9 +283,12 @@ end
 function M.comment(opts)
   opts = opts or {}
   local buf = vim.api.nvim_get_current_buf()
-  local path = path_in_session(buf)
+  local path, side = location(buf)
   if not path then
     return
+  end
+  if require("reviewkit.view.diff").is_placeholder(buf) then
+    return notify("this side has no file to comment on")
   end
   local ranged = opts.range and opts.line1 and opts.line2
   local line = ranged and math.max(opts.line1, opts.line2) or vim.api.nvim_win_get_cursor(0)[1]
@@ -291,7 +297,10 @@ function M.comment(opts)
     start_line = nil
   end
   local where = start_line and ("%s:%d-%d"):format(path, start_line, line) or ("%s:%d"):format(path, line)
-  local outside = not core.is_commentable(path, "head", line)
+  if side == "base" then
+    where = where .. " (base)"
+  end
+  local outside = not core.is_commentable(path, side, line)
   require("reviewkit.view.input").open({
     title = "Comment " .. where .. (outside and " (outside the diff; agent only)" or ""),
     footer = " :w save · q cancel · first line `nit:` sets the kind ",
@@ -302,7 +311,7 @@ function M.comment(opts)
       local body, kind = split_kind(text)
       core.add_comment({
         path = path,
-        side = "head",
+        side = side,
         line = line,
         start_line = start_line,
         kind = kind,
@@ -383,7 +392,7 @@ end
 
 function M.toggle_viewed()
   local buf = vim.api.nvim_get_current_buf()
-  local path = path_in_session(buf)
+  local path = location(buf)
   if not path then
     return
   end
@@ -487,6 +496,11 @@ local maps = {
   { "n", "<leader>rq", "toggle_queue", "reviewkit: toggle the queue list" },
   { "n", "<leader>rv", "toggle_viewed", "reviewkit: toggle viewed for this file" },
   { "n", "<leader>rs", "submit_default", "reviewkit: submit to herdr" },
+  { "n", "<leader>ro", "open_diff", "reviewkit: open the side-by-side view" },
+  { "n", "]f", "next_file", "reviewkit: next target", true },
+  { "n", "[f", "prev_file", "reviewkit: previous target", true },
+  { "n", "]h", "next_hunk", "reviewkit: next hunk", true },
+  { "n", "[h", "prev_hunk", "reviewkit: previous hunk", true },
 }
 
 local actions = {
@@ -508,6 +522,21 @@ local actions = {
   submit_default = function()
     M.submit("herdr")
   end,
+  open_diff = function()
+    require("reviewkit.view.diff").open()
+  end,
+  next_file = function()
+    require("reviewkit.view.diff").step(1)
+  end,
+  prev_file = function()
+    require("reviewkit.view.diff").step(-1)
+  end,
+  next_hunk = function()
+    require("reviewkit.view.diff").jump_hunk(1)
+  end,
+  prev_hunk = function()
+    require("reviewkit.view.diff").jump_hunk(-1)
+  end,
 }
 
 --- <Plug> mappings exist from plugin load, so a user's own `nmap` works
@@ -524,10 +553,11 @@ end
 function M.set_keymaps()
   local skipped = {}
   for _, map in ipairs(maps) do
-    local mode, lhs, action, desc = map[1], map[2], map[3], map[4]
-    if vim.fn.maparg(lhs, mode) == "" then
+    local mode, lhs, action, desc, local_only = map[1], map[2], map[3], map[4], map[5]
+    local free = vim.fn.maparg(lhs, mode) == ""
+    if not local_only and free then
       vim.keymap.set(mode, lhs, actions[action], { desc = desc })
-    else
+    elseif not local_only then
       table.insert(skipped, mode .. " " .. lhs)
     end
   end
@@ -537,6 +567,50 @@ function M.set_keymaps()
       vim.log.levels.INFO
     )
   end
+end
+
+--- Navigation keys only exist in the diff view's buffers: globally they
+--- would shadow `[f` and the `]h` of git sign plugins everywhere. A
+--- buffer-local map another plugin set is left alone.
+---@param buf integer
+function M.set_buffer_keymaps(buf)
+  if not config.get().set_keymaps or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  for _, map in ipairs(maps) do
+    local mode, lhs, action, desc, local_only = map[1], map[2], map[3], map[4], map[5]
+    if local_only then
+      local foreign = false
+      for _, existing in ipairs(vim.api.nvim_buf_get_keymap(buf, mode)) do
+        if existing.lhs == lhs and existing.desc ~= desc then
+          foreign = true
+        end
+      end
+      if not foreign then
+        vim.keymap.set(mode, lhs, actions[action], { buffer = buf, desc = desc })
+        state.mapped_bufs[buf] = true
+      end
+    end
+  end
+end
+
+--- Worktree buffers outlive the review; left mapped, they would keep
+--- shadowing the user's global `]h` after it closed.
+function M.clear_buffer_keymaps()
+  for buf in pairs(state.mapped_bufs) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      for _, map in ipairs(maps) do
+        if map[5] then
+          for _, existing in ipairs(vim.api.nvim_buf_get_keymap(buf, map[1])) do
+            if existing.lhs == map[2] and existing.desc == map[4] then
+              vim.keymap.del(map[1], map[2], { buffer = buf })
+            end
+          end
+        end
+      end
+    end
+  end
+  state.mapped_bufs = {}
 end
 
 --- Test seam.
