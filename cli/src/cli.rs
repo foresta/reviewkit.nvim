@@ -110,4 +110,7 @@ pub enum Command {
     Sink(crate::commands::sink::SinkCommand),
     /// Send the queue through a sink, or apply a client-side sink's result.
     Submit(crate::commands::submit::SubmitArgs),
+    /// List pull request review threads and queue resolving them.
+    #[command(subcommand)]
+    Thread(crate::commands::thread::ThreadCommand),
 }

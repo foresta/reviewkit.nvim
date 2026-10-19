@@ -8,6 +8,7 @@ pub mod session;
 pub mod sink;
 pub mod submit;
 pub mod target;
+pub mod thread;
 pub mod version;
 
 use std::io::Read;
@@ -30,6 +31,7 @@ pub fn dispatch(ctx: &Context, command: Command) -> Result<Response> {
         Command::Pr(command) => pr::run(ctx, command),
         Command::Sink(command) => sink::run(ctx, command),
         Command::Submit(args) => submit::run(ctx, args),
+        Command::Thread(command) => thread::run(ctx, command),
     }
 }
 

@@ -751,3 +751,116 @@ fn an_edit_after_the_crash_is_not_mistaken_for_what_was_posted() {
         "edited later"
     );
 }
+
+fn thread_cmd(state: &tempfile::TempDir, remote: &Remote, gh: &FakeGh, args: &[&str]) -> std::process::Output {
+    let mut full = vec!["thread"];
+    full.extend_from_slice(args);
+    reviewkit(state, remote, gh).args(full).output().unwrap()
+}
+
+#[test]
+fn resolving_a_thread_is_queued_toggled_and_rejected_for_unknown_ids() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(
+        &remote,
+        "OPEN",
+        serde_json::json!([thread("keep.txt", Some(3), "RIGHT", false)]),
+    );
+    let id = open(&state, &remote, &gh);
+    let listed = json(&thread_cmd(&state, &remote, &gh, &["list", "--session", &id]));
+    assert_eq!(listed["data"][0]["id"], "PRRT_keep.txt");
+
+    let queued = json(&thread_cmd(
+        &state,
+        &remote,
+        &gh,
+        &["resolve", "--session", &id, "--thread", "PRRT_keep.txt"],
+    ));
+    assert_eq!(
+        queued["session"]["thread_actions"],
+        serde_json::json!([{ "thread_id": "PRRT_keep.txt", "action": "resolve" }])
+    );
+
+    let undone = json(&thread_cmd(
+        &state,
+        &remote,
+        &gh,
+        &["resolve", "--session", &id, "--thread", "PRRT_keep.txt", "--undo"],
+    ));
+    assert_eq!(undone["session"]["thread_actions"], serde_json::json!([]));
+
+    let missing = thread_cmd(
+        &state,
+        &remote,
+        &gh,
+        &["resolve", "--session", &id, "--thread", "PRRT_nope"],
+    );
+    assert_eq!(missing.status.code(), Some(3));
+    let error: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert_eq!(error["error"]["code"], "E_NO_THREAD");
+}
+
+#[test]
+fn a_queued_resolve_is_sent_on_submit_and_cleared_once_github_accepts_it() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(
+        &remote,
+        "OPEN",
+        serde_json::json!([thread("keep.txt", Some(3), "RIGHT", false)]),
+    );
+    let id = open(&state, &remote, &gh);
+    json(&thread_cmd(
+        &state,
+        &remote,
+        &gh,
+        &["resolve", "--session", &id, "--thread", "PRRT_keep.txt"],
+    ));
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "action0": { "thread": { "id": "PRRT_keep.txt", "isResolved": true } } } }),
+        0,
+    );
+    let body = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(body["ok"], true, "{body}");
+    assert_eq!(body["data"]["thread_actions"][0]["status"], "sent");
+    assert_eq!(body["session"]["thread_actions"], serde_json::json!([]));
+    let sent = mutation_calls(&gh);
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0]["query"].as_str().unwrap().contains("resolveReviewThread"));
+}
+
+#[test]
+fn refreshing_threads_drops_a_resolve_that_someone_already_did_on_github() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(
+        &remote,
+        "OPEN",
+        serde_json::json!([thread("keep.txt", Some(3), "RIGHT", false)]),
+    );
+    let id = open(&state, &remote, &gh);
+    json(&thread_cmd(
+        &state,
+        &remote,
+        &gh,
+        &["resolve", "--session", &id, "--thread", "PRRT_keep.txt"],
+    ));
+    let mut resolved = thread("keep.txt", Some(3), "RIGHT", false);
+    resolved["isResolved"] = serde_json::json!(true);
+    github_shows(&gh, "me", serde_json::json!([resolved]), serde_json::json!([]));
+    let body = json(&thread_cmd(
+        &state,
+        &remote,
+        &gh,
+        &["list", "--session", &id, "--refresh"],
+    ));
+    assert_eq!(body["data"][0]["resolved"], true);
+    assert_eq!(body["session"]["thread_actions"], serde_json::json!([]));
+}

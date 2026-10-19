@@ -118,7 +118,7 @@ M.SCHEMA_VERSION = 1
 
 --- Codes are only ever added, never renamed. No per-variant docs: they would
 --- turn the JSON Schema into a `oneOf` instead of one `enum` list.
----@alias reviewkit.ErrorCode "E_USAGE"|"E_INVALID"|"E_NOT_COMMENTABLE"|"E_NO_SESSION"|"E_NO_COMMENT"|"E_NO_TARGET"|"E_GIT"|"E_GH"|"E_GH_AUTH"|"E_GH_MISSING"|"E_GH_PENDING_REVIEW"|"E_HERDR"|"E_HERDR_MISSING"|"E_AMBIGUOUS"|"E_CONFLICT"|"E_LOCKED"|"E_SCHEMA_VERSION"|"E_INTERNAL"
+---@alias reviewkit.ErrorCode "E_USAGE"|"E_INVALID"|"E_NOT_COMMENTABLE"|"E_NO_SESSION"|"E_NO_COMMENT"|"E_NO_TARGET"|"E_NO_THREAD"|"E_GIT"|"E_GH"|"E_GH_AUTH"|"E_GH_MISSING"|"E_GH_PENDING_REVIEW"|"E_HERDR"|"E_HERDR_MISSING"|"E_AMBIGUOUS"|"E_CONFLICT"|"E_LOCKED"|"E_SCHEMA_VERSION"|"E_INTERNAL"
 
 --- One hash per section, so a client can tell which sections changed
 --- without diffing the whole session.

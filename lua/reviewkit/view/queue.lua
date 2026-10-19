@@ -70,6 +70,32 @@ function M.show_targets()
   M.replace(items, TITLE .. " targets")
 end
 
+function M.show_threads()
+  local session = core.session()
+  if not session then
+    return
+  end
+  local status = require("reviewkit.view.thread").status
+  local items = {}
+  for _, t in ipairs(session.threads) do
+    local first = t.comments[1]
+    local s = status(t)
+    table.insert(items, {
+      filename = worktree(session) .. "/" .. t.path,
+      lnum = t.line or t.original_line or 1,
+      col = 1,
+      text = ("◆ %s (%d)%s %s"):format(
+        first and first.author or "?",
+        #t.comments,
+        s ~= "" and (" [" .. s .. "]") or "",
+        first and (first.body:match("^[^\n]*") or "") or ""
+      ),
+      type = (t.resolved or t.outdated) and "" or "I",
+    })
+  end
+  M.replace(items, TITLE .. " threads")
+end
+
 ---@param items table[]
 ---@param title string
 function M.replace(items, title)
@@ -99,6 +125,11 @@ function M.attach()
     end
   end
   core.on("ReviewTargetsChanged", targets_changed, group)
+  core.on("ReviewThreadsChanged", function()
+    if current_title() == TITLE .. " threads" then
+      M.show_threads()
+    end
+  end, group)
   core.on("ReviewViewedChanged", targets_changed, group)
   core.on("ReviewSessionClosed", function()
     if vim.startswith(current_title(), TITLE) then

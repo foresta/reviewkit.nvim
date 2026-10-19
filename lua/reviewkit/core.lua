@@ -377,6 +377,33 @@ function M.set_viewed(path, on, cb)
   mutate(args, nil, cb)
 end
 
+---@param id string
+---@param resolved boolean
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.resolve_thread(id, resolved, cb)
+  local args = { "thread", "resolve", "--thread", id }
+  if not resolved then
+    table.insert(args, "--undo")
+  end
+  mutate(args, nil, cb)
+end
+
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.refresh_threads(cb)
+  mutate({ "thread", "list", "--refresh" }, nil, cb)
+end
+
+---@param thread_id string
+---@return reviewkit.ThreadActionKind?
+function M.pending_thread_action(thread_id)
+  for _, action in ipairs(state.session and state.session.thread_actions or {}) do
+    if action.thread_id == thread_id then
+      return action.action
+    end
+  end
+  return nil
+end
+
 --- Conversation and checks of a pull request session, kept beside the
 --- session rather than in it; `nil` for local sessions.
 ---@param cb fun(err: reviewkit.Error?, info: reviewkit.PrInfo?)

@@ -51,7 +51,8 @@ function M.refresh(buf)
       local first = t.comments[1]
       local who = first and first.author or "?"
       local hl = t.resolved and "Comment" or "DiagnosticHint"
-      local text = ("◆ %s (%d)%s"):format(who, #t.comments, t.resolved and " resolved" or "")
+      local status = require("reviewkit.view.thread").status(t)
+      local text = ("◆ %s (%d)%s"):format(who, #t.comments, status ~= "" and (" " .. status) or "")
       pcall(vim.api.nvim_buf_set_extmark, buf, ns, t.line - 1, 0, {
         virt_text = { { " " .. text, hl } },
         virt_text_pos = "eol",
