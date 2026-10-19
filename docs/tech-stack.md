@@ -110,4 +110,10 @@ reviewkit.nvim/
 - `:ReviewInstall` と `:checkhealth reviewkit`（解決したパス、`version`、`schema_version` の一致、git / gh / herdr の有無、state dir の書き込み可否）
 - **契約バージョン**: CLI の `version` が `schema_version` を返す。Lua は最初の呼び出しで `types.lua` の
   `SCHEMA_VERSION` と照合し、不一致なら止めて checkhealth に誘導する。同じ `schema_version` 内の変更は追加のみ
+- **書いた版の記録**: session.json のトップレベルに契約外のキー `_writer`（`revision`、`version`、`exe`）を書く。`SCHEMA_REVISION` は
+  永続化する型にフィールドや enum 値を足すたびに +1 する（Session の Schema のハッシュをテストで固定し、上げ忘れを落とす）。
+  自分より新しい revision が書いたセッションは、読めれば `session get` / `list` で返すが書き戻さない（`E_SCHEMA_VERSION`、
+  `details.direction = "newer"`）。再開（`session open --session`）は refresh を書くので拒否される。`close --purge` は読めなくても消せる。
+  pending_submit.json と pr.json は対象外（前者は送信の途中にだけ存在し、後者は refresh で作り直す）。
+  旧版が知らないフィールドを消すのを防ぐため。足すフィールドは `#[serde(default)]` か `Option` にして、新版が古いファイルを読めるようにする
 - Windows は非対応

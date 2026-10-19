@@ -456,3 +456,39 @@ fn unrelated_histories_have_no_merge_base_and_leave_no_session() {
     assert!(body["error"]["message"].as_str().unwrap().contains("no merge-base"));
     assert!(!state.path().join("sessions").exists());
 }
+
+#[test]
+fn a_session_written_by_a_newer_cli_is_not_changed_and_exits_with_the_contract_code() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let opened = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD~1"])
+            .output()
+            .unwrap(),
+    );
+    let id = opened["session"]["id"].as_str().unwrap().to_string();
+    let path = opened["session"]["state_path"].as_str().unwrap().to_string();
+    let mut raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    raw["_writer"]["revision"] = serde_json::json!(999);
+    std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    let out = reviewkit(&state, &repo)
+        .args(["decision", "set", "--session", &id])
+        .write_stdin(r#"{"event":"approve","body":""}"#)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(6));
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(body["error"]["details"]["direction"], "newer");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+
+    let got = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "get", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(got["session"]["id"], id.as_str());
+}
