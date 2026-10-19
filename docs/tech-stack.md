@@ -82,18 +82,28 @@ reviewkit.nvim/
   tests/                    mini.test、fixtures/bin/reviewkit（stub）
   scripts/                  minimal_init.lua、run_tests.lua、install.lua、gen-types.lua
   docs/
-  Makefile                  deps / build / test-rust / test-lua / test-integration / test / check / fmt / gen-types
+  Makefile                  deps / build / test-rust / test-lua / test-integration / test / check / fmt / gen-types / dist
   .github/workflows/        ci.yml、release.yml
 ```
 
 ## 配布と導入
 
-- **バイナリ**: `cargo install --git https://github.com/foresta/reviewkit.nvim reviewkit`、または GitHub Releases
-  （`cargo-dist`。macOS arm64 / x86_64、Linux x86_64 / arm64 は musl）。タグ `v0.x.y` でプラグインと CLI を同時にリリースする
+- **バイナリ**: GitHub Releases に素のバイナリ `reviewkit-<target triple>`（macOS arm64 / x86_64、Linux x86_64 / arm64 は
+  musl）と `SHA256SUMS` を置く。`.github/workflows/release.yml` がネイティブ runner の matrix で `make dist` し、タグ `vX.Y.Z`
+  のときだけ公開する（PR ではビルドとスモークだけ）。cargo-dist は installer / manifest が不要なので使わない。
+  `cargo install --git https://github.com/foresta/reviewkit.nvim reviewkit` も可
+- **バージョンの規約**: `[workspace.package] version` はリリースの commit でだけ `X.Y.Z` にし、そこにタグを打ち、直後に次の
+  `X.Y.Z-dev` に上げる。release.yml はタグと version の一致と、pre-release でないことを検査する
 - **Lua 側の解決順**: `setup({ cli = { path } })` > `$REVIEWKIT_BIN` > `cli.dev = true` のとき
   `<plugin>/cli/target/{debug,release}/reviewkit` > `<plugin>/bin/reviewkit` > `exepath("reviewkit")`
-- **ビルドフック**は `require("reviewkit.install").ensure()` に一本化する。最初は `cargo build --release` して
-  `<plugin>/bin/` に置くだけ。Releases からのダウンロード（checksum 検証）は後で同じモジュールに足す
+- **ビルドフック**は `require("reviewkit.install").ensure()` に一本化する（`:ReviewInstall` は非同期版）
+  - チェックアウトの `Cargo.toml` の version で取得するリリースを決める。安定版は `releases/download/vX.Y.Z`、`-dev` は
+    cargo を優先し、無いときだけ `releases/latest` を警告付きで使う。`$REVIEWKIT_RELEASE_URL` で取得元を差し替えられる（テスト用）
+  - curl で `SHA256SUMS` と asset を取り、sha256（`sha256sum` → `shasum` → `openssl`）を照合し、`version` を実行して
+    schema_version（安定版は crate version も）が一致するものだけを `<plugin>/bin/.reviewkit.<pid>.<rand>` から rename で置く。
+    実行中のバイナリを上書きしないため（macOS では SIGKILL になる）
+  - 取得できなければ cargo でビルドする。両方駄目なら、両方の理由と手で置く場所を返す
+  - 既存の `bin/reviewkit` が目標に合っていれば何もしない（`-dev` は版が同じでも中身が古い可能性があるので、cargo があれば毎回ビルドし直す。cargo が無ければ、より古いはずの latest で置き換えずに残す）
   - lazy.nvim: `build = function() require("reviewkit.install").ensure() end`
   - dein: `build = "nvim --headless -l scripts/install.lua"`、`hook_add` で `setup()`
   - vim.pack: `PackChanged` autocmd で `kind ~= "delete"` のとき `ensure()`

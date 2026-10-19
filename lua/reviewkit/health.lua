@@ -22,8 +22,16 @@ function M.check()
     return
   end
   local found = version.data.schema_version
+  local install = require("reviewkit.install")
+  local wanted = install.wanted_version(install.root())
   if found == types.SCHEMA_VERSION then
     health.ok(("version %s (schema_version %d)"):format(version.data.version, found))
+    if wanted and not install.is_dev(wanted) and version.data.version ~= wanted then
+      health.warn(
+        ("the plugin checkout is %s but the binary is %s"):format(wanted, version.data.version),
+        { "run :ReviewInstall" }
+      )
+    end
   else
     health.error(
       ("schema_version mismatch: binary %s, plugin %s"):format(tostring(found), tostring(types.SCHEMA_VERSION)),
