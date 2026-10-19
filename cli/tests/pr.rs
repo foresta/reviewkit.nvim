@@ -337,6 +337,42 @@ fn reopen_skips_the_fetch_when_nothing_moved_and_fetches_when_the_base_moves() {
 }
 
 #[test]
+fn a_retargeted_pull_request_diffs_against_its_new_base() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+            .output()
+            .unwrap(),
+    );
+    git_in(
+        remote.clone.path(),
+        &[
+            "push",
+            "-q",
+            remote.bare.path().to_str().unwrap(),
+            "main~1:refs/heads/release",
+        ],
+    );
+    let release = git_in(remote.clone.path(), &["rev-parse", "main~1"]);
+    let rules = std::fs::read_to_string(gh.dir.path().join("responses.json"))
+        .unwrap()
+        .replace(&remote.base_sha, &release)
+        .replace("\"baseRefName\":\"main\"", "\"baseRefName\":\"release\"");
+    std::fs::write(gh.dir.path().join("responses.json"), rules).unwrap();
+    let retargeted = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["session", "open", "--session", "pr/github.com/o/r/7"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(retargeted["session"]["source"]["base_ref"], "release");
+    assert_eq!(retargeted["session"]["base"]["sha"], release);
+}
+
+#[test]
 fn a_deleted_mirror_is_recreated_on_reopen() {
     let state = tempfile::tempdir().unwrap();
     let remote = Remote::new();

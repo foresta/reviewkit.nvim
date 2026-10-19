@@ -222,10 +222,16 @@ fn materialize(src: &PrSource<'_>, repo_ref: &RepoRef, meta: &PrMeta) -> Result<
     let pr_ref = format!("refs/reviewkit/pr/{}", meta.number);
     let base_ref = format!("refs/reviewkit/base/{}", meta.number);
     let have = mirror.rev_parse(&pr_ref);
-    if have.as_deref() != Some(meta.head_oid.as_str())
-        || mirror.rev_parse(&base_ref).is_none()
-        || !mirror.has_commit(&meta.base_oid)
-    {
+    // An open PR's base ref must be GitHub's base oid, not merely present: a
+    // retargeted PR (a stacked PR moved onto main) names another branch whose
+    // tip the mirror may already hold. A closed PR keeps its recorded base
+    // while the branch moves on, so it only needs that commit.
+    let base_stale = if meta.state == PrState::Open {
+        mirror.rev_parse(&base_ref).as_deref() != Some(meta.base_oid.as_str())
+    } else {
+        mirror.rev_parse(&base_ref).is_none() || !mirror.has_commit(&meta.base_oid)
+    };
+    if have.as_deref() != Some(meta.head_oid.as_str()) || base_stale {
         mirror
             .fetch(
                 "origin",
