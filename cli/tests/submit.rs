@@ -431,7 +431,7 @@ fn submit_apply_rejects_bad_input_and_a_hanging_herdr_times_out() {
     let body = json(
         &cmd(&state, &repo, &herdr)
             .env("FAKE_HERDR_SLEEP", "3")
-            .env("REVIEWKIT_HERDR_TIMEOUT_MS", "200")
+            .env("REVIEWKIT_HERDR_TIMEOUT_MS", "1000")
             .args(["submit", "--session", &id, "--sink", "herdr"])
             .output()
             .unwrap(),

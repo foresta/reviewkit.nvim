@@ -62,7 +62,7 @@ function M.refresh(buf)
     end
   end
   for _, c in ipairs(session.comments) do
-    if c.path == path and c.side == side and c.line <= last then
+    if c.path == path and c.side == side and c.line <= last and not c.reply_to then
       local hl = c.stale and "Comment" or "DiagnosticInfo"
       local text = (c.kind == "issue" and "●" or ("● " .. c.kind)) .. (c.stale and " (stale)" or "")
       pcall(vim.api.nvim_buf_set_extmark, buf, ns, c.line - 1, 0, {
@@ -127,7 +127,7 @@ function M.comment_at(buf, line)
   end
   local path, side = location(buf)
   for _, c in ipairs(session.comments) do
-    if c.path == path and c.side == side and line >= (c.start_line or c.line) and line <= c.line then
+    if c.path == path and c.side == side and not c.reply_to and line >= (c.start_line or c.line) and line <= c.line then
       return c
     end
   end
