@@ -76,6 +76,9 @@ pub fn reanchor(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
     let mut sides: HashMap<(Side, String), Option<SideFile>> = HashMap::new();
     let mut diffs: HashMap<(String, String), Option<Vec<Hunk>>> = HashMap::new();
     for index in 0..session.comments.len() {
+        if session.comments[index].reply_to.is_some() {
+            continue;
+        }
         // A rename moves the head path; comments follow it so they keep the
         // "path is the head-side Target path" rule and stay commentable.
         if let Some(renamed) = session

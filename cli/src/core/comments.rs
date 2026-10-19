@@ -32,6 +32,9 @@ pub fn add(session: &mut Session, input: CommentInput, file: Option<SideFile>) -
         ))
         .hint("comments use the head-side path on both sides"));
     }
+    if input.reply_to.is_some() {
+        return Ok(push_reply(session, input, file));
+    }
     let file = file.ok_or_else(|| not_commentable(&input.path, "the path does not exist on that side"))?;
     check_range(&input.path, input.line, input.start_line, &file)?;
     let now = time::now();
@@ -63,10 +66,52 @@ pub fn add(session: &mut Session, input: CommentInput, file: Option<SideFile>) -
     Ok(id)
 }
 
+/// A reply goes into its thread, not onto a line, so the line it carries is
+/// only where the thread was shown: the file may be gone or shorter by now
+/// (outdated threads), and that is no reason to refuse it.
+fn push_reply(session: &mut Session, input: CommentInput, file: Option<SideFile>) -> String {
+    let now = time::now();
+    let context = file
+        .as_ref()
+        .map(|f| context(&f.lines, input.start_line.unwrap_or(input.line), input.line))
+        .unwrap_or_default();
+    let comment = Comment {
+        id: format!("c_{}", ulid::Ulid::generate()),
+        path: input.path,
+        side: input.side,
+        line: input.line.max(1),
+        start_line: None,
+        kind: input.kind,
+        body: input.body,
+        suggestion: input.suggestion,
+        reply_to: input.reply_to,
+        anchor: Anchor {
+            base_sha: session.base.sha.clone(),
+            head_sha: session.head.sha.clone(),
+            blob: file.and_then(|f| f.blob),
+            context,
+        },
+        stale: false,
+        commentable: Commentable {
+            github: true,
+            reason: None,
+        },
+        last_error: None,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    let id = comment.id.clone();
+    session.comments.push(comment);
+    id
+}
+
 /// `file` is the side's current content; `None` when the path no longer
 /// exists there, which only matters if the line moves.
 pub fn update(session: &mut Session, id: &str, patch: CommentPatch, file: Option<SideFile>) -> Result<()> {
     let index = find(session, id)?;
+    if session.comments[index].reply_to.is_some() && patch_moves_line(&patch) {
+        return Err(Error::invalid("a reply belongs to its thread and has no line to move"));
+    }
     // Any explicit position re-anchors, even the same number: that is how a
     // stale comment is confirmed against the current text.
     let moved = patch_moves_line(&patch);

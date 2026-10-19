@@ -101,7 +101,7 @@ Comment {
                             -- path は side によらず Target.path（head 側の名前）。base 側の実体は Target.old_path で引く
   kind: "issue|suggestion|question|praise|nit"          -- 既定 issue
   body: string   suggestion: string|null                -- ```suggestion ブロック用。sink-github が整形する
-  reply_to: thread_id|null
+  reply_to: thread_id|null   -- 返信はスレッドに付くので、行やファイルの存在を検査せず、再アンカーもしない
   anchor: { base_sha, head_sha: sha|null, blob: sha|null, context: { before: string[], lines: string[], after: string[] } }
                             -- 作業ツリー側は head_sha が null。代わりに blob（git hash-object）で固定する
   stale: bool
