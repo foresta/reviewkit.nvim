@@ -78,11 +78,17 @@ pub fn run(ctx: &Context, command: SessionCommand) -> Result<Response> {
             Response::new(summaries)
         }
         SessionCommand::Close { session, purge } => {
-            let loaded = store.load(&session)?;
-            if purge {
-                if matches!(loaded.source, Source::Pr { .. }) {
+            let loaded = store.load(&session);
+            if !purge {
+                loaded?;
+            } else {
+                // A session this CLI cannot parse (written by a newer one) is
+                // still removed; only its PR worktree is left for git to prune.
+                if let Ok(loaded) = &loaded
+                    && matches!(loaded.source, Source::Pr { .. })
+                {
                     let git = SystemGit::new(ctx.tools.git.as_deref())?;
-                    pr::purge(&loaded, &git, store.state_dir());
+                    pr::purge(loaded, &git, store.state_dir());
                 }
                 store.remove(&session)?;
             }

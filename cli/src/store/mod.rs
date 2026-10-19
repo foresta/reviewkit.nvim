@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::core::{etags, time};
 use crate::error::{Error, ErrorCode, Result};
-use crate::model::{SCHEMA_VERSION, Session};
+use crate::model::{SCHEMA_REVISION, SCHEMA_VERSION, Session};
 
 pub struct Store {
     dir: StateDir,
@@ -39,7 +39,15 @@ impl Store {
 
     pub fn load(&self, id: &str) -> Result<Session> {
         let path = self.dir.session_file(id)?;
-        read_session(&path, id)
+        read_session(&path, id).map(|(session, _)| session)
+    }
+
+    fn load_for_write(&self, id: &str) -> Result<Session> {
+        let path = self.dir.session_file(id)?;
+        match read_session(&path, id)? {
+            (session, None) => Ok(session),
+            (_, Some(writer)) => Err(newer_writer(&path, &writer)),
+        }
     }
 
     /// First save. The lock is taken even here so two `session open` calls
@@ -66,7 +74,7 @@ impl Store {
     /// rather than lost.
     pub fn update<T>(&self, id: &str, apply: impl FnOnce(&mut Session) -> Result<T>) -> Result<(Session, T)> {
         self.with_lock(id, || {
-            let mut session = self.load(id)?;
+            let mut session = self.load_for_write(id)?;
             let value = apply(&mut session)?;
             self.commit(&mut session)?;
             Ok((session, value))
@@ -103,7 +111,7 @@ impl Store {
         std::fs::create_dir_all(&dir)?;
         let result = self.with_lock(id, || {
             let mut session = if self.exists(id) {
-                self.load(id)?
+                self.load_for_write(id)?
             } else {
                 let mut session = init()?;
                 if session.id != id {
@@ -156,7 +164,14 @@ impl Store {
         session.state_path = path.clone();
         session.updated_at = time::now();
         session.etags = etags::compute(session);
-        write_atomically(&path, &serde_json::to_vec_pretty(session).map_err(serialize_error)?)
+        let mut value = serde_json::to_value(&*session).map_err(serialize_error)?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                WRITER_KEY.into(),
+                serde_json::to_value(Writer::current()).map_err(serialize_error)?,
+            );
+        }
+        write_atomically(&path, &serde_json::to_vec_pretty(&value).map_err(serialize_error)?)
     }
 
     /// Runs `f` under the session's advisory lock. Polls instead of blocking
@@ -189,7 +204,60 @@ impl Store {
     }
 }
 
-fn read_session(path: &Path, id: &str) -> Result<Session> {
+const WRITER_KEY: &str = "_writer";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+struct Writer {
+    #[serde(default)]
+    revision: u32,
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    exe: String,
+}
+
+impl Writer {
+    fn current() -> Self {
+        Writer {
+            revision: SCHEMA_REVISION,
+            version: env!("CARGO_PKG_VERSION").into(),
+            exe: std::env::current_exe()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+        }
+    }
+}
+
+fn newer_writer(path: &Path, writer: &Writer) -> Error {
+    Error::new(
+        ErrorCode::ESchemaVersion,
+        format!(
+            "{} was last written by reviewkit {} ({}), which knows more than this reviewkit {}",
+            path.display(),
+            writer.version,
+            writer.exe,
+            env!("CARGO_PKG_VERSION")
+        ),
+    )
+    .hint(format!(
+        "update this reviewkit ({}) to {} or later (the plugin's :ReviewInstall), or use {}",
+        std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        writer.version,
+        writer.exe
+    ))
+    .details(serde_json::json!({
+        "direction": "newer",
+        "found_revision": writer.revision,
+        "expected_revision": SCHEMA_REVISION,
+        "written_by": { "version": writer.version, "exe": writer.exe },
+    }))
+}
+
+/// The writer is returned only when it is newer than this CLI: the session
+/// may then be shown but must not be written back.
+fn read_session(path: &Path, id: &str) -> Result<(Session, Option<Writer>)> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(no_session(id)),
@@ -201,6 +269,14 @@ fn read_session(path: &Path, id: &str) -> Result<Session> {
         serde_json::from_slice(&bytes).map_err(|err| corrupt(path, format!("not JSON: {err}")))?;
     let found = raw.get("schema_version").and_then(|v| v.as_u64()).unwrap_or(0);
     if found != u64::from(SCHEMA_VERSION) {
+        let newer = found > u64::from(SCHEMA_VERSION);
+        // Purging is only advice for a file this CLI has outgrown; for a newer
+        // one it would throw away comments a newer CLI can still read.
+        let hint = if newer {
+            "upgrade with :ReviewInstall, or use the reviewkit that wrote it"
+        } else {
+            "close the session with --purge, or use the reviewkit version that wrote it"
+        };
         return Err(Error::new(
             ErrorCode::ESchemaVersion,
             format!(
@@ -208,10 +284,23 @@ fn read_session(path: &Path, id: &str) -> Result<Session> {
                 path.display()
             ),
         )
-        .hint("close the session with --purge, or use the reviewkit version that wrote it")
-        .details(serde_json::json!({ "found": found, "expected": SCHEMA_VERSION })));
+        .hint(hint)
+        .details(serde_json::json!({
+            "direction": if newer { "newer" } else { "older" },
+            "found": found,
+            "expected": SCHEMA_VERSION,
+        })));
     }
-    serde_json::from_value(raw).map_err(|err| corrupt(path, err.to_string()))
+    let writer: Writer = raw
+        .get(WRITER_KEY)
+        .and_then(|w| serde_json::from_value(w.clone()).ok())
+        .unwrap_or_default();
+    let newer = (writer.revision > SCHEMA_REVISION).then_some(writer);
+    match (serde_json::from_value::<Session>(raw), newer) {
+        (Ok(session), newer) => Ok((session, newer)),
+        (Err(_), Some(writer)) => Err(newer_writer(path, &writer)),
+        (Err(err), None) => Err(corrupt(path, err.to_string())),
+    }
 }
 
 /// Never fails as a whole: one unreadable entry or session must not hide the
@@ -233,7 +322,7 @@ fn collect_sessions(dir: &Path, out: &mut Vec<Session>) {
             collect_sessions(&path, out);
         } else if meta.is_file() && path.file_name().is_some_and(|n| n == "session.json") {
             match read_session(&path, "") {
-                Ok(session) => out.push(session),
+                Ok((session, _)) => out.push(session),
                 Err(err) => log::warn!("skipping {}: {err}", path.display()),
             }
         }
@@ -390,6 +479,114 @@ mod tests {
         let err = store.load("local/abc/x").unwrap_err();
         assert_eq!(err.code, ErrorCode::ESchemaVersion);
         assert_eq!(err.details["found"], 999);
+    }
+
+    fn written_by_revision(
+        store: &Store,
+        id: &str,
+        revision: u32,
+        tweak: impl FnOnce(&mut serde_json::Value),
+    ) -> PathBuf {
+        let created = store.create(session(id)).unwrap();
+        let mut raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&created.state_path).unwrap()).unwrap();
+        raw["_writer"] = serde_json::json!({ "revision": revision, "version": "9.9.9", "exe": "/new/reviewkit" });
+        raw["added_later"] = serde_json::json!({ "keep": true });
+        tweak(&mut raw);
+        std::fs::write(&created.state_path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        created.state_path
+    }
+
+    #[test]
+    fn a_session_from_a_newer_cli_is_readable_but_never_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(&dir);
+        let path = written_by_revision(&store, "local/abc/x", SCHEMA_REVISION + 1, |_| {});
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(store.load("local/abc/x").unwrap().id, "local/abc/x");
+        assert_eq!(store.list().unwrap().len(), 1);
+
+        let err = store.update("local/abc/x", |_| Ok(())).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ESchemaVersion);
+        assert_eq!(err.details["direction"], "newer");
+        assert_eq!(err.details["written_by"]["exe"], "/new/reviewkit");
+        let err = store
+            .open_or_create("local/abc/x", || unreachable!(), |_| Ok(()))
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::ESchemaVersion);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+
+        store.remove("local/abc/x").unwrap();
+    }
+
+    #[test]
+    fn an_unknown_value_from_a_newer_cli_is_a_version_error_not_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(&dir);
+        written_by_revision(&store, "local/abc/x", SCHEMA_REVISION + 1, |raw| {
+            raw["source"]["kind"] = serde_json::json!("gitlab");
+        });
+        let err = store.load("local/abc/x").unwrap_err();
+        assert_eq!(err.code, ErrorCode::ESchemaVersion);
+        assert_eq!(err.details["direction"], "newer");
+    }
+
+    #[test]
+    fn a_session_without_a_writer_is_updated_and_gets_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(&dir);
+        let created = store.create(session("local/abc/x")).unwrap();
+        let mut raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&created.state_path).unwrap()).unwrap();
+        raw.as_object_mut().unwrap().remove("_writer");
+        std::fs::write(&created.state_path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        store.update("local/abc/x", |_| Ok(())).unwrap();
+        let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&created.state_path).unwrap()).unwrap();
+        assert_eq!(raw["_writer"]["revision"], SCHEMA_REVISION);
+    }
+
+    #[test]
+    fn an_older_schema_version_suggests_purging_but_a_newer_one_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(&dir);
+        for (version, direction, purge) in [(0, "older", true), (999, "newer", false)] {
+            let created = store.create(session(&format!("local/abc/{version}"))).unwrap();
+            let mut raw: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&created.state_path).unwrap()).unwrap();
+            raw["schema_version"] = serde_json::json!(version);
+            std::fs::write(&created.state_path, serde_json::to_vec(&raw).unwrap()).unwrap();
+            let err = store.load(&created.id).unwrap_err();
+            assert_eq!(err.details["direction"], direction);
+            assert_eq!(err.hint.as_deref().unwrap_or("").contains("--purge"), purge);
+        }
+    }
+
+    /// Changing what a session persists needs SCHEMA_REVISION + 1 and a new
+    /// hash here; otherwise an older CLI would silently drop the new field.
+    #[test]
+    fn persisted_session_shape_matches_the_schema_revision() {
+        use sha2::{Digest, Sha256};
+        fn shape(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    map.remove("description");
+                    map.remove("title");
+                    map.values_mut().for_each(shape);
+                }
+                serde_json::Value::Array(items) => items.iter_mut().for_each(shape),
+                _ => {}
+            }
+        }
+        let mut schema = serde_json::to_value(schemars::schema_for!(Session)).unwrap();
+        shape(&mut schema);
+        let schema = schema.to_string();
+        let hash: String = Sha256::digest(schema.as_bytes())[..8]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            (SCHEMA_REVISION, hash.as_str()),
+            (0, "5ad912e6be70aa80"),
+            "the persisted shape of Session changed (doc comments do not count): bump SCHEMA_REVISION and update this hash"
+        );
     }
 
     #[test]
