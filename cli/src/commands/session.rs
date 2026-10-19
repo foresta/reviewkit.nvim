@@ -70,7 +70,7 @@ pub fn run(ctx: &Context, command: SessionCommand) -> Result<Response> {
         }
         SessionCommand::Refresh { session, .. } => {
             let git = SystemGit::new(ctx.tools.git.as_deref())?;
-            let (session, ()) = store.update(&session, |s| refresh(ctx, &git, &store, s))?;
+            let session = refresh(ctx, &git, &store, &session)?;
             Response::with_session(serde_json::Value::Null, &session)
         }
         SessionCommand::List => {
@@ -97,24 +97,34 @@ pub fn run(ctx: &Context, command: SessionCommand) -> Result<Response> {
     }
 }
 
-pub fn refresh(ctx: &Context, git: &SystemGit, store: &Store, session: &mut crate::model::Session) -> Result<()> {
-    match &session.source {
+/// A pull request is fetched before the lock is taken and applied under it:
+/// GitHub and `git fetch` can take seconds, and holding the lock meanwhile
+/// would fail every comment and viewed toggle with E_LOCKED. Local sessions
+/// only run local git and refresh under the lock.
+pub fn refresh(ctx: &Context, git: &SystemGit, store: &Store, id: &str) -> Result<crate::model::Session> {
+    let current = store.load(id)?;
+    let (session, ()) = match &current.source {
         Source::Local { worktree, .. } => {
             let repo = Repository::at(git, worktree.clone());
-            local::refresh(session, &repo)
+            store.update(id, |s| local::refresh(s, &repo))?
         }
         Source::Pr { .. } => {
             let gh = SystemGh::new(ctx.tools.gh.as_deref())?;
-            let local_repo = Repository::at(git, session.repo.root.clone());
+            let local_repo = Repository::at(git, current.repo.root.clone());
             let src = PrSource {
                 git,
                 gh: &gh,
                 state: &ctx.state_dir,
                 local_repo: Some(&local_repo),
             };
-            pr::refresh(session, &src, store)
+            store.with_fetch_lock(id, || {
+                let current = store.load(id)?;
+                let snapshot = pr::fetch(&current, &src, store, None)?;
+                store.update(id, |s| pr::apply(s, snapshot, git))
+            })?
         }
-    }
+    };
+    Ok(session)
 }
 
 #[derive(Serialize)]
@@ -125,8 +135,7 @@ struct Closed {
 fn open(ctx: &Context, store: &Store, args: OpenArgs) -> Result<Response> {
     let git = SystemGit::new(ctx.tools.git.as_deref())?;
     let session = if let Some(id) = args.session {
-        let (session, ()) = store.update(&id, |session| refresh(ctx, &git, store, session))?;
-        session
+        refresh(ctx, &git, store, &id)?
     } else if let Some(arg) = args.pr {
         let gh = SystemGh::new(ctx.tools.gh.as_deref())?;
         let (number, repo_ref) = gh::parse_pr_arg(&arg)?;

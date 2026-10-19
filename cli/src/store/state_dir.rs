@@ -81,6 +81,10 @@ impl StateDir {
     pub fn lock_file(&self, id: &str) -> Result<PathBuf> {
         Ok(self.session_dir(id)?.join("session.lock"))
     }
+
+    pub fn fetch_lock_file(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.session_dir(id)?.join("fetch.lock"))
+    }
 }
 
 /// Empty counts as unset so that `VAR= reviewkit ...` behaves like an unset

@@ -180,26 +180,42 @@ impl Store {
     /// returned guard because the borrow checker cannot yet return a guard
     /// out of a retry loop.
     fn with_lock<T>(&self, id: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
-        use std::io::ErrorKind::{Interrupted, WouldBlock};
-        let path = self.dir.lock_file(id)?;
-        let file = File::options().create(true).truncate(false).write(true).open(&path)?;
-        let mut lock = fd_lock::RwLock::new(file);
-        let deadline = Instant::now() + self.lock_timeout;
-        loop {
-            match lock.try_write() {
-                Ok(_guard) => return f(),
-                Err(err) if matches!(err.kind(), WouldBlock | Interrupted) => {
-                    if Instant::now() >= deadline {
-                        return Err(Error::new(
-                            ErrorCode::ELocked,
-                            format!("session is locked by another process: {id}"),
-                        )
-                        .retryable());
-                    }
-                    std::thread::sleep(Duration::from_millis(25));
+        lock_while(&self.dir.lock_file(id)?, self.lock_timeout, id, f)
+    }
+
+    /// Serializes slow work on one session (fetching a pull request) without
+    /// holding the data lock: the shared PR worktree and pr.json must not be
+    /// written by two fetches at once, and a fetch that started earlier must
+    /// not land after a newer one. Waits as long as a fetch can take.
+    pub fn with_fetch_lock<T>(&self, id: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        if !self.dir.session_dir(id)?.is_dir() {
+            return Err(no_session(id));
+        }
+        lock_while(&self.dir.fetch_lock_file(id)?, FETCH_LOCK_TIMEOUT, id, f)
+    }
+}
+
+const FETCH_LOCK_TIMEOUT: Duration = Duration::from_secs(180);
+
+fn lock_while<T>(path: &Path, timeout: Duration, id: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    use std::io::ErrorKind::{Interrupted, WouldBlock};
+    let file = File::options().create(true).truncate(false).write(true).open(path)?;
+    let mut lock = fd_lock::RwLock::new(file);
+    let deadline = Instant::now() + timeout;
+    loop {
+        match lock.try_write() {
+            Ok(_guard) => return f(),
+            Err(err) if matches!(err.kind(), WouldBlock | Interrupted) => {
+                if Instant::now() >= deadline {
+                    return Err(Error::new(
+                        ErrorCode::ELocked,
+                        format!("session is locked by another process: {id}"),
+                    )
+                    .retryable());
                 }
-                Err(err) => return Err(err.into()),
+                std::thread::sleep(Duration::from_millis(25));
             }
+            Err(err) => return Err(err.into()),
         }
     }
 }

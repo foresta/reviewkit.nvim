@@ -3,6 +3,9 @@ local core = require("reviewkit.core")
 
 local M = {}
 
+--- Rounds of retries after cli.call itself gave up on a locked session.
+M.LOCKED_ROUNDS = 5
+
 local KINDS = { "issue", "suggestion", "question", "praise", "nit" }
 local REFRESH_DEBOUNCE_MS = 300
 
@@ -12,6 +15,8 @@ local state = {
   debounce = nil, ---@type uv.uv_timer_t?
   refreshing = false,
   refresh_again = false,
+  locked_rounds = 0,
+  retry_pending = false,
   mapped_bufs = {}, ---@type table<integer, true>
 }
 
@@ -45,7 +50,25 @@ local function request_refresh(quiet)
   state.refreshing = true
   core.refresh({}, function(err)
     state.refreshing = false
-    if err and err.code ~= "E_LOCKED" then
+    if err and err.code == "E_LOCKED" then
+      -- Still locked after the retries in cli.call (a long GitHub submit): the
+      -- change that asked for this refresh must not be lost, but a lock that
+      -- never frees must not keep the editor retrying forever.
+      state.locked_rounds = state.locked_rounds + 1
+      if state.locked_rounds > M.LOCKED_ROUNDS then
+        state.locked_rounds = 0
+        vim.notify_once("[reviewkit] the session stays locked; refresh skipped (see :ReviewLog)", vim.log.levels.WARN)
+      elseif not state.retry_pending then
+        state.retry_pending = true
+        vim.defer_fn(function()
+          state.retry_pending = false
+          request_refresh(quiet)
+        end, 2000)
+      end
+      return
+    end
+    state.locked_rounds = 0
+    if err then
       if quiet then
         vim.notify_once(
           ("[reviewkit] background refresh failed: %s (see :ReviewLog)"):format(err.code),

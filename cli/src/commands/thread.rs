@@ -38,7 +38,7 @@ pub fn run(ctx: &Context, command: ThreadCommand) -> Result<Response> {
         } => Response::new(store.load(&session)?.threads),
         ThreadCommand::List { session, refresh: true } => {
             let git = SystemGit::new(ctx.tools.git.as_deref())?;
-            let (session, ()) = store.update(&session, |s| refresh_session(ctx, &git, &store, s))?;
+            let session = refresh_session(ctx, &git, &store, &session)?;
             Response::with_session(&session.threads, &session)
         }
         ThreadCommand::Resolve { session, thread, undo } => {

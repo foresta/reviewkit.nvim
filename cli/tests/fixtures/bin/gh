@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # Rules: $FAKE_GH_DIR/responses.json, a list of
-#   { "match": ["substring of argv or stdin", ...], "body": <json> | "raw": "text", "stderr": "", "exit": n }
+#   { "match": ["substring of argv or stdin", ...], "body": <json> | "raw": "text", "stderr": "", "exit": n, "sleep": seconds }
 # First rule whose every match is found wins; calls go to calls.jsonl.
 # Without FAKE_GH_DIR only --version and `auth token` are answered.
 import json
 import os
 import sys
+import time
 
 args = sys.argv[1:]
 joined = " ".join(args)
@@ -33,6 +34,7 @@ if fake_dir and os.path.exists(os.path.join(fake_dir, "responses.json")):
 
 for rule in rules:
     if all(m in joined or m in stdin for m in rule.get("match", [])):
+        time.sleep(rule.get("sleep", 0))
         if "raw" in rule:
             sys.stdout.write(rule["raw"])
         elif "body" in rule:

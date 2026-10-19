@@ -207,6 +207,10 @@ function M.ensure_compatible(cb)
   end)
 end
 
+--- Waits between attempts when another process holds the session lock;
+--- the CLI itself only waits briefly so the editor never hangs on it.
+M.LOCK_RETRY_MS = { 100, 250, 500, 1000, 2000 }
+
 --- Runs a subcommand after the compatibility check.
 ---@param args string[]
 ---@param opts? { stdin?: string|table, cwd?: string, timeout?: integer }
@@ -216,7 +220,19 @@ function M.call(args, opts, cb)
     if err then
       return cb(err)
     end
-    M.run(args, opts, cb)
+    local attempt = 0
+    local function try()
+      M.run(args, opts, function(run_err, envelope)
+        attempt = attempt + 1
+        local delay = M.LOCK_RETRY_MS[attempt]
+        if run_err and run_err.code == "E_LOCKED" and delay then
+          vim.defer_fn(try, delay)
+        else
+          cb(run_err, envelope)
+        end
+      end)
+    end
+    try()
   end)
 end
 
