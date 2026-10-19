@@ -1,4 +1,6 @@
-.PHONY: build deps test test-rust test-lua test-integration check check-rust check-lua fmt gen-types
+# debug-bin is phony on purpose: cargo, not make, knows when the sources
+# changed, so a file target would keep testing a stale binary.
+.PHONY: build debug-bin deps test test-rust test-lua test-integration check check-rust check-lua fmt gen-types
 
 NVIM ?= nvim
 DEBUG_BIN := target/debug/reviewkit
@@ -19,10 +21,10 @@ test-rust:
 test-lua: deps
 	$(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua
 
-test-integration: deps $(DEBUG_BIN)
+test-integration: deps debug-bin
 	REVIEWKIT_REAL_BIN=$(CURDIR)/$(DEBUG_BIN) $(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua
 
-$(DEBUG_BIN):
+debug-bin:
 	cargo build
 
 check: check-rust check-lua
@@ -33,7 +35,7 @@ check-rust:
 
 # lua-language-server reads $VIMRUNTIME from .luarc.json; CI shells do not set it.
 check-lua: export VIMRUNTIME ?= $(shell $(NVIM) --clean --headless +'echo $$VIMRUNTIME' +q 2>&1)
-check-lua: deps $(DEBUG_BIN)
+check-lua: deps debug-bin
 	stylua --check lua plugin tests scripts
 	lua-language-server --check . --checklevel=Warning
 	$(NVIM) -l scripts/gen-types.lua --check --bin $(DEBUG_BIN)
@@ -42,5 +44,5 @@ fmt:
 	cargo fmt --all
 	stylua lua plugin tests scripts
 
-gen-types: $(DEBUG_BIN)
+gen-types: debug-bin
 	$(NVIM) -l scripts/gen-types.lua --bin $(DEBUG_BIN)
