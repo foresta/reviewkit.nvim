@@ -218,7 +218,8 @@ local function announce(session)
   local n = #session.targets
   local what
   if session.source.kind == "local" then
-    what = session.source.base_spec .. ".." .. session.source.head_spec
+    local base = session.source.base_spec
+    what = base .. (vim.endswith(base, "...") and "" or "..") .. session.source.head_spec
   else
     what = ("#%d %s"):format(session.source.number, session.source.title)
   end

@@ -112,7 +112,7 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 
 | Command | |
 |---|---|
-| `:Review diff <base> [<head>]` | review the working tree (or `<head>`) against `<base>` |
+| `:Review diff <base> [<head>]` | review the working tree (or `<head>`) against `<base>`; `main...` compares with the merge-base, like `git diff main...` |
 | `:Review pr <number\|url>` | review a pull request |
 | `:Review resume [id]` / `:Review refresh` | reopen a saved session / recompute it |
 | `:Review threads [refresh]` | list the pull request's review threads |

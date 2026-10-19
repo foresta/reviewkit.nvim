@@ -166,7 +166,8 @@ reviewkit session open --pr <number|url> [--cwd]
                                                          -> session   gh でメタ取得、bare mirror + worktree、targets、threads
                                                             番号は --cwd の origin のリポジトリ。URL ならそのリポジトリ（origin と違ってもよい）
 reviewkit session open --local [--base REV] [--head REV|worktree] [--cwd]
-                                                         -> session   既存があれば再開して refresh
+                                                         -> session   既存があれば再開して refresh。--base A... は A と head の
+                                                                      merge-base（refresh ごとに求め直す）。A...B で --head を省くと head = B
 reviewkit session open --session ID                      -> session   再開
 reviewkit session get     --session ID                   -> session
 reviewkit session list    [--cwd]                        -> data: SessionSummary[]

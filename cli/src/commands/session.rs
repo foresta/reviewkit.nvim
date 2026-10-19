@@ -51,7 +51,8 @@ pub struct OpenArgs {
     /// Resume an existing session by id.
     #[arg(long, group = "what", value_name = "ID")]
     pub session: Option<String>,
-    /// Base revision for --local. Defaults to HEAD.
+    /// Base revision for --local. Defaults to HEAD. `A...` / `A...B` use the
+    /// merge-base, like `git diff A...B`.
     #[arg(long, value_name = "REV", requires = "local")]
     pub base: Option<String>,
     /// Head revision for --local. Defaults to the working tree.
@@ -147,10 +148,7 @@ fn open(ctx: &Context, store: &Store, args: OpenArgs) -> Result<Response> {
         pr::open(store, &src, &repo_ref, number)?
     } else {
         let repo = Repository::discover(&git, &ctx.cwd)?;
-        let spec = LocalSpec {
-            base: args.base.unwrap_or_else(|| "HEAD".to_string()),
-            head: args.head,
-        };
+        let spec = LocalSpec::new(args.base.unwrap_or_else(|| "HEAD".to_string()), args.head);
         local::open(store, &repo, &spec)?
     };
     Response::with_session(serde_json::Value::Null, &session)
