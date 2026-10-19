@@ -56,11 +56,19 @@ pub fn open(store: &Store, src: &PrSource<'_>, repo_ref: &RepoRef, number: u64) 
     let meta = gh::pr_meta(src.gh, repo_ref, number)?;
     let repo_ref = &canonical(repo_ref, &meta);
     let id = session_id(repo_ref, number);
-    let (session, ()) = store.open_or_create(
-        &id,
-        || Ok(new_session(id.clone(), src, repo_ref, &meta)),
-        |session| refresh_with(session, src, store, Some(meta.clone())),
-    )?;
+    let create = || {
+        store.open_or_create(
+            &id,
+            || Ok(new_session(id.clone(), src, repo_ref, &meta)),
+            |session| refresh_with(session, src, store, Some(meta.clone())),
+        )
+    };
+    // Reopening shares the PR worktree with any refresh that is running.
+    let (session, ()) = if store.exists(&id) {
+        store.with_fetch_lock(&id, create)?
+    } else {
+        create()?
+    };
     Ok(session)
 }
 
@@ -112,9 +120,23 @@ pub fn refresh(session: &mut Session, src: &PrSource<'_>, store: &Store) -> Resu
     refresh_with(session, src, store, None)
 }
 
+/// Everything a refresh learns from GitHub and the mirror, gathered without
+/// the session lock so other commands are not blocked on the network.
+pub struct Snapshot {
+    meta: PrMeta,
+    checkout: Checkout,
+    targets: Vec<Target>,
+    threads: Vec<Thread>,
+}
+
+fn refresh_with(session: &mut Session, src: &PrSource<'_>, store: &Store, meta: Option<PrMeta>) -> Result<()> {
+    let snapshot = fetch(session, src, store, meta)?;
+    apply(session, snapshot, src.git)
+}
+
 /// `pr.json` is written here, next to the session, so the conversation and
 /// checks never travel in the envelope.
-fn refresh_with(session: &mut Session, src: &PrSource<'_>, store: &Store, meta: Option<PrMeta>) -> Result<()> {
+pub fn fetch(session: &Session, src: &PrSource<'_>, store: &Store, meta: Option<PrMeta>) -> Result<Snapshot> {
     let (repo_ref, number) = match (&session.repo, &session.source) {
         (
             Repo {
@@ -147,7 +169,24 @@ fn refresh_with(session: &mut Session, src: &PrSource<'_>, store: &Store, meta: 
 
     let pr_path = store.state_dir().pr_file(&session.id)?;
     write_pr_info(&pr_path, &details.info)?;
+    Ok(Snapshot {
+        meta,
+        checkout,
+        targets,
+        threads: details.threads,
+    })
+}
 
+/// Runs under the lock on the freshly read session, so comments added while
+/// the snapshot was fetched are re-anchored too.
+pub fn apply(session: &mut Session, snapshot: Snapshot, git: &dyn Git) -> Result<()> {
+    let Snapshot {
+        meta,
+        checkout,
+        targets,
+        threads,
+    } = snapshot;
+    let worktree = Repository::at(git, checkout.worktree.clone());
     session.source = Source::Pr {
         number: meta.number,
         url: meta.url,
@@ -170,7 +209,7 @@ fn refresh_with(session: &mut Session, src: &PrSource<'_>, store: &Store, meta: 
         dirty: false,
     };
     session.targets = targets;
-    session.threads = details.threads;
+    session.threads = threads;
     threads::prune_actions(session);
     viewed::refresh_flags(session);
     anchor::reanchor(session, &worktree)

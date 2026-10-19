@@ -102,4 +102,35 @@ T["cli"]["passes configured tool paths as REVIEWKIT_* and the state dir as a fla
   eq(calls[#calls].args, { "--state-dir", "/tmp/rk-state", "health" })
 end
 
+T["cli"]["call retries a locked session a few times, then gives up"] = function()
+  child.lua([[
+    local cli = require("reviewkit.cli")
+    cli.LOCK_RETRY_MS = { 10, 10, 10 }
+    _G.attempts = 0
+    _G.locked_for = 2
+    cli.run = function(_, _, cb)
+      _G.attempts = _G.attempts + 1
+      if _G.attempts <= _G.locked_for then
+        return vim.schedule(function()
+          cb({ code = "E_LOCKED", message = "locked", retryable = true, details = {} })
+        end)
+      end
+      vim.schedule(function()
+        cb(nil, { ok = true, data = "done" })
+      end)
+    end
+    cli._compatible = true
+  ]])
+  child.lua("require('reviewkit.cli').call({ 'x' }, {}, _G.finish)")
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err, nil)
+  eq(child.lua_get("_G.attempts"), 3)
+
+  child.lua("_G.attempts = 0; _G.locked_for = 99")
+  child.lua("require('reviewkit.cli').call({ 'x' }, {}, _G.finish)")
+  d = child.lua_get("_G.wait_done()")
+  eq(d.err.code, "E_LOCKED")
+  eq(child.lua_get("_G.attempts"), 4)
+end
+
 return T

@@ -373,6 +373,55 @@ fn a_retargeted_pull_request_diffs_against_its_new_base() {
 }
 
 #[test]
+fn a_pull_request_refresh_does_not_lock_out_other_commands_while_it_fetches() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+            .output()
+            .unwrap(),
+    );
+    let mut rules: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
+    for rule in rules.iter_mut() {
+        rule["sleep"] = serde_json::json!(3);
+    }
+    std::fs::write(
+        gh.dir.path().join("responses.json"),
+        serde_json::Value::Array(rules).to_string(),
+    )
+    .unwrap();
+
+    let refresh = std::process::Command::new(assert_cmd::cargo::cargo_bin("reviewkit"))
+        .envs(
+            reviewkit(&state, &remote, &gh)
+                .get_envs()
+                .filter_map(|(k, v)| v.map(|v| (k.to_owned(), v.to_owned()))),
+        )
+        .args(["--state-dir", state.path().to_str().unwrap()])
+        .args(["session", "refresh", "--session", "pr/github.com/o/r/7"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    let decided = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["decision", "set", "--session", "pr/github.com/o/r/7"])
+            .write_stdin(r#"{"event":"comment","body":"meanwhile"}"#)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(decided["session"]["decision"]["body"], "meanwhile");
+
+    let refreshed = refresh.wait_with_output().unwrap();
+    assert!(refreshed.status.success());
+    let after: serde_json::Value = serde_json::from_slice(&refreshed.stdout).unwrap();
+    assert_eq!(after["session"]["decision"]["body"], "meanwhile");
+}
+
+#[test]
 fn a_deleted_mirror_is_recreated_on_reopen() {
     let state = tempfile::tempdir().unwrap();
     let remote = Remote::new();
