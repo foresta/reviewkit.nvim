@@ -307,6 +307,7 @@ require("reviewkit").setup({
   sinks = {
     herdr = { agent_type = "claude", header = nil, match_foreground_cwd = true },   -- SubmitOptions に詰める
     github = {},
+    clipboard = { register = "+" },
   },
 })
 ```
