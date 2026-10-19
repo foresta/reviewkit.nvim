@@ -2,9 +2,16 @@ use std::path::{Component, Path};
 
 use crate::core::comments::SideFile;
 use crate::error::{Error, Result};
-use crate::ext::git::Repository;
-use crate::model::{Session, Side, Source};
+use crate::ext::git::{Git, Repository};
+use crate::model::{Session, Side};
 use crate::source::local::is_binary;
+
+/// For a pull request `repo.root` is the reviewer's own checkout, which
+/// never fetched the PR's commits; only the PR worktree (backed by the
+/// mirror) has them. Every object read of a session goes through here.
+pub fn object_repo<'g>(git: &'g dyn Git, session: &Session) -> Repository<'g> {
+    Repository::at(git, session.source.worktree().to_path_buf())
+}
 
 /// Paths in the contract are always the head-side path of a Target. On the
 /// base side a renamed file lives under `Target.old_path`; that mapping is
@@ -58,10 +65,7 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
             (repo.read_blob(sha, path)?, blob)
         }
         (Side::Head, None) => {
-            let worktree = match &session.source {
-                Source::Local { worktree, .. } | Source::Pr { worktree, .. } => worktree,
-            };
-            let full = worktree.join(path);
+            let full = session.source.worktree().join(path);
             if !full.is_file() {
                 return Ok(None);
             }

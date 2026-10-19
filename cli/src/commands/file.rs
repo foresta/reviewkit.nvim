@@ -5,7 +5,7 @@ use crate::context::Context;
 use crate::core::{TOO_LARGE_BYTES, files};
 use crate::envelope::Response;
 use crate::error::Result;
-use crate::ext::git::{Repository, SystemGit};
+use crate::ext::git::SystemGit;
 use crate::source::local::is_binary;
 use crate::store::Store;
 
@@ -37,7 +37,7 @@ pub fn run(ctx: &Context, command: FileCommand) -> Result<Response> {
             let session = store.load(&session)?;
             files::check_path(&path)?;
             let git = SystemGit::new(ctx.tools.git.as_deref())?;
-            let repo = Repository::at(&git, session.repo.root.clone());
+            let repo = files::object_repo(&git, &session);
             let rev = &session.base.sha;
             let path = files::base_git_path(&session, &path);
             if !repo.is_blob(rev, path) {
