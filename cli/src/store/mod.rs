@@ -180,7 +180,7 @@ impl Store {
     /// returned guard because the borrow checker cannot yet return a guard
     /// out of a retry loop.
     fn with_lock<T>(&self, id: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
-        lock_while(&self.dir.lock_file(id)?, self.lock_timeout, id, f)
+        lock_while(&self.dir.lock_file(id)?, self.lock_timeout, &format!("session {id}"), f)
     }
 
     /// Serializes slow work on one session (fetching a pull request) without
@@ -191,13 +191,20 @@ impl Store {
         if !self.dir.session_dir(id)?.is_dir() {
             return Err(no_session(id));
         }
-        lock_while(&self.dir.fetch_lock_file(id)?, FETCH_LOCK_TIMEOUT, id, f)
+        lock_while(
+            &self.dir.fetch_lock_file(id)?,
+            FETCH_LOCK_TIMEOUT,
+            &format!("session {id}"),
+            f,
+        )
     }
 }
 
-const FETCH_LOCK_TIMEOUT: Duration = Duration::from_secs(180);
+pub const FETCH_LOCK_TIMEOUT: Duration = Duration::from_secs(180);
 
-fn lock_while<T>(path: &Path, timeout: Duration, id: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+/// Runs `f` while holding an advisory lock on `path`. Polls instead of
+/// blocking so a stuck holder turns into E_LOCKED rather than a hang.
+pub fn lock_while<T>(path: &Path, timeout: Duration, what: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
     use std::io::ErrorKind::{Interrupted, WouldBlock};
     let file = File::options().create(true).truncate(false).write(true).open(path)?;
     let mut lock = fd_lock::RwLock::new(file);
@@ -207,11 +214,9 @@ fn lock_while<T>(path: &Path, timeout: Duration, id: &str, f: impl FnOnce() -> R
             Ok(_guard) => return f(),
             Err(err) if matches!(err.kind(), WouldBlock | Interrupted) => {
                 if Instant::now() >= deadline {
-                    return Err(Error::new(
-                        ErrorCode::ELocked,
-                        format!("session is locked by another process: {id}"),
-                    )
-                    .retryable());
+                    return Err(
+                        Error::new(ErrorCode::ELocked, format!("{what} is locked by another process")).retryable(),
+                    );
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }

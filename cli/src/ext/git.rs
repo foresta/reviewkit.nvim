@@ -1,9 +1,33 @@
 use std::ffi::OsString;
+use std::io::Read;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::error::{Error, ErrorCode, Result};
+use crate::store::env_non_empty;
+
+/// Commands that talk to a remote. Only these get a deadline: local commands
+/// on a large repository can legitimately take long, a remote that stopped
+/// answering never finishes.
+const NETWORK_COMMANDS: &[&str] = &["fetch", "clone"];
+
+fn staging_dir(mirror: &Path) -> PathBuf {
+    let mut name = mirror.file_name().map(OsString::from).unwrap_or_default();
+    name.push(format!(".tmp-{}", std::process::id()));
+    mirror.with_file_name(name)
+}
+
+fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
 
 /// The seam for tests: core logic talks to this trait, the binary talks to
 /// `SystemGit`.
@@ -13,6 +37,7 @@ pub trait Git {
 
 pub struct SystemGit {
     path: PathBuf,
+    network_timeout: Duration,
 }
 
 impl SystemGit {
@@ -20,8 +45,14 @@ impl SystemGit {
         let path = path.ok_or_else(|| {
             Error::new(ErrorCode::EGit, "git is not installed or not on PATH").hint("install git or set REVIEWKIT_GIT")
         })?;
+        let network_timeout = env_non_empty("REVIEWKIT_GIT_TIMEOUT_MS")
+            .and_then(|v| v.to_str().and_then(|s| s.parse::<u64>().ok()))
+            .filter(|ms| *ms > 0)
+            .map(Duration::from_millis)
+            .unwrap_or(Duration::from_secs(120));
         Ok(Self {
             path: path.to_path_buf(),
+            network_timeout,
         })
     }
 }
@@ -29,7 +60,8 @@ impl SystemGit {
 impl Git for SystemGit {
     fn run(&self, cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
         log::debug!("git {}", args.join(" "));
-        let output = Command::new(&self.path)
+        let mut command = Command::new(&self.path);
+        command
             // Paths with non-ASCII bytes would otherwise come back quoted and
             // escaped in diff headers.
             .args(["-c", "core.quotepath=false"])
@@ -38,17 +70,51 @@ impl Git for SystemGit {
             .env("LC_ALL", "C")
             // Would silently override -U3.
             .env_remove("GIT_DIFF_OPTS")
+            // There is no terminal to answer a credential prompt; waiting for
+            // one would hang while holding a lock.
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never")
             .stdin(Stdio::null())
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
             .map_err(|err| Error::new(ErrorCode::EGit, format!("cannot run git: {err}")))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = drain(child.stdout.take());
+        let stderr = drain(child.stderr.take());
+        let deadline = args
+            .first()
+            .filter(|a| NETWORK_COMMANDS.contains(a))
+            .map(|_| Instant::now() + self.network_timeout);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if deadline.is_none_or(|d| Instant::now() < d) => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(Error::new(
+                        ErrorCode::EGit,
+                        format!("git {} did not finish within {:?}", args[0], self.network_timeout),
+                    )
+                    .retryable());
+                }
+                Err(err) => return Err(Error::new(ErrorCode::EGit, format!("git {}: {err}", args.join(" ")))),
+            }
+        };
+        let stdout = stdout.join().unwrap_or_default();
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default())
+                .trim()
+                .to_string();
             return Err(
                 Error::new(ErrorCode::EGit, format!("git {} failed: {stderr}", args.join(" ")))
-                    .details(serde_json::json!({ "exit": output.status.code() })),
+                    .details(serde_json::json!({ "exit": status.code() })),
             );
         }
-        Ok(output.stdout)
+        Ok(stdout)
     }
 }
 
@@ -276,32 +342,45 @@ impl<'a> Repository<'a> {
             .parent()
             .ok_or_else(|| Error::internal("mirror path has no parent"))?;
         std::fs::create_dir_all(parent)?;
-        git.run(
-            parent,
-            &[
-                "clone",
-                "--bare",
-                "--quiet",
-                &source_root.to_string_lossy(),
-                &mirror.to_string_lossy(),
-            ],
-        )
-        .inspect_err(|_| {
-            let _ = std::fs::remove_dir_all(mirror);
-        })?;
-        let repo = Self::at(git, mirror.to_path_buf());
-        repo.run(&["remote", "set-url", "origin", remote_url])?;
-        Ok(repo)
+        // Built beside the final path and renamed into place, so a failure or
+        // a crash never leaves a half-made mirror that looks usable.
+        let staging = staging_dir(mirror);
+        let _ = std::fs::remove_dir_all(&staging);
+        let built = git
+            .run(
+                parent,
+                &[
+                    "clone",
+                    "--bare",
+                    "--quiet",
+                    &source_root.to_string_lossy(),
+                    &staging.to_string_lossy(),
+                ],
+            )
+            .and_then(|_| Self::at(git, staging.clone()).run(&["remote", "set-url", "origin", remote_url]))
+            .and_then(|_| std::fs::rename(&staging, mirror).map_err(Error::from));
+        if let Err(err) = built {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(err);
+        }
+        Ok(Self::at(git, mirror.to_path_buf()))
     }
 
     /// An empty bare repository pointing at the remote, for when no local
     /// checkout of that repository is at hand to seed from.
     pub fn init_bare(git: &'a dyn Git, mirror: &Path, remote_url: &str) -> Result<Self> {
-        std::fs::create_dir_all(mirror)?;
-        git.run(mirror, &["init", "--quiet", "--bare"])?;
-        let repo = Self::at(git, mirror.to_path_buf());
-        repo.run(&["remote", "add", "origin", remote_url])?;
-        Ok(repo)
+        let staging = staging_dir(mirror);
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging)?;
+        let built = git
+            .run(&staging, &["init", "--quiet", "--bare"])
+            .and_then(|_| Self::at(git, staging.clone()).run(&["remote", "add", "origin", remote_url]))
+            .and_then(|_| std::fs::rename(&staging, mirror).map_err(Error::from));
+        if let Err(err) = built {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(err);
+        }
+        Ok(Self::at(git, mirror.to_path_buf()))
     }
 
     pub fn fetch(&self, remote: &str, refspecs: &[String]) -> Result<()> {

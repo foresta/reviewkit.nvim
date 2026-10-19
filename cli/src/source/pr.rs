@@ -9,7 +9,7 @@ use crate::model::{
     TargetStatus, Thread,
 };
 use crate::source::targets;
-use crate::store::{StateDir, Store};
+use crate::store::{self, StateDir, Store};
 
 pub fn session_id(repo: &RepoRef, number: u64) -> String {
     format!("pr/{}/{}/{}/{}", repo.host, repo.owner, repo.name, number)
@@ -56,18 +56,19 @@ pub fn open(store: &Store, src: &PrSource<'_>, repo_ref: &RepoRef, number: u64) 
     let meta = gh::pr_meta(src.gh, repo_ref, number)?;
     let repo_ref = &canonical(repo_ref, &meta);
     let id = session_id(repo_ref, number);
-    let create = || {
+    let create = |meta: &PrMeta| {
         store.open_or_create(
             &id,
-            || Ok(new_session(id.clone(), src, repo_ref, &meta)),
+            || Ok(new_session(id.clone(), src, repo_ref, meta)),
             |session| refresh_with(session, src, store, Some(meta.clone())),
         )
     };
-    // Reopening shares the PR worktree with any refresh that is running.
+    // Reopening shares the PR worktree with any refresh that is running; the
+    // PR is read again once that refresh is done, so it is not applied stale.
     let (session, ()) = if store.exists(&id) {
-        store.with_fetch_lock(&id, create)?
+        store.with_fetch_lock(&id, || create(&gh::pr_meta(src.gh, repo_ref, number)?))?
     } else {
-        create()?
+        create(&meta)?
     };
     Ok(session)
 }
@@ -242,6 +243,22 @@ fn remote_url_of(local: Option<&Repository<'_>>, repo_ref: &RepoRef) -> String {
         .unwrap_or_else(|| format!("https://{}/{}/{}.git", repo_ref.host, repo_ref.owner, repo_ref.name))
 }
 
+/// The mirror and its worktrees are shared by every PR of the repository,
+/// while session locks only cover one PR; two PRs opened at once would
+/// otherwise create, fetch into and prune the same repository together.
+fn with_mirror_lock<T>(mirror_dir: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let parent = mirror_dir
+        .parent()
+        .ok_or_else(|| Error::internal("mirror path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+    store::lock_while(
+        &parent.join("mirror.lock"),
+        store::FETCH_LOCK_TIMEOUT,
+        "the repository mirror",
+        f,
+    )
+}
+
 /// Mirror + worktree under the state directory (architecture D2): the
 /// user's checkout is only read. It seeds the mirror (hard-linked objects,
 /// no network) only when it is a checkout of the same repository; anything
@@ -249,8 +266,23 @@ fn remote_url_of(local: Option<&Repository<'_>>, repo_ref: &RepoRef) -> String {
 /// id. The PR head is fetched only when it or the base moved.
 fn materialize(src: &PrSource<'_>, repo_ref: &RepoRef, meta: &PrMeta) -> Result<Checkout> {
     let mirror_dir = src.state.mirror_dir(&repo_ref.host, &repo_ref.owner, &repo_ref.name);
+    with_mirror_lock(&mirror_dir, || {
+        materialize_locked(src, repo_ref, meta, mirror_dir.clone())
+    })
+}
+
+fn materialize_locked(
+    src: &PrSource<'_>,
+    repo_ref: &RepoRef,
+    meta: &PrMeta,
+    mirror_dir: std::path::PathBuf,
+) -> Result<Checkout> {
     let local = src.local_repo.filter(|r| same_repository(r, repo_ref));
     let remote = remote_url_of(local, repo_ref);
+    if !mirror_dir.join("HEAD").exists() {
+        // Left by an interrupted older build; rename cannot replace it.
+        let _ = std::fs::remove_dir_all(&mirror_dir);
+    }
     let mirror = if mirror_dir.join("HEAD").exists() {
         Repository::at(src.git, mirror_dir)
     } else if let Some(local) = local {
@@ -366,10 +398,17 @@ pub fn purge(session: &Session, git: &dyn Git, state: &StateDir) {
         &session.source,
     ) {
         let mirror_dir = state.mirror_dir(host, owner, name);
-        if mirror_dir.exists() {
-            Repository::at(git, mirror_dir).worktree_remove(worktree);
-        } else {
+        if !mirror_dir.exists() {
             let _ = std::fs::remove_dir_all(worktree);
+            return;
         }
+        let _ = with_mirror_lock(&mirror_dir, || {
+            if mirror_dir.exists() {
+                Repository::at(git, mirror_dir.clone()).worktree_remove(worktree);
+            } else {
+                let _ = std::fs::remove_dir_all(worktree);
+            }
+            Ok(())
+        });
     }
 }

@@ -525,3 +525,79 @@ fn owner_and_name_casing_follows_github_not_the_argument() {
         .collect();
     assert_eq!(owners, vec!["o"]);
 }
+
+#[test]
+fn a_hanging_fetch_times_out_instead_of_blocking() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let bin = tempfile::tempdir().unwrap();
+    let slow_git = bin.path().join("git");
+    std::fs::write(
+        &slow_git,
+        format!(
+            "#!/bin/sh\ncase \"$*\" in *\" fetch \"*) sleep 30 ;; esac\nexec {} \"$@\"\n",
+            common::real_git().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&slow_git, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let started = std::time::Instant::now();
+    let out = reviewkit(&state, &remote, &gh)
+        .env("REVIEWKIT_GIT", &slow_git)
+        .env("REVIEWKIT_GIT_TIMEOUT_MS", "500")
+        .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+        .output()
+        .unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(body["error"]["code"], "E_GIT");
+    assert!(body["error"]["message"].as_str().unwrap().contains("did not finish"));
+}
+
+#[test]
+fn two_pull_requests_of_one_repository_can_be_opened_at_once() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    git_in(
+        remote.bare.path(),
+        &["update-ref", "refs/pull/8/head", &remote.head_sha],
+    );
+    let mut rules: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
+    let mut eight = rules[0].clone();
+    eight["match"] = serde_json::json!(["pr view 8"]);
+    eight["body"]["number"] = serde_json::json!(8);
+    eight["body"]["url"] = serde_json::json!("https://github.com/o/r/pull/8");
+    rules.insert(0, eight);
+    for rule in rules.iter_mut() {
+        rule["sleep"] = serde_json::json!(0.5);
+    }
+    std::fs::write(
+        gh.dir.path().join("responses.json"),
+        serde_json::Value::Array(rules).to_string(),
+    )
+    .unwrap();
+
+    let spawn = |n: u32| {
+        let mut cmd = std::process::Command::new(assert_cmd::cargo::cargo_bin("reviewkit"));
+        let template = reviewkit(&state, &remote, &gh);
+        for (k, v) in template.get_envs() {
+            if let Some(v) = v {
+                cmd.env(k, v);
+            }
+        }
+        cmd.args(["--state-dir", state.path().to_str().unwrap()])
+            .args(["session", "open", "--pr", &format!("https://github.com/o/r/pull/{n}")])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let (seven, eight) = (spawn(7), spawn(8));
+    for child in [seven, eight] {
+        let out = child.wait_with_output().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(body["ok"], true, "{body}");
+    }
+}
