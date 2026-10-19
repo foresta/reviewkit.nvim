@@ -58,6 +58,7 @@ pub fn add(session: &mut Session, input: CommentInput, file: Option<SideFile>) -
             input.start_line,
         ),
         last_error: None,
+        deliveries: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -97,6 +98,7 @@ fn push_reply(session: &mut Session, input: CommentInput, file: Option<SideFile>
             reason: None,
         },
         last_error: None,
+        deliveries: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -140,11 +142,17 @@ pub fn update(session: &mut Session, id: &str, patch: CommentPatch, file: Option
     if let Some(kind) = patch.kind {
         comment.kind = kind;
     }
+    let text_changed = patch.body.as_ref().is_some_and(|b| *b != comment.body)
+        || patch.suggestion.as_ref().is_some_and(|s| *s != comment.suggestion)
+        || patch.kind.is_some_and(|k| k != comment.kind);
     if let Some(body) = patch.body {
         comment.body = body;
     }
     if let Some(suggestion) = patch.suggestion {
         comment.suggestion = suggestion;
+    }
+    if text_changed {
+        comment.deliveries.clear();
     }
     if let Some(anchor) = anchor {
         comment.anchor = anchor;

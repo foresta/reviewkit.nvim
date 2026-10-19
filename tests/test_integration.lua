@@ -72,7 +72,8 @@ T["real binary: open, comment, submit through a Lua sink"] = function()
   eq(submitted.err, nil)
   eq(child.lua_get("_G.captured"), "why B?")
   eq(submitted.results[1].summary, "1 sent, 0 failed")
-  eq(#child.lua_get("require('reviewkit.core').comments()"), 0)
+  eq(#child.lua_get("require('reviewkit.core').comments()"), 1)
+  eq(child.lua_get("require('reviewkit.core').comments()[1].deliveries[1].sink"), "capture")
   child.stop()
 end
 

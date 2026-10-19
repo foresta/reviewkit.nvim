@@ -1,18 +1,55 @@
 use crate::core::time;
 use crate::error::Result;
-use crate::model::{DecisionStatus, LastError, LastSubmit, Reason, SendStatus, Session, SinkResult};
+use crate::model::{
+    DecisionStatus, Delivery, DeliveryMode, LastError, LastSubmit, Reason, SendStatus, Session, SinkResult, Source,
+};
+
+/// Whether delivered comments leave the queue. Only the destination a
+/// session kind exists for consumes them by default: a PR's comments are
+/// for GitHub even after an agent saw them, and a local review is for the
+/// agent. Staged or copied text never consumes (decisions.md).
+pub fn consumes(session: &Session, result: &SinkResult, requested: Option<bool>) -> bool {
+    if result.mode != DeliveryMode::Sent {
+        return false;
+    }
+    // GitHub keeps what it was sent and the github sink resends the whole
+    // queue, so keeping its comments would post them twice.
+    if result.sink == "github" {
+        return true;
+    }
+    requested.unwrap_or(matches!(
+        (&session.source, result.sink.as_str()),
+        (Source::Local { .. }, "herdr")
+    ))
+}
 
 /// Applies a sink's report to the queue (architecture D4).
-pub fn apply(session: &mut Session, mut result: SinkResult) -> Result<SinkResult> {
+pub fn apply(session: &mut Session, mut result: SinkResult, consume: Option<bool>) -> Result<SinkResult> {
     if result.at.is_empty() {
         result.at = time::now();
     }
     if result.summary.is_empty() {
         result.summary = summary(&result);
     }
-    session
-        .comments
-        .retain(|c| !result.sent.iter().any(|s| s.comment_id == c.id));
+    let consume = consumes(session, &result, consume);
+    for sent in &result.sent {
+        if let Some(comment) = session.comments.iter_mut().find(|c| c.id == sent.comment_id) {
+            comment.last_error = None;
+            comment.deliveries.push(Delivery {
+                sink: result.sink.clone(),
+                at: result.at.clone(),
+                mode: result.mode,
+                url: sent.url.clone(),
+            });
+        }
+    }
+    if consume {
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut session.comments)
+            .into_iter()
+            .partition(|c| result.sent.iter().any(|s| s.comment_id == c.id));
+        session.comments = kept;
+        session.history.extend(gone);
+    }
     for failed in &result.failed {
         let Some(comment_id) = &failed.comment_id else { continue };
         if let Some(comment) = session.comments.iter_mut().find(|c| &c.id == comment_id) {
@@ -26,16 +63,20 @@ pub fn apply(session: &mut Session, mut result: SinkResult) -> Result<SinkResult
     }
     // A whole-review failure (comment_id null) marks every comment that was
     // part of the attempt, so the client can show why nothing left the queue.
-    // Skipped comments were never part of it.
+    // Skipped comments, and comments this sink already delivered (it does not
+    // send them again), were never part of it.
     if result.sent.is_empty()
         && let Some(whole) = result.failed.iter().find(|f| f.comment_id.is_none())
     {
         let error = whole.error.clone();
-        for comment in session
-            .comments
-            .iter_mut()
-            .filter(|c| !result.skipped.iter().any(|s| s.comment_id == c.id))
-        {
+        let sink = result.sink.clone();
+        for comment in session.comments.iter_mut().filter(|c| {
+            !result.skipped.iter().any(|s| s.comment_id == c.id)
+                && !c
+                    .deliveries
+                    .iter()
+                    .any(|d| d.sink == sink && d.mode == DeliveryMode::Sent)
+        }) {
             comment.last_error = Some(LastError {
                 sink: result.sink.clone(),
                 code: error.code,
@@ -50,7 +91,7 @@ pub fn apply(session: &mut Session, mut result: SinkResult) -> Result<SinkResult
             .iter()
             .any(|r| r.thread_id == action.thread_id && r.status == SendStatus::Sent)
     });
-    if result.decision == DecisionStatus::Sent {
+    if result.decision == DecisionStatus::Sent && consume {
         session.decision = None;
     }
     session.last_submit = Some(LastSubmit {
@@ -124,6 +165,7 @@ mod tests {
                 .collect(),
             thread_actions: vec![],
             decision,
+            mode: DeliveryMode::Sent,
             summary: String::new(),
         }
     }

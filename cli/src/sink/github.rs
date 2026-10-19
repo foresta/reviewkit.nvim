@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::time;
 use crate::error::{Error, ErrorCode, Result};
 use crate::ext::gh::{self, Gh, RepoRef};
+use crate::model::DeliveryMode;
 use crate::model::session::ThreadActionKind;
 use crate::model::{
     Comment, DecisionEvent, DecisionStatus, Failed, Reason, SendStatus, Sent, Session, Side, SinkResult, Skipped,
@@ -404,6 +405,7 @@ pub fn reconcile_pending(
             DecisionStatus::NotApplicable
         },
         summary: String::new(),
+        mode: DeliveryMode::Sent,
     }))
 }
 
@@ -551,6 +553,7 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
         thread_actions,
         decision,
         summary: String::new(),
+        mode: DeliveryMode::Sent,
     })
 }
 
@@ -585,6 +588,7 @@ mod tests {
                 reason: None,
             },
             last_error: None,
+            deliveries: Vec::new(),
             created_at: "t".into(),
             updated_at: "t".into(),
         }

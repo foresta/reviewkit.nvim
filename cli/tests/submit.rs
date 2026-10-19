@@ -141,6 +141,50 @@ fn stage_uses_send_text_and_explicit_target_skips_resolution() {
     assert_eq!(body["data"]["sent"].as_array().unwrap().len(), 2);
     assert!(herdr.calls().contains("pane send-text w9:p3"));
     assert!(herdr.last_text().contains("1. keep.txt:3\n"));
+    let comments = body["session"]["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 2, "staged text may be discarded in the agent's input");
+    assert_eq!(comments[0]["deliveries"][0]["mode"], "staged");
+    assert!(body["session"]["decision"].is_object());
+
+    let sent = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "--session", &id, "--sink", "herdr", "--options", "-"])
+            .write_stdin(r#"{"target": "w9:p3", "agent_type": "plain"}"#)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        sent["data"]["sent"].as_array().unwrap().len(),
+        2,
+        "staged ones are sent for real"
+    );
+    assert!(sent["session"]["comments"].as_array().unwrap().is_empty());
+    assert_eq!(sent["session"]["history"].as_array().unwrap().len(), 2);
+    assert_eq!(sent["session"]["history"][0]["deliveries"][1]["mode"], "sent");
+}
+
+#[test]
+fn editing_a_delivered_comment_forgets_where_it_went() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let staged = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "--session", &id, "--sink", "herdr", "--options", "-"])
+            .write_stdin(r#"{"target": "w9:p3", "stage": true}"#)
+            .output()
+            .unwrap(),
+    );
+    let cid = staged["session"]["comments"][0]["id"].as_str().unwrap().to_string();
+    let edited = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["comment", "update", "--session", &id, "--id", &cid])
+            .write_stdin(r#"{"body": "rewritten"}"#)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(edited["session"]["comments"][0]["deliveries"], serde_json::json!([]));
 }
 
 #[test]
@@ -276,9 +320,14 @@ fn submit_apply_records_a_client_side_result() {
     assert_eq!(body["data"]["summary"], "1 sent, 1 failed, decision skipped");
     assert!(!body["data"]["at"].as_str().unwrap().is_empty());
     let comments = body["session"]["comments"].as_array().unwrap();
-    assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0]["id"], second);
-    assert_eq!(comments[0]["last_error"]["sink"], "clipboard");
+    assert_eq!(
+        comments.len(),
+        2,
+        "a client-side sink is not a local review's destination"
+    );
+    assert_eq!(comments[0]["id"], first);
+    assert_eq!(comments[0]["deliveries"][0]["sink"], "clipboard");
+    assert_eq!(comments[1]["last_error"]["sink"], "clipboard");
     assert!(body["session"]["decision"].is_object(), "skipped decisions stay");
     assert_eq!(body["session"]["last_submit"]["result"]["sink"], "clipboard");
 }
@@ -451,4 +500,40 @@ fn submit_apply_rejects_bad_input_and_a_hanging_herdr_times_out() {
         "the prompt text never leaks into errors"
     );
     assert_eq!(body["session"]["comments"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn a_later_success_clears_the_failure_mark_and_a_failure_spares_comments_already_delivered() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let send = |fail: bool| {
+        let mut c = cmd(&state, &repo, &herdr);
+        if fail {
+            c.env("FAKE_HERDR_FAIL", "1");
+        }
+        json(
+            &c.args(["submit", "--session", &id, "--sink", "herdr", "--options", "-"])
+                .write_stdin(r#"{"target": "w9:p3", "consume": false}"#)
+                .output()
+                .unwrap(),
+        )
+    };
+    let failed = send(true);
+    assert!(failed["session"]["comments"][0]["last_error"].is_object());
+    let ok = send(false);
+    assert!(ok["session"]["comments"][0]["last_error"].is_null());
+
+    json(
+        &cmd(&state, &repo, &herdr)
+            .args(["comment", "add", "--session", &id])
+            .write_stdin(r#"{"path": "keep.txt", "side": "head", "line": 3, "body": "one more"}"#)
+            .output()
+            .unwrap(),
+    );
+    let again = send(true);
+    let comments = again["session"]["comments"].as_array().unwrap();
+    assert!(comments[0]["last_error"].is_null(), "already with the agent");
+    assert!(comments[2]["last_error"].is_object());
 }

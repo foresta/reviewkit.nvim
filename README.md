@@ -116,7 +116,7 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 | `:Review pr <number\|url>` | review a pull request |
 | `:Review resume [id]` / `:Review refresh` | reopen a saved session / recompute it |
 | `:Review threads [refresh]` | list the pull request's review threads |
-| `:ReviewSubmit herdr\|github\|clipboard` | send the queue |
+| `:ReviewSubmit herdr\|github\|clipboard` | send the queue; comments leave it only at the session's own destination (GitHub for a PR, the agent for a local diff), so a PR review can go to an agent first and to GitHub later |
 | `:ReviewClose[!]` | close the session (`!` also deletes its state) |
 
 Default keys (disable with `setup({ set_keymaps = false })`; `<Plug>(reviewkit-*)` maps stay):

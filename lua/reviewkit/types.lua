@@ -50,6 +50,7 @@ M.SCHEMA_VERSION = 1
 ---@field body string
 ---@field commentable reviewkit.Commentable
 ---@field created_at string
+---@field deliveries? reviewkit.Delivery[] Where this text already went. Cleared when the body or suggestion changes: a delivery of the old text says nothing about the new one.
 ---@field id string
 ---@field kind reviewkit.CommentKind
 ---@field last_error? reviewkit.LastError
@@ -108,6 +109,16 @@ M.SCHEMA_VERSION = 1
 ---@field event reviewkit.DecisionEvent
 
 ---@alias reviewkit.DecisionStatus "sent"|"failed"|"skipped"|"not_applicable"
+
+---@class reviewkit.Delivery
+---@field at string
+---@field mode reviewkit.DeliveryMode
+---@field sink string
+---@field url? string
+
+--- `staged` text was only typed into an agent's input and may be thrown
+--- away there; `copied` only reached a register. Neither consumes a comment.
+---@alias reviewkit.DeliveryMode "sent"|"staged"|"copied"
 
 ---@class reviewkit.Error
 ---@field code reviewkit.ErrorCode
@@ -244,6 +255,7 @@ M.SCHEMA_VERSION = 1
 ---@field decision? reviewkit.Decision
 ---@field etags reviewkit.Etags
 ---@field head reviewkit.HeadRef
+---@field history? reviewkit.Comment[] Comments that left the queue, with their deliveries, so a consumed comment can still be looked up instead of being gone.
 ---@field id string
 ---@field last_submit? reviewkit.LastSubmit
 ---@field pending_submit? boolean Derived from the state dir on every read rather than stored: a crash between sending and saving is exactly when the stored value is wrong.
@@ -283,6 +295,7 @@ M.SCHEMA_VERSION = 1
 ---@field at? string
 ---@field decision reviewkit.DecisionStatus
 ---@field failed reviewkit.Failed[]
+---@field mode? reviewkit.DeliveryMode
 ---@field sent reviewkit.Sent[]
 ---@field sink string
 ---@field skipped reviewkit.Skipped[]
@@ -329,6 +342,7 @@ M.SCHEMA_VERSION = 1
 
 ---@class reviewkit.SubmitOptions
 ---@field agent_type? reviewkit.AgentType
+---@field consume? boolean Whether delivered comments leave the queue. By default only the session kind's own destination consumes them; github always does, since keeping posted comments would post them again.
 ---@field header? string
 ---@field match_foreground_cwd? boolean
 ---@field stage? boolean

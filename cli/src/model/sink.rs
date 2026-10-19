@@ -17,6 +17,11 @@ pub struct SubmitOptions {
     pub stage: Option<bool>,
     #[serde(default)]
     pub match_foreground_cwd: Option<bool>,
+    /// Whether delivered comments leave the queue. By default only the
+    /// session kind's own destination consumes them; github always does,
+    /// since keeping posted comments would post them again.
+    #[serde(default)]
+    pub consume: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -44,6 +49,8 @@ pub struct SinkResult {
     pub decision: DecisionStatus,
     #[serde(default)]
     pub summary: String,
+    #[serde(default)]
+    pub mode: crate::model::DeliveryMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -29,6 +29,10 @@ pub struct Session {
     /// between sending and saving is exactly when the stored value is wrong.
     #[serde(default)]
     pub pending_submit: bool,
+    /// Comments that left the queue, with their deliveries, so a consumed
+    /// comment can still be looked up instead of being gone.
+    #[serde(default)]
+    pub history: Vec<Comment>,
     pub etags: Etags,
     pub created_at: String,
     pub updated_at: String,
@@ -183,6 +187,7 @@ impl Session {
             viewed: BTreeMap::new(),
             last_submit: None,
             pending_submit: false,
+            history: Vec::new(),
             etags: Etags::default(),
             created_at: now.clone(),
             updated_at: now,
@@ -320,6 +325,20 @@ mod tests {
                 message: "boom".into(),
                 at: at.clone(),
             }),
+            deliveries: vec![
+                Delivery {
+                    sink: "herdr".into(),
+                    at: at.clone(),
+                    mode: DeliveryMode::Staged,
+                    url: None,
+                },
+                Delivery {
+                    sink: "clipboard".into(),
+                    at: at.clone(),
+                    mode: DeliveryMode::Copied,
+                    url: Some("u".into()),
+                },
+            ],
             created_at: at.clone(),
             updated_at: at.clone(),
         }];
@@ -385,6 +404,7 @@ mod tests {
                     error: None,
                 }],
                 decision: DecisionStatus::NotApplicable,
+                mode: DeliveryMode::Sent,
                 summary: "1 sent, 1 skipped, 1 failed".into(),
             },
         });
