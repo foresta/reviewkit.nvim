@@ -25,6 +25,10 @@ pub struct Session {
     /// stable key order.
     pub viewed: BTreeMap<String, Viewed>,
     pub last_submit: Option<LastSubmit>,
+    /// Derived from the state dir on every read rather than stored: a crash
+    /// between sending and saving is exactly when the stored value is wrong.
+    #[serde(default)]
+    pub pending_submit: bool,
     pub etags: Etags,
     pub created_at: String,
     pub updated_at: String,
@@ -178,6 +182,7 @@ impl Session {
             thread_actions: Vec::new(),
             viewed: BTreeMap::new(),
             last_submit: None,
+            pending_submit: false,
             etags: Etags::default(),
             created_at: now.clone(),
             updated_at: now,

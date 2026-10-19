@@ -132,6 +132,8 @@ pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
             // Removed only after the result was saved: a crash before this
             // leaves the record for the next submit to reconcile.
             let _ = std::fs::remove_file(&pending);
+            let mut session = session;
+            session.pending_submit = pending.exists();
             Response::with_session(result, &session)
         }
         other => Err(Error::invalid(format!("unknown sink: {other}")).hint("run `reviewkit sink list`")),

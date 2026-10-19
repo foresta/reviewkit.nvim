@@ -267,7 +267,7 @@ pub struct PendingReply {
 }
 
 pub fn pending_path(session_dir: &Path) -> std::path::PathBuf {
-    session_dir.join("pending_submit.json")
+    session_dir.join(crate::store::PENDING_SUBMIT_FILE)
 }
 
 /// The same text as GitHub stores it: line endings normalised, outer
@@ -298,12 +298,9 @@ fn after(submitted: &str, attempt: &str) -> bool {
 
 /// A previous submit that never got its answer applied: what already
 /// appears on GitHub as this user's post is reported as sent, so nothing
-/// is posted twice. Inline threads match on path, side, line and body;
-/// replies on thread and body; the decision on a review by this user with
-/// the same state and body submitted after the attempt began. Something
-/// edited since the attempt no longer equals what was posted and stays
-/// queued. The file is left in place; the caller removes it once the
-/// result is saved.
+/// is posted twice. Something edited since the attempt no longer equals
+/// what was posted and stays queued. The file is left in place; the caller
+/// removes it once the result is saved.
 pub fn reconcile_pending(
     session: &mut Session,
     gh: &dyn Gh,
@@ -334,15 +331,29 @@ pub fn reconcile_pending(
     };
 
     let mut sent = Vec::new();
+    // Each remote post vouches for one pending comment only: two queued
+    // comments with the same text must not both count as posted when only
+    // one reached GitHub.
+    let mut claimed: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut claim = |thread: &dyn Fn(&crate::model::Thread) -> bool, body: &str| -> bool {
+        for t in details.threads.iter().filter(|t| thread(t)) {
+            for c in &t.comments {
+                if !claimed.contains(c.id.as_str())
+                    && mine(&c.author)
+                    && same_text(&c.body, body)
+                    && after(&c.created_at, &pending.at)
+                {
+                    claimed.insert(c.id.as_str());
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    // Not matched by line: a push between the attempt and now moves or
+    // outdates the thread, and a missed match posts the comment twice.
     for p in &pending.comments {
-        let posted = details.threads.iter().any(|t| {
-            t.path == p.path
-                && t.side == p.side
-                && t.line == Some(p.line)
-                && t.comments
-                    .iter()
-                    .any(|c| mine(&c.author) && same_text(&c.body, &p.body))
-        });
+        let posted = claim(&|t| t.path == p.path && t.side == p.side, &p.body);
         if posted && unchanged(&p.id, &p.body) {
             sent.push(Sent {
                 comment_id: p.id.clone(),
@@ -352,12 +363,7 @@ pub fn reconcile_pending(
         }
     }
     for r in &pending.replies {
-        let posted = details.threads.iter().any(|t| {
-            t.id == r.thread_id
-                && t.comments
-                    .iter()
-                    .any(|c| mine(&c.author) && same_text(&c.body, &r.body))
-        });
+        let posted = claim(&|t| t.id == r.thread_id, &r.body);
         if posted && unchanged(&r.id, &r.body) {
             sent.push(Sent {
                 comment_id: r.id.clone(),

@@ -246,6 +246,7 @@ M.SCHEMA_VERSION = 1
 ---@field head reviewkit.HeadRef
 ---@field id string
 ---@field last_submit? reviewkit.LastSubmit
+---@field pending_submit? boolean Derived from the state dir on every read rather than stored: a crash between sending and saving is exactly when the stored value is wrong.
 ---@field repo reviewkit.Repo
 ---@field rev integer
 ---@field schema_version integer

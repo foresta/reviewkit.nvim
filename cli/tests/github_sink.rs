@@ -301,7 +301,7 @@ fn an_interrupted_submit_is_reconciled_against_github_before_resending() {
         serde_json::json!({"path": "keep.txt", "side": "head", "line": 11, "body": "new one"}),
     );
     // The previous run died after GitHub created the thread but before the answer was applied.
-    let pending = serde_json::json!({ "at": "t", "comments": [ { "id": posted, "path": "keep.txt", "side": "head", "line": 3, "body": "already there" } ] });
+    let pending = serde_json::json!({ "at": "2026-01-01T00:00:00Z", "comments": [ { "id": posted, "path": "keep.txt", "side": "head", "line": 3, "body": "already there" } ] });
     std::fs::write(
         state.path().join("sessions/pr/github.com/o/r/7/pending_submit.json"),
         pending.to_string(),
@@ -503,7 +503,7 @@ fn an_interrupted_reply_and_decision_are_recognised_and_not_resent() {
     let mut existing = thread("keep.txt", Some(3), "RIGHT", false);
     existing["comments"]["nodes"] = serde_json::json!([
         { "id": "PRRC_1", "body": "hm", "createdAt": "t", "url": "u", "author": {"login": "bob"} },
-        { "id": "PRRC_2", "body": "agreed", "createdAt": "t", "url": "u", "author": {"login": "me"} }
+        { "id": "PRRC_2", "body": "agreed", "createdAt": "2026-01-01T00:00:01Z", "url": "u", "author": {"login": "me"} }
     ]);
     github_shows(
         &gh,
@@ -863,4 +863,109 @@ fn refreshing_threads_drops_a_resolve_that_someone_already_did_on_github() {
     ));
     assert_eq!(body["data"][0]["resolved"], true);
     assert_eq!(body["session"]["thread_actions"], serde_json::json!([]));
+}
+
+#[test]
+fn an_interrupted_comment_is_recognised_even_after_its_line_moved() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let cid = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "done"}),
+    );
+    pending(
+        &state,
+        serde_json::json!({
+            "at": "2026-01-01T00:00:00Z",
+            "comments": [ { "id": cid, "path": "keep.txt", "side": "head", "line": 3, "body": "done" } ]
+        }),
+    );
+    let got = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["session", "get", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(got["session"]["pending_submit"], true);
+
+    // A push since then outdated the thread: GitHub no longer reports a line.
+    let mut moved = posted_thread("keep.txt", 3, "me", "done");
+    moved["line"] = serde_json::Value::Null;
+    moved["originalLine"] = serde_json::json!(3);
+    moved["isOutdated"] = serde_json::json!(true);
+    moved["comments"]["nodes"][0]["createdAt"] = serde_json::json!("2026-01-01T00:00:05Z");
+    github_shows(&gh, "me", serde_json::json!([moved]), serde_json::json!([]));
+    let body = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github"])
+            .output()
+            .unwrap(),
+    );
+    assert!(mutation_calls(&gh).is_empty(), "nothing is posted twice");
+    assert_eq!(body["data"]["sent"][0]["comment_id"], cid.as_str());
+    assert_eq!(body["session"]["pending_submit"], false);
+}
+
+#[test]
+fn one_post_on_github_vouches_for_only_one_identical_queued_comment() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let first = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "nit: rename"}),
+    );
+    let second = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 9, "body": "nit: rename"}),
+    );
+    pending(
+        &state,
+        serde_json::json!({
+            "at": "2026-01-01T00:00:00Z",
+            "comments": [
+                { "id": first, "path": "keep.txt", "side": "head", "line": 3, "body": "nit: rename" },
+                { "id": second, "path": "keep.txt", "side": "head", "line": 9, "body": "nit: rename" }
+            ]
+        }),
+    );
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", "nit: rename")]),
+        serde_json::json!([]),
+    );
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_9", "url": "u9" } } } }),
+        0,
+    );
+    let body = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github"])
+            .output()
+            .unwrap(),
+    );
+    let sent: Vec<&str> = body["data"]["sent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["comment_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(sent.len(), 2);
+    let posted = &mutation_calls(&gh)[0]["variables"]["threads"];
+    assert_eq!(posted.as_array().unwrap().len(), 1, "the one GitHub lacks is posted");
+    assert_eq!(body["session"]["pending_submit"], false);
 }

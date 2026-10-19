@@ -143,6 +143,6 @@ pub fn thread(path: &str, line: Option<u32>, side: &str, outdated: bool) -> serd
     serde_json::json!({
         "id": format!("PRRT_{path}"), "path": path, "line": line, "startLine": null, "originalLine": line.unwrap_or(1),
         "diffSide": side, "startDiffSide": null, "isResolved": false, "isOutdated": outdated, "subjectType": "LINE",
-        "comments": { "nodes": [ { "id": "PRRC_1", "body": "hm", "createdAt": "t", "url": "u", "author": {"login": "bob"} } ] }
+        "comments": { "nodes": [ { "id": "PRRC_1", "body": "hm", "createdAt": "2026-01-01T00:00:05Z", "url": "u", "author": {"login": "bob"} } ] }
     })
 }
