@@ -84,13 +84,17 @@ pub fn run(ctx: &Context, command: SessionCommand) -> Result<Response> {
             } else {
                 // A session this CLI cannot parse (written by a newer one) is
                 // still removed; only its PR worktree is left for git to prune.
-                if let Ok(loaded) = &loaded
-                    && matches!(loaded.source, Source::Pr { .. })
-                {
-                    let git = SystemGit::new(ctx.tools.git.as_deref())?;
-                    pr::purge(loaded, &git, store.state_dir());
-                }
-                store.remove(&session)?;
+                // Under the fetch lock so a refresh in flight cannot recreate
+                // the worktree after it was removed.
+                store.with_fetch_lock(&session, || {
+                    if let Ok(loaded) = &loaded
+                        && matches!(loaded.source, Source::Pr { .. })
+                    {
+                        let git = SystemGit::new(ctx.tools.git.as_deref())?;
+                        pr::purge(loaded, &git, store.state_dir());
+                    }
+                    store.remove(&session)
+                })?;
             }
             Response::new(Closed { closed: true })
         }
