@@ -137,6 +137,7 @@ local function attach()
   require("reviewkit.view.queue").attach()
   require("reviewkit.view.annotate").attach()
   require("reviewkit.view.diff").attach()
+  require("reviewkit.view.thread").attach()
   core.register_sink("clipboard", require("reviewkit.sink.clipboard") --[[@as reviewkit.LuaSink]])
   core.on("ReviewSessionOpened", function()
     local session = core.session()
@@ -471,6 +472,55 @@ function M.install()
   end)
 end
 
+function M.thread()
+  if not core.session() then
+    return notify("no review session is open")
+  end
+  local view = require("reviewkit.view.thread")
+  local threads = view.at(vim.api.nvim_get_current_buf(), vim.api.nvim_win_get_cursor(0)[1])
+  if #threads == 0 then
+    return notify("no thread on this line")
+  end
+  if #threads == 1 then
+    return view.show(threads[1])
+  end
+  vim.ui.select(threads, {
+    prompt = "Thread",
+    format_item = function(t)
+      local first = t.comments[1]
+      return ("%s: %s"):format(first and first.author or "?", first and first.body:match("^[^\n]*") or "")
+    end,
+  }, function(choice)
+    if choice then
+      view.show(choice)
+    end
+  end)
+end
+
+---@param refresh? boolean fetch the pull request again first
+function M.threads(refresh)
+  local session = core.session()
+  if not session then
+    return notify("no review session is open")
+  end
+  if session.source.kind ~= "pr" then
+    return notify("threads exist only in pull request sessions")
+  end
+  local function show()
+    require("reviewkit.view.queue").show_threads()
+    vim.cmd("botright copen")
+  end
+  if not refresh then
+    return show()
+  end
+  core.refresh_threads(function(err)
+    if err then
+      return notify_error(err)
+    end
+    show()
+  end)
+end
+
 ---@param args string[]
 function M.command(args)
   local sub = args[1]
@@ -482,8 +532,10 @@ function M.command(args)
     M.refresh()
   elseif sub == "pr" and args[2] then
     M.review_pr(args[2])
+  elseif sub == "threads" then
+    M.threads(args[2] == "refresh")
   else
-    notify("usage: :Review diff <base> [<head>] | pr <number|url> | resume [id] | refresh")
+    notify("usage: :Review diff <base> [<head>] | pr <number|url> | resume [id] | refresh | threads [refresh]")
   end
 end
 
@@ -493,6 +545,8 @@ local maps = {
   { "n", "<leader>re", "edit_comment", "reviewkit: edit the comment here" },
   { "n", "<leader>rx", "remove_comment", "reviewkit: remove the comment here" },
   { "n", "<leader>rd", "decision", "reviewkit: set the decision" },
+  { "n", "<leader>rt", "thread", "reviewkit: show the thread on this line" },
+  { "n", "<leader>rT", "threads", "reviewkit: list the pull request's threads" },
   { "n", "<leader>rq", "toggle_queue", "reviewkit: toggle the queue list" },
   { "n", "<leader>rv", "toggle_viewed", "reviewkit: toggle viewed for this file" },
   { "n", "<leader>rs", "submit_default", "reviewkit: submit to herdr" },
@@ -515,6 +569,10 @@ local actions = {
   edit_comment = M.edit_comment,
   remove_comment = M.remove_comment,
   decision = M.decision,
+  thread = M.thread,
+  threads = function()
+    M.threads(false)
+  end,
   toggle_queue = function()
     require("reviewkit.view.queue").toggle()
   end,

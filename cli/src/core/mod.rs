@@ -4,6 +4,7 @@ pub mod commentable;
 pub mod comments;
 pub mod etags;
 pub mod files;
+pub mod threads;
 pub mod time;
 pub mod viewed;
 

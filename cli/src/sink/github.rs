@@ -109,7 +109,9 @@ pub fn plan(session: &Session) -> Result<Plan> {
     let mut thread_comment_ids = Vec::new();
     let mut replies = Vec::new();
     for comment in &session.comments {
-        if let Some(reason) = skip_reason(comment) {
+        // A reply is posted into its thread, not at a line, so a moved or
+        // outdated line is no reason to hold it back.
+        if let Some(reason) = skip_reason(comment).filter(|_| comment.reply_to.is_none()) {
             skipped.push(Skipped {
                 comment_id: comment.id.clone(),
                 reason,
@@ -378,6 +380,7 @@ pub fn reconcile_pending(
             })
         });
     session.threads = details.threads;
+    crate::core::threads::prune_actions(session);
     if sent.is_empty() && !decision_posted {
         return Ok(None);
     }
@@ -653,6 +656,19 @@ mod tests {
             (plan.replies[0].alias.as_str(), plan.replies[0].comment_id.as_str()),
             ("reply0", "c_5")
         );
+    }
+
+    #[test]
+    fn a_reply_whose_line_moved_or_left_the_diff_is_still_sent() {
+        let mut s = pr_session();
+        s.comments[4].stale = true;
+        s.comments[4].commentable = Commentable {
+            github: false,
+            reason: Some(Reason::OutsideDiff),
+        };
+        let plan = plan(&s).unwrap();
+        assert_eq!(plan.replies.len(), 1);
+        assert!(plan.skipped.iter().all(|sk| sk.comment_id != "c_5"));
     }
 
     #[test]

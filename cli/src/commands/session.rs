@@ -90,7 +90,7 @@ pub fn run(ctx: &Context, command: SessionCommand) -> Result<Response> {
     }
 }
 
-fn refresh(ctx: &Context, git: &SystemGit, store: &Store, session: &mut crate::model::Session) -> Result<()> {
+pub fn refresh(ctx: &Context, git: &SystemGit, store: &Store, session: &mut crate::model::Session) -> Result<()> {
     match &session.source {
         Source::Local { worktree, .. } => {
             let repo = Repository::at(git, worktree.clone());

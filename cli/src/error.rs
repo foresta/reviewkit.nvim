@@ -13,6 +13,7 @@ pub enum ErrorCode {
     ENoSession,
     ENoComment,
     ENoTarget,
+    ENoThread,
     EGit,
     EGh,
     EGhAuth,
@@ -33,7 +34,7 @@ impl ErrorCode {
         match self {
             EUsage => 1,
             EInvalid | ENotCommentable => 2,
-            ENoSession | ENoComment | ENoTarget => 3,
+            ENoSession | ENoComment | ENoTarget | ENoThread => 3,
             EGit | EGh | EGhAuth | EGhMissing | EGhPendingReview | EHerdr | EHerdrMissing | EAmbiguous => 4,
             EConflict | ELocked => 5,
             ESchemaVersion => 6,

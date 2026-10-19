@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::core::{anchor, time, viewed};
+use crate::core::{anchor, threads, time, viewed};
 use crate::error::{Error, ErrorCode, Result};
 use crate::ext::gh::{self, Gh, PrMeta, RepoRef};
 use crate::ext::git::{Git, Repository, parse_remote_url};
@@ -171,6 +171,7 @@ fn refresh_with(session: &mut Session, src: &PrSource<'_>, store: &Store, meta: 
     };
     session.targets = targets;
     session.threads = details.threads;
+    threads::prune_actions(session);
     viewed::refresh_flags(session);
     anchor::reanchor(session, &worktree)
 }

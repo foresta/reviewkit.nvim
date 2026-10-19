@@ -31,7 +31,7 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
 | 0 | 成功（部分成功を含む） | |
 | 1 | 引数誤り | `E_USAGE` |
 | 2 | 検証 | `E_INVALID`、`E_NOT_COMMENTABLE` |
-| 3 | 不在 | `E_NO_SESSION`、`E_NO_COMMENT`、`E_NO_TARGET` |
+| 3 | 不在 | `E_NO_SESSION`、`E_NO_COMMENT`、`E_NO_TARGET`、`E_NO_THREAD` |
 | 4 | 外部ツール | `E_GIT`、`E_GH`、`E_GH_AUTH`、`E_GH_MISSING`、`E_GH_PENDING_REVIEW`、`E_HERDR`、`E_HERDR_MISSING`、`E_AMBIGUOUS` |
 | 5 | 競合 | `E_CONFLICT`、`E_LOCKED` |
 | 6 | 契約不一致 | `E_SCHEMA_VERSION`（保存済み session.json が古い版のとき） |
@@ -148,7 +148,7 @@ SinkResult {
 
 - `side` は architecture の語彙（base / head）。GitHub の `LEFT` / `RIGHT`、`APPROVE` 等への変換は sink-github の内側だけで行う
 - SinkResult の適用（D4）: `sent` は queue から消す。`failed` は `last_error` を付けて残す。`skipped` はそのまま。
-  `thread_actions` は `sent` のものだけ消す。`decision` は `sent` のときだけ消す。`last_submit` に結果を記録する
+  `thread_actions` は `sent` のものだけ消す（PR の refresh でも、スレッドが消えたか GitHub 側で既にその状態になったものは消す）。`decision` は `sent` のときだけ消す。`last_submit` に結果を記録する
 - sink-github で Decision が無く comments がある場合は `event = comment`、本文空で送る（行コメントは review の一部としてしか送れない）
 - sink-herdr のプロンプトは header、Decision の本文（あれば）、番号付きのコメント（`@path#L1-L2` 形式。`plain` は `path:1-2`）の順。
   Decision の event は送れないので、本文が空の Decision は `skipped` として残る
@@ -196,8 +196,8 @@ reviewkit submit --session ID --sink github|herdr [--dry-run] [--options -]
 reviewkit submit apply --session ID (stdin: SinkResult の sent / failed / skipped / thread_actions / decision)
                                                          -> session   Lua 側 sink の結果を core に適用。at / summary は core が補う
 
-reviewkit thread list    --session ID [--refresh]        -> data: Thread[]   [後続]
-reviewkit thread resolve --session ID --thread TID [--undo] -> session       [後続]
+reviewkit thread list    --session ID [--refresh]        -> data: Thread[]   --refresh は session 全体を取り直し、session も返す
+reviewkit thread resolve --session ID --thread TID [--undo] -> session       GitHub 上の状態と同じになる操作は積まずに消す
 ```
 
 - `--dry-run` は sink が送る内容そのもの（GraphQL の変数 / herdr のプロンプト文字列）を返す。整形の反復と view のプレビューに使う
@@ -255,6 +255,7 @@ lua/reviewkit/
   view/annotate.lua   extmark の注釈（stale は薄く）
   view/queue.lua      一覧（quickfix 既定、float も可）
   view/input.lua      入力窓
+  view/thread.lua     カーソル行のスレッドを float で表示。r で返信（reply_to 付きコメント）、R で resolve の切り替え
   orchestrator.lua    :Review の配線、worktree の監視、既定キーマップ
   sink/clipboard.lua  Lua 側 sink の最小例
 plugin/reviewkit.lua  コマンド定義だけ
@@ -275,6 +276,7 @@ core.is_commentable(path, side, line)      -- Target.commentable から
 core.add_comment(input, cb) / core.update_comment(id, patch, cb) / core.remove_comment(id, cb)
 core.set_decision(decision, cb) / core.clear_decision(cb)
 core.set_viewed(path, on, cb)
+core.resolve_thread(id, resolved, cb) / core.refresh_threads(cb) / core.pending_thread_action(id)
 core.pr_info(cb)               -- PrInfo。表示は持たないが取り出せる
 core.submit(sink, opts, cb)  -- Rust 側 sink は submit。Lua 登録 sink は impl.submit(session, opts, cb) の結果を submit apply に渡す
 core.register_sink(name, impl)
@@ -303,7 +305,7 @@ require("reviewkit").setup({
 })
 ```
 
-`:Review pr <number|url>`、`:Review diff <base> [<head>]`、`:Review resume`、`:Review refresh`、
+`:Review pr <number|url>`、`:Review diff <base> [<head>]`、`:Review resume`、`:Review refresh`、`:Review threads [refresh]`、
 `:ReviewSubmit herdr|github`、`:ReviewClose`、`:ReviewInstall`、`:ReviewLog`。`setup()` を呼ばなくてもコマンドは使える。
 
 ## 8. 未決事項

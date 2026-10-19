@@ -11,13 +11,16 @@ vim.api.nvim_create_user_command("Review", function(cmd)
   orchestrator().command(cmd.fargs)
 end, {
   nargs = "+",
-  desc = "reviewkit: diff <base> [<head>] | resume [id] | refresh | pr <number>",
+  desc = "reviewkit: diff <base> [<head>] | resume [id] | refresh | pr <number> | threads [refresh]",
   complete = function(arg_lead, line)
     local words = vim.split(line, "%s+")
     if #words == 2 then
       return vim.tbl_filter(function(w)
         return vim.startswith(w, arg_lead)
-      end, { "diff", "resume", "refresh", "pr" })
+      end, { "diff", "resume", "refresh", "pr", "threads" })
+    end
+    if #words == 3 and words[2] == "threads" then
+      return { "refresh" }
     end
     return {}
   end,
