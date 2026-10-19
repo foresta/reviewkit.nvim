@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "cli/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+      - "lua/reviewkit/install.lua"
+      - "lua/reviewkit/types.lua"
+      - "scripts/install.lua"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04 }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: make dist TARGET=${{ matrix.target }}
+      - name: Smoke test
+        shell: bash
+        run: |
+          bin="dist/reviewkit-${{ matrix.target }}"
+          # The linker signs ad hoc only for arm64, where an unsigned binary is
+          # killed at exec; x86_64 binaries run unsigned.
+          if [ "${{ matrix.target }}" = aarch64-apple-darwin ]; then codesign -v "$bin"; fi
+          if [ "${{ matrix.target }}" = x86_64-apple-darwin ]; then
+            softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
+            out=$(arch -x86_64 "$bin" version)
+          else
+            out=$("$bin" version)
+          fi
+          echo "$out"
+          want=$(sed -n 's/^M.SCHEMA_VERSION = \([0-9]*\)$/\1/p' lua/reviewkit/types.lua)
+          echo "$out" | grep -q "\"schema_version\":$want"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reviewkit-${{ matrix.target }}
+          path: dist/reviewkit-${{ matrix.target }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag names the Cargo version
+        run: |
+          v=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          case "$v" in *-*) echo "refusing to release the pre-release version $v"; exit 1 ;; esac
+          test "v$v" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME does not match Cargo version $v"; exit 1; }
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: cd dist && sha256sum reviewkit-* > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/reviewkit-*"
+      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  verify:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+      - name: Install from the published release
+        run: |
+          nvim --headless -l scripts/install.lua download | tee install.log
+          grep -q '(download)$' install.log
+          ./bin/reviewkit version

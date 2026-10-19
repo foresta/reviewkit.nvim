@@ -463,12 +463,14 @@ function M.close(opts)
 end
 
 function M.install()
-  notify("building the CLI…")
-  require("reviewkit.install").ensure_async({}, function(result, err)
+  require("reviewkit.install").ensure_async({ log = notify }, function(result, err)
     if not result then
       return vim.notify("[reviewkit] " .. (err or "install failed"), vim.log.levels.ERROR)
     end
-    notify("installed " .. result.path)
+    if result.source == "existing" then
+      return notify(("%s is up to date (%s)"):format(result.path, result.version or "?"))
+    end
+    notify(("installed %s %s (%s)"):format(result.path, result.version or "", result.source))
   end)
 end
 

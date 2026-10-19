@@ -48,3 +48,11 @@ jobs:
       - run: make check-lua
       - run: make test-lua
       - run: make test-integration
+      - name: Install from a local release
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          make dist dist-sums TARGET=x86_64-unknown-linux-musl
+          REVIEWKIT_RELEASE_URL="file://$PWD/dist" nvim --headless -l scripts/install.lua download | tee install.log
+          grep -q '(download)$' install.log
+          ./bin/reviewkit version

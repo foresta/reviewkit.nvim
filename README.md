@@ -4,9 +4,10 @@ A kit of small, composable parts for doing code review inside Neovim — reviewi
 other people's pull requests and reviewing code written by AI coding agents with the
 same workflow.
 
-> Status: design phase. No code yet. See [`docs/architecture.md`](./docs/architecture.md),
-> [`docs/tech-stack.md`](./docs/tech-stack.md) and [`docs/design.md`](./docs/design.md)
-> (Japanese) for the design.
+> Status: early development (0.x). The contract between the CLI and the plugin may
+> still change between minor versions. Design notes (Japanese):
+> [`docs/architecture.md`](./docs/architecture.md), [`docs/tech-stack.md`](./docs/tech-stack.md),
+> [`docs/design.md`](./docs/design.md).
 
 ## Concept
 
@@ -38,27 +39,110 @@ session directly; it calls the CLI and redraws from the session it gets back.
 Because the CLI knows nothing about Neovim, the same binary can drive a review from
 other frontends (an editor, a script, a coding-agent skill).
 
-## Planned layout
+## Requirements
+
+- Neovim >= 0.12, macOS or Linux (Windows is not supported)
+- `git`
+- `curl` and one of `sha256sum` / `shasum` / `openssl` to download the prebuilt CLI,
+  or a Rust toolchain to build it
+- `gh` CLI, authenticated, for pull requests
+- [herdr](https://herdr.dev/) CLI, for sending to a coding agent
+
+## Install
+
+The plugin needs the `reviewkit` binary. `require("reviewkit.install").ensure()` puts one
+in `<plugin>/bin/`: it downloads the release matching the plugin's version and verifies its
+SHA-256, and falls back to `cargo build --release` when no release fits (for example on an
+unreleased commit). `:ReviewInstall` does the same from inside Neovim.
+
+Pinning the plugin to release tags gives you prebuilt binaries; tracking the default branch
+builds with cargo when it is available.
+
+lazy.nvim:
+
+```lua
+{
+  "foresta/reviewkit.nvim",
+  version = "*",
+  build = function()
+    local ok, err = require("reviewkit.install").ensure()
+    if not ok then error(err) end
+  end,
+  opts = {},
+}
+```
+
+dein.vim (TOML):
+
+```toml
+[[plugins]]
+repo = "foresta/reviewkit.nvim"
+build = "nvim --headless -l scripts/install.lua"
+hook_add = """
+lua require("reviewkit").setup({})
+"""
+```
+
+vim.pack (Neovim 0.12):
+
+```lua
+vim.api.nvim_create_autocmd("PackChanged", {
+  callback = function(ev)
+    if ev.data.spec.name == "reviewkit.nvim" and ev.data.kind ~= "delete" then
+      if not ev.data.active then
+        vim.cmd.packadd("reviewkit.nvim")
+      end
+      local ok, err = require("reviewkit.install").ensure()
+      if not ok then
+        vim.notify(err, vim.log.levels.ERROR)
+      end
+    end
+  end,
+})
+vim.pack.add({ { src = "https://github.com/foresta/reviewkit.nvim", version = vim.version.range("*") } })
+require("reviewkit").setup({})
+```
+
+Release assets are plain executables (`reviewkit-<target>`); after downloading one by hand,
+`chmod +x` it. The binary can also be set explicitly with `setup({ cli = { path = "..." } })` or
+`$REVIEWKIT_BIN`. Run `:checkhealth reviewkit` to see which binary is used, whether it matches
+the plugin, and whether `git`, `gh` and `herdr` are available.
+
+## Usage
+
+| Command | |
+|---|---|
+| `:Review diff <base> [<head>]` | review the working tree (or `<head>`) against `<base>` |
+| `:Review pr <number\|url>` | review a pull request |
+| `:Review resume [id]` / `:Review refresh` | reopen a saved session / recompute it |
+| `:Review threads [refresh]` | list the pull request's review threads |
+| `:ReviewSubmit herdr\|github\|clipboard` | send the queue |
+| `:ReviewClose[!]` | close the session (`!` also deletes its state) |
+
+Default keys (disable with `setup({ set_keymaps = false })`; `<Plug>(reviewkit-*)` maps stay):
+`<leader>rc` comment, `<leader>re` / `<leader>rx` edit / remove the comment here,
+`<leader>rd` decision, `<leader>rv` toggle viewed, `<leader>rq` queue, `<leader>rt` / `<leader>rT`
+thread here / thread list, `<leader>rs` submit to herdr, `<leader>ro` side-by-side view.
+Inside the side-by-side view: `]f` / `[f` next / previous file, `]h` / `[h` next / previous hunk.
+
+## Layout
 
 ```
 cli/                  Rust: reviewkit CLI (core, source, sink, git/gh/herdr wrappers)
 lua/reviewkit/
   cli.lua core.lua    thin shim: run the CLI, cache the session, fire User autocmds
   types.lua           LuaCATS types generated from the CLI's JSON schema
-  view/               diff layout, annotations, queue list / input
+  view/               diff layout, annotations, queue list, input, threads
   orchestrator.lua    :Review commands and default keymaps
+  install.lua         download or build the CLI
 ```
 
-## Requirements (planned)
+## Development
 
-- Neovim >= 0.12
-- The `reviewkit` binary: install from GitHub Releases, or build with a Rust toolchain
-  (`cargo build --release`; plugin managers can run this as a build step)
-- `git`
-- `gh` CLI, authenticated (for pull requests)
-- [herdr](https://herdr.dev/) CLI (for sending to a coding agent)
-
-macOS and Linux. Windows is not supported.
+`make test` (Rust + Lua stub + real-binary tiers), `make check` (fmt, clippy, stylua,
+lua-language-server, types drift), `make gen-types`, `make dist` (a release binary for the
+host). Releases are cut by bumping `[workspace.package] version` from `X.Y.Z-dev` to `X.Y.Z`,
+tagging `vX.Y.Z` on that commit, then bumping to the next `-dev`.
 
 ## Related
 

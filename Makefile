@@ -1,6 +1,6 @@
 # debug-bin is phony on purpose: cargo, not make, knows when the sources
 # changed, so a file target would keep testing a stale binary.
-.PHONY: build debug-bin deps test test-rust test-lua test-integration check check-rust check-lua fmt gen-types
+.PHONY: build debug-bin dist dist-sums deps test test-rust test-lua test-integration check check-rust check-lua fmt gen-types
 
 NVIM ?= nvim
 DEBUG_BIN := target/debug/reviewkit
@@ -46,3 +46,13 @@ fmt:
 
 gen-types: debug-bin
 	$(NVIM) -l scripts/gen-types.lua --bin $(DEBUG_BIN)
+
+TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p')
+
+dist:
+	cargo build --release --locked --target $(TARGET)
+	mkdir -p dist
+	cp target/$(TARGET)/release/reviewkit dist/reviewkit-$(TARGET)
+
+dist-sums:
+	cd dist && shasum -a 256 reviewkit-* > SHA256SUMS

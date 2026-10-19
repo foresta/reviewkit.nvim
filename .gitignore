@@ -29,3 +29,6 @@ target/
 
 # Built CLI placed by install.lua
 /bin/
+
+# Release assets built by make dist
+/dist/

@@ -249,7 +249,7 @@ lua/reviewkit/
   core.lua            state を持つ唯一の Lua モジュール。キャッシュ、etags 差分で User autocmd、state_path の監視、Lua 側 sink の登録
   types.lua           生成された LuaCATS + SCHEMA_VERSION
   health.lua          :checkhealth reviewkit
-  install.lua         ensure()（cargo build → <plugin>/bin/）
+  install.lua         ensure()（Releases から取得して検証、合わなければ cargo build → <plugin>/bin/）
   view/diff.lua       タブ・左右ウィンドウ・次 / 前の移動。base 側は file base で取得した読み取り専用バッファ。
                       左右の位置合わせと色付けは Neovim の diff モード（diffthis）。hunk 間の移動とコメント可否は Target から
   view/annotate.lua   extmark の注釈（stale は薄く）
@@ -315,4 +315,3 @@ require("reviewkit").setup({
 - `--expect-rev` を view のどの操作で使うか
 - 未保存バッファの内容を stdin で渡す `refresh --content -`
 - source-graph は同じ CLI のサブコマンドか、別バイナリ `reviewkit-graph` か
-- Releases からのバイナリダウンロードを `install.lua` にいつ足すか
