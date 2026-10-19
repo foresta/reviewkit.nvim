@@ -47,6 +47,7 @@ function M.show_comments()
       col = 1,
       text = label(c),
       type = c.stale and "W" or "",
+      user_data = { path = c.path, side = c.side, line = c.line },
     })
   end
   M.replace(items, TITLE .. " queue")
@@ -91,6 +92,7 @@ function M.show_threads()
         first and (first.body:match("^[^\n]*") or "") or ""
       ),
       type = (t.resolved or t.outdated) and "" or "I",
+      user_data = { path = t.path, side = t.side, line = t.line or t.original_line or 1, thread_id = t.id },
     })
   end
   M.replace(items, TITLE .. " threads")
@@ -108,6 +110,43 @@ end
 local function current_title()
   local title = vim.fn.getqflist({ title = 1 }).title
   return type(title) == "string" and title or ""
+end
+
+---@return { path: string, side: reviewkit.Side, line: integer, thread_id?: string }?
+local function entry_under_cursor()
+  local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
+  if (info and info.loclist == 1) or not vim.startswith(current_title(), TITLE) then
+    return nil
+  end
+  local item = vim.fn.getqflist()[vim.fn.line(".")]
+  local data = item and item.user_data
+  return type(data) == "table" and data or nil
+end
+
+--- `<CR>` on a base-side entry would open the head file at a base line
+--- number; those go to the base window of the diff view instead.
+function M.open_entry()
+  local data = entry_under_cursor()
+  local target = data and core.target(data.path)
+  local in_view = data and (data.side == "base" or (target and target.status == "deleted"))
+  if not data or not in_view then
+    local count = vim.v.count > 0 and tostring(vim.v.count) or ""
+    return vim.cmd('execute "normal! ' .. count .. '\\<CR>"')
+  end
+  vim.cmd("wincmd p")
+  require("reviewkit.view.diff").reveal(data.path, data.side, data.line)
+end
+
+function M.preview_thread()
+  local data = entry_under_cursor()
+  if not data or not data.thread_id then
+    return vim.cmd("normal! K")
+  end
+  for _, t in ipairs(core.threads()) do
+    if t.id == data.thread_id then
+      return require("reviewkit.view.thread").show(t)
+    end
+  end
 end
 
 --- Keeps whichever of our lists is on screen current, and empties it when
@@ -136,6 +175,14 @@ function M.attach()
       M.replace({}, TITLE .. " (closed)")
     end
   end, group)
+  vim.api.nvim_create_autocmd("FileType", {
+    group = group,
+    pattern = "qf",
+    callback = function(args)
+      vim.keymap.set("n", "<CR>", M.open_entry, { buffer = args.buf, desc = "reviewkit: open entry" })
+      vim.keymap.set("n", "K", M.preview_thread, { buffer = args.buf, desc = "reviewkit: show the thread" })
+    end,
+  })
 end
 
 function M.toggle()

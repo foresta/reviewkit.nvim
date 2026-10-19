@@ -200,7 +200,8 @@ local function show_head(session, target)
 end
 
 ---@param path string
-function M.show(path)
+---@param on_shown? fun() runs once the base side is in place
+function M.show(path, on_shown)
   local session = core.session()
   local target = core.target(path)
   if not session or not target or not M.is_open() then
@@ -236,6 +237,9 @@ function M.show(path)
     keymaps(left_buf)
     keymaps(api.nvim_win_get_buf(state.right))
     state.showing = false
+    if on_shown then
+      pcall(on_shown)
+    end
     if state.retarget then
       state.retarget = false
       vim.schedule(M.retarget)
@@ -249,7 +253,8 @@ function M.show(path)
 end
 
 ---@param path? string target to show first; the first target otherwise
-function M.open(path)
+---@param on_shown? fun()
+function M.open(path, on_shown)
   local targets = core.targets()
   if #targets == 0 then
     return
@@ -264,7 +269,27 @@ function M.open(path)
   else
     api.nvim_set_current_tabpage(state.tab)
   end
-  M.show(path or state.path or targets[1].path)
+  M.show(path or state.path or targets[1].path, on_shown)
+end
+
+--- Places the cursor on a line of either side. The base side only exists
+--- in this view, so jumps to base-side comments and threads come here.
+---@param path string
+---@param side reviewkit.Side
+---@param line integer
+function M.reveal(path, side, line)
+  if not core.target(path) then
+    return
+  end
+  M.open(path, function()
+    local win = side == "base" and state.left or state.right
+    if not win then
+      return
+    end
+    api.nvim_set_current_win(win)
+    local last = api.nvim_buf_line_count(api.nvim_win_get_buf(win))
+    api.nvim_win_set_cursor(win, { math.max(1, math.min(line, last)), 0 })
+  end)
 end
 
 function M.retarget()

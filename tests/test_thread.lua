@@ -270,6 +270,53 @@ T["thread"][":Review threads lists threads in the quickfix, refresh fetches firs
   eq(items[2].text, "◆ alice (1) [outdated] why this?")
 end
 
+T["thread"]["K in the thread list opens an outdated thread that has no line"] = function()
+  local outdated = thread({ id = "PRRT_2", line = vim.NIL, original_line = 2, outdated = true })
+  open_pr(nil, pr_session({ threads = { outdated } }))
+  child.cmd("Review threads")
+  child.cmd("copen")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 1, 0 })")
+  child.type_keys("K")
+  eq(child.lua_get("require('reviewkit.view.thread').is_open()"), true)
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]"), "src/a.rs:2  [outdated]")
+end
+
+T["thread"]["<CR> on a base-side entry lands in the diff view's base window"] = function()
+  local base_thread = thread({ side = "base", line = 3, original_line = 3 })
+  open_pr(nil, pr_session({ threads = { base_thread } }))
+  child.cmd("Review threads")
+  child.cmd("copen")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 1, 0 })")
+  child.type_keys("<CR>")
+  wait("vim.api.nvim_get_current_win() == require('reviewkit.view.diff')._state().left")
+  eq(child.lua_get("vim.api.nvim_get_current_win() == require('reviewkit.view.diff')._state().left"), true)
+  eq(child.lua_get("vim.api.nvim_win_get_cursor(0)[1]"), 3)
+  eq(child.lua_get("vim.b.reviewkit_side"), "base")
+end
+
+T["thread"]["<CR> on a head-side entry keeps the normal quickfix jump"] = function()
+  open_pr()
+  child.cmd("Review threads")
+  child.cmd("copen")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 1, 0 })")
+  child.type_keys("<CR>")
+  eq(child.lua_get("vim.bo.buftype"), "")
+  eq(child.lua_get("vim.api.nvim_win_get_cursor(0)[1]"), 4)
+end
+
+T["thread"]["a list from another plugin keeps the default <CR>"] = function()
+  open_pr()
+  child.lua(
+    "vim.fn.setqflist({}, ' ', { title = 'grep', items = { { filename = '"
+      .. worktree
+      .. "/src/a.rs', lnum = 2, text = 'x' } } })"
+  )
+  child.cmd("copen")
+  child.type_keys("<CR>")
+  eq(child.lua_get("vim.bo.buftype"), "")
+  eq(child.lua_get("vim.api.nvim_win_get_cursor(0)[1]"), 2)
+end
+
 T["thread"]["the annotation shows a pending resolve"] = function()
   local queued = pr_session({ thread_actions = { { thread_id = "PRRT_1", action = "resolve" } } })
   open_pr(nil, queued)
