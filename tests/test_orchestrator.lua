@@ -300,4 +300,23 @@ T["orchestrator"][":Review pr opens a pull request session and pr_info reads pr.
   eq(d.results[1].title, "Add k")
 end
 
+T["orchestrator"]["only worktree files, HEAD and refs count as changes for the watcher"] = function()
+  local relevant = function(name)
+    return child.lua_get(("require('reviewkit.orchestrator')._relevant_change(%q)"):format(name))
+  end
+  eq(relevant("src/a.rs"), true)
+  eq(relevant("src/index"), true)
+  eq(relevant(".git/HEAD"), true)
+  eq(relevant(".git/refs/heads/main"), true)
+  eq(relevant(".git/packed-refs"), true)
+  eq(relevant(".git/objects/72/65a9"), false)
+  eq(relevant(".git/index"), false)
+  eq(relevant(".git/refs/heads/main.lock"), false)
+  eq(relevant(".git"), false)
+  eq(relevant("vendor/lib/.git/index"), false)
+  eq(relevant("vendor/lib/.git"), false)
+  eq(relevant(".git/reftable/tables.list"), true)
+  eq(relevant("Cargo.lock"), true)
+end
+
 return T

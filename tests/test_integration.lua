@@ -130,4 +130,86 @@ T["real binary: :Review diff → comment → :ReviewSubmit herdr reaches a fake 
   child.stop()
 end
 
+T["real binary: a queued comment does not make the worktree watcher refresh by itself"] = function()
+  local bin = vim.env.REVIEWKIT_REAL_BIN
+  if not bin or bin == "" then
+    MiniTest.skip("REVIEWKIT_REAL_BIN is not set")
+  end
+  if vim.uv.os_uname().sysname ~= "Darwin" then
+    MiniTest.skip("only macOS watches the worktree recursively")
+  end
+  local repo = vim.fn.resolve(temp_repo())
+  local child = MiniTest.new_child_neovim()
+  child.restart({ "-u", helpers.root .. "/scripts/minimal_init.lua" })
+  child.lua(([[
+    vim.env.REVIEWKIT_BIN = %q
+    require("reviewkit").setup({ cli = { state_dir = %q } })
+    vim.cmd.cd(%q)
+    vim.notify = function() end
+    local cli = require("reviewkit.cli")
+    local call = cli.call
+    _G.refreshes = 0
+    cli.call = function(args, ...)
+      if args[1] == "session" and args[2] == "refresh" then
+        _G.refreshes = _G.refreshes + 1
+      end
+      return call(args, ...)
+    end
+  ]]):format(bin, helpers.fake_dir(), repo))
+  child.cmd("Review diff HEAD")
+  assert(child.lua_get("vim.wait(10000, function() return require('reviewkit.core').session() ~= nil end, 20)"))
+  child.lua(
+    "require('reviewkit.core').add_comment({ path = 'f.txt', side = 'head', line = 2, body = 'b' }, function() _G.added = true end)"
+  )
+  assert(child.lua_get("vim.wait(10000, function() return _G.added end, 20)"))
+  child.lua([[
+    local last, stable_since = -1, vim.uv.now()
+    vim.wait(10000, function()
+      if _G.refreshes ~= last then
+        last, stable_since = _G.refreshes, vim.uv.now()
+      end
+      return vim.uv.now() - stable_since > 1000
+    end, 50)
+  ]])
+  child.lua("_G.refreshes = 0")
+  child.lua("vim.wait(3000)")
+  eq(child.lua_get("_G.refreshes"), 0)
+  child.stop()
+end
+
+T["real binary: a commit in a linked worktree refreshes the session"] = function()
+  local bin = vim.env.REVIEWKIT_REAL_BIN
+  if not bin or bin == "" then
+    MiniTest.skip("REVIEWKIT_REAL_BIN is not set")
+  end
+  local main = vim.fn.resolve(temp_repo())
+  local linked = vim.fn.resolve(vim.fn.tempname())
+  local function git(dir, args)
+    local res = vim
+      .system(
+        vim.list_extend({ "git", "-c", "user.name=t", "-c", "user.email=t@example.com" }, args),
+        { cwd = dir, text = true }
+      )
+      :wait()
+    assert(res.code == 0, res.stderr)
+  end
+  git(main, { "worktree", "add", "-q", "-b", "feature", linked })
+  vim.fn.writefile({ "a", "b", "c", "d" }, linked .. "/f.txt")
+  local child = MiniTest.new_child_neovim()
+  child.restart({ "-u", helpers.root .. "/scripts/minimal_init.lua" })
+  child.lua(([[
+    vim.env.REVIEWKIT_BIN = %q
+    require("reviewkit").setup({ cli = { state_dir = %q } })
+    vim.cmd.cd(%q)
+    vim.notify = function() end
+  ]]):format(bin, helpers.fake_dir(), linked))
+  child.cmd("Review diff HEAD")
+  assert(child.lua_get("vim.wait(10000, function() return require('reviewkit.core').session() ~= nil end, 20)"))
+  eq(child.lua_get("#require('reviewkit.core').targets()"), 1)
+  child.lua("vim.wait(500)")
+  git(linked, { "commit", "-q", "-am", "agent" })
+  assert(child.lua_get("vim.wait(10000, function() return #require('reviewkit.core').targets() == 0 end, 50)"))
+  child.stop()
+end
+
 return T

@@ -222,7 +222,15 @@ impl<'a> Repository<'a> {
     /// following a comment later needs the old content to diff against. Only
     /// commented files are stored; the objects dangle and `git gc` collects
     /// them like any stash leftover.
+    ///
+    /// Writing an object git already has still touches its mtime, which
+    /// file watchers see as a change in `.git/objects`; existing objects are
+    /// therefore only looked up.
     pub fn hash_object_write(&self, path: &str) -> Result<String> {
+        let id = self.hash_object(path)?;
+        if self.run(&["cat-file", "-e", &id]).is_ok() {
+            return Ok(id);
+        }
         let out = self.run(&["hash-object", "-w", "--", path])?;
         Ok(text(&out).trim_end().to_string())
     }

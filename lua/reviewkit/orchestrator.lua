@@ -91,7 +91,8 @@ end
 
 ---@param dir string
 ---@param recursive boolean
-local function add_watcher(dir, recursive)
+---@param relevant fun(filename: string): boolean
+local function add_watcher(dir, recursive, relevant)
   local watcher = vim.uv.new_fs_event()
   if not watcher then
     return
@@ -100,9 +101,7 @@ local function add_watcher(dir, recursive)
     if err then
       return
     end
-    -- git's own lock files flicker on every command; ignoring them avoids a
-    -- refresh storm while the agent commits.
-    if filename and (filename:match("%.lock$") or filename:match("index$")) then
+    if filename and filename ~= "" and not relevant(filename) then
       return
     end
     schedule_refresh()
@@ -120,12 +119,60 @@ local function watch_worktree(session)
   state.debounce = vim.uv.new_timer()
   -- `recursive` is honoured on macOS; Linux inotify watches only the root,
   -- where BufWritePost and FocusGained still cover the reviewer's own edits.
-  add_watcher(session.source.worktree, true)
-  -- A linked worktree keeps its .git elsewhere; commits land there.
-  local git_dir = session.repo.root .. "/.git"
-  if vim.fn.isdirectory(git_dir) == 1 and session.repo.root ~= session.source.worktree then
-    add_watcher(git_dir, false)
+  add_watcher(session.source.worktree, true, M._relevant_change)
+  -- A linked worktree (`git worktree add`) keeps HEAD and refs outside the
+  -- worktree, where the recursive watch above never looks.
+  local worktree = session.source.worktree
+  vim.system(
+    { "git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir" },
+    { text = true },
+    function(res)
+      local dirs = res.code == 0 and vim.split(vim.trim(res.stdout or ""), "\n") or {}
+      vim.schedule(function()
+        local git_dir, common = dirs[1], dirs[2]
+        local still_watching = state.debounce ~= nil and #state.watchers > 0
+        if not still_watching or not git_dir or not common or vim.startswith(git_dir, worktree .. "/") then
+          return
+        end
+        add_watcher(git_dir, false, function(name)
+          return name == "HEAD"
+        end)
+        add_watcher(common, false, function(name)
+          return name == "packed-refs"
+        end)
+        local not_lock = function(name)
+          return not name:match("%.lock$")
+        end
+        add_watcher(common .. "/refs", true, not_lock)
+        -- Linux ignores `recursive`; plain branch names live right here.
+        add_watcher(common .. "/refs/heads", false, not_lock)
+      end)
+    end
+  )
+end
+
+--- Inside a `.git` directory only a moved HEAD or ref changes what is
+--- reviewed. Objects, the index and lock files change on every git command,
+--- including the ones a refresh runs itself, so reacting to them would
+--- refresh forever. Nested repositories have their own `.git` directories.
+---@param filename string path relative to the worktree
+---@return boolean
+function M._relevant_change(filename)
+  local name = filename:gsub("\\", "/")
+  if name == ".git" or name:match("/%.git$") then
+    return false
   end
+  local inside = name:match("^%.git/(.*)$") or name:match("/%.git/(.*)$")
+  if not inside then
+    return true
+  end
+  if inside:match("%.lock$") then
+    return false
+  end
+  return inside == "HEAD"
+    or inside == "packed-refs"
+    or inside:match("^refs/") ~= nil
+    or inside:match("^reftable/") ~= nil
 end
 
 local function attach()
