@@ -220,8 +220,9 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   （コメント単位の last-writer-wins）。他インスタンスの変更は `state_path` の `vim.uv.new_fs_event`
   （150 ms デバウンス）→ `session get` → etags 差分でイベント発火。`--expect-rev N` で `E_CONFLICT` を返す
   CAS は定義だけして最初は使わない
-- 二重送信の防止: gh を呼ぶ前に `pending_submit.json` を書く。次のコマンドで残っていれば threads を取り直し、
-  `(path, side, line, body)` で突き合わせてから消す
+- 二重送信の防止: gh を呼ぶ前に `pending_submit.json` を書く。次の GitHub への submit で残っていれば threads を取り直し、
+  「同じファイル・side に、自分が、同じ本文で、試行の開始以後に投稿したもの」を送信済みとみなしてから消す（行は push で動くので見ない）。
+  残っている間は Session の `pending_submit` が true（ファイルの有無から毎回求める）で、Lua は開いたときに知らせる
 - GitHub Enterprise は `repo.host` を gh の `--hostname` に渡す
 
 ## 6. hunk・コメント可能範囲・行ずれ

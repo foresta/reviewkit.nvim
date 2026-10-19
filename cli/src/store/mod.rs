@@ -39,13 +39,26 @@ impl Store {
 
     pub fn load(&self, id: &str) -> Result<Session> {
         let path = self.dir.session_file(id)?;
-        read_session(&path, id).map(|(session, _)| session)
+        let (mut session, _) = read_session(&path, id)?;
+        self.mark_pending(&mut session);
+        Ok(session)
+    }
+
+    fn mark_pending(&self, session: &mut Session) {
+        session.pending_submit = self
+            .dir
+            .session_dir(&session.id)
+            .map(|dir| dir.join(PENDING_SUBMIT_FILE).exists())
+            .unwrap_or(false);
     }
 
     fn load_for_write(&self, id: &str) -> Result<Session> {
         let path = self.dir.session_file(id)?;
         match read_session(&path, id)? {
-            (session, None) => Ok(session),
+            (mut session, None) => {
+                self.mark_pending(&mut session);
+                Ok(session)
+            }
             (_, Some(writer)) => Err(newer_writer(&path, &writer)),
         }
     }
@@ -77,6 +90,7 @@ impl Store {
             let mut session = self.load_for_write(id)?;
             let value = apply(&mut session)?;
             self.commit(&mut session)?;
+            self.mark_pending(&mut session);
             Ok((session, value))
         })
     }
@@ -125,6 +139,7 @@ impl Store {
             };
             let value = apply(&mut session)?;
             self.commit(&mut session)?;
+            self.mark_pending(&mut session);
             Ok((session, value))
         });
         if result.is_err() && created && !self.exists(id) {
@@ -199,6 +214,10 @@ impl Store {
         )
     }
 }
+
+/// Written by the GitHub sink before it sends; the store only reports
+/// whether it is there.
+pub const PENDING_SUBMIT_FILE: &str = "pending_submit.json";
 
 pub const FETCH_LOCK_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -605,7 +624,7 @@ mod tests {
             .collect();
         assert_eq!(
             (SCHEMA_REVISION, hash.as_str()),
-            (0, "5ad912e6be70aa80"),
+            (1, "def0784e21517b57"),
             "the persisted shape of Session changed (doc comments do not count): bump SCHEMA_REVISION and update this hash"
         );
     }

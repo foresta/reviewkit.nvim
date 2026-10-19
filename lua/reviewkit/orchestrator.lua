@@ -247,6 +247,12 @@ local function announce(session)
     what = ("#%d %s"):format(session.source.number, session.source.title)
   end
   notify(("%s: %d file%s to review"):format(what, n, n == 1 and "" or "s"))
+  if session.pending_submit then
+    vim.notify(
+      "[reviewkit] an earlier GitHub submit was cut off; :ReviewSubmit github checks GitHub before sending again",
+      vim.log.levels.WARN
+    )
+  end
 end
 
 --- Opens a session of either kind and shows its targets.
