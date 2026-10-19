@@ -374,3 +374,85 @@ fn a_file_deleted_in_the_index_but_recreated_untracked_is_one_modified_target() 
     assert_eq!(keeps[0]["base_blob"].as_str().unwrap().len(), 40);
     assert_eq!(keeps[0]["commentable"]["base"], serde_json::json!([[1, 11]]));
 }
+
+#[test]
+fn a_three_dot_base_compares_against_the_merge_base() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.write("feature.txt", "f\n");
+    repo.git(&["add", "feature.txt"]);
+    repo.git(&["commit", "-q", "-m", "feature"]);
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("main-only.txt", "m\n");
+    repo.git(&["add", "main-only.txt"]);
+    repo.git(&["commit", "-q", "-m", "main moves on"]);
+    repo.git(&["checkout", "-q", "feature"]);
+
+    let paths = |body: &serde_json::Value| -> Vec<String> {
+        body["session"]["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["path"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let tip = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "main"])
+            .output()
+            .unwrap(),
+    );
+    assert!(paths(&tip).contains(&"main-only.txt".to_string()));
+
+    let worktree = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "main..."])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(paths(&worktree), vec!["feature.txt"]);
+    assert_eq!(worktree["session"]["source"]["base_spec"], "main...");
+
+    let base_before = worktree["session"]["base"]["sha"].clone();
+    repo.write("feature.txt", "f\nmore\n");
+    repo.git(&["commit", "-q", "-am", "feature again"]);
+    repo.git(&["merge", "-q", "--no-edit", "main"]);
+    let reopened = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "main..."])
+            .output()
+            .unwrap(),
+    );
+    assert_ne!(reopened["session"]["base"]["sha"], base_before);
+    assert_eq!(paths(&reopened), vec!["feature.txt"]);
+
+    repo.git(&["checkout", "-q", "main"]);
+    let range = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "main...feature"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(paths(&range), vec!["feature.txt"]);
+    assert_eq!(range["session"]["source"]["head_spec"], "feature");
+}
+
+#[test]
+fn unrelated_histories_have_no_merge_base_and_leave_no_session() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.git(&["checkout", "-q", "--orphan", "other"]);
+    repo.git(&["rm", "-rq", "--cached", "."]);
+    repo.write("o.txt", "o\n");
+    repo.git(&["add", "o.txt"]);
+    repo.git(&["commit", "-q", "-m", "orphan"]);
+    let out = reviewkit(&state, &repo)
+        .args(["session", "open", "--local", "--base", "main..."])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(body["error"]["message"].as_str().unwrap().contains("no merge-base"));
+    assert!(!state.path().join("sessions").exists());
+}

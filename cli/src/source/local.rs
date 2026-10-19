@@ -20,9 +20,37 @@ pub struct LocalSpec {
 }
 
 impl LocalSpec {
+    /// The base keeps the `A...` form rather than the resolved sha, so every
+    /// refresh finds the merge-base again after either side moves.
+    pub fn new(base: String, head: Option<String>) -> Self {
+        match (base.split_once("..."), head) {
+            (Some((a, b)), None) if !b.is_empty() => LocalSpec {
+                base: format!("{}...", if a.is_empty() { "HEAD" } else { a }),
+                head: Some(b.to_string()),
+            },
+            (_, head) => LocalSpec { base, head },
+        }
+    }
+
     fn head_label(&self) -> &str {
         self.head.as_deref().unwrap_or(WORKTREE)
     }
+}
+
+fn resolve_base(repo: &Repository<'_>, base: &str, head: Option<&str>) -> Result<String> {
+    let Some(a) = base.strip_suffix("...") else {
+        return repo.resolve_commit(base);
+    };
+    let other_spec = head.unwrap_or("HEAD");
+    let a = repo.resolve_commit(a)?;
+    let other = repo.resolve_commit(other_spec)?;
+    repo.merge_base(&a, &other).map_err(|err| {
+        // `git merge-base` exits 1 only when the histories share no commit.
+        match err.details.get("exit").and_then(|e| e.as_i64()) {
+            Some(1) => Error::invalid(format!("{base} has no merge-base with {other_spec}")),
+            _ => err,
+        }
+    })
 }
 
 /// `local/<sha256(root)[:12]>/<base>..<head>`. The root hash keeps sessions
@@ -41,10 +69,10 @@ pub fn session_id(root: &Path, spec: &LocalSpec) -> String {
 /// Specs are resolved before the store touches disk, so a typo in --base
 /// does not leave an empty session directory behind.
 pub fn open(store: &Store, repo: &Repository<'_>, spec: &LocalSpec) -> Result<Session> {
-    repo.resolve_commit(&spec.base)?;
     if let Some(head) = &spec.head {
         repo.resolve_commit(head)?;
     }
+    resolve_base(repo, &spec.base, spec.head.as_deref())?;
     let id = session_id(repo.root(), spec);
     let (session, ()) = store.open_or_create(
         &id,
@@ -100,7 +128,7 @@ pub fn refresh(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
     let base_spec = base_spec.clone();
     let head_spec = (head_spec != WORKTREE).then(|| head_spec.clone());
 
-    let base_sha = repo.resolve_commit(&base_spec)?;
+    let base_sha = resolve_base(repo, &base_spec, head_spec.as_deref())?;
     let head_sha = head_spec.as_deref().map(|spec| repo.resolve_commit(spec)).transpose()?;
     let targets = targets::build(repo, &base_sha, head_sha.as_deref())?;
 
@@ -121,6 +149,18 @@ pub fn refresh(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_three_dot_range_moves_its_right_side_to_the_head() {
+        let spec = LocalSpec::new("main...feature".into(), None);
+        assert_eq!((spec.base.as_str(), spec.head.as_deref()), ("main...", Some("feature")));
+        let left_out = LocalSpec::new("...feature".into(), None);
+        assert_eq!(left_out.base, "HEAD...");
+        let kept = LocalSpec::new("main...".into(), None);
+        assert_eq!((kept.base.as_str(), kept.head.as_deref()), ("main...", None));
+        let explicit = LocalSpec::new("main...x".into(), Some("y".into()));
+        assert_eq!(explicit.base, "main...x");
+    }
 
     #[test]
     fn session_id_is_stable_and_path_safe() {
