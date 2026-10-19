@@ -444,7 +444,8 @@ function M.submit(sink, opts, cb)
   opts = opts or {}
   local lua_sink = state.sinks[sink]
   if lua_sink then
-    return lua_sink.submit(session, opts, function(sink_err, result)
+    local merged = vim.tbl_extend("force", config.get().sinks[sink] or {}, opts)
+    return lua_sink.submit(session, merged, function(sink_err, result)
       if sink_err then
         return cb(sink_err)
       end

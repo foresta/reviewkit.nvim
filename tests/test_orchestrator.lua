@@ -210,11 +210,12 @@ T["orchestrator"]["ReviewSubmit clipboard goes through submit apply and fills th
       },
     },
   })
+  child.lua("require('reviewkit').setup({ sinks = { clipboard = { register = 'r' } } })")
   child.cmd("Review diff HEAD~1")
   wait_notice("1 file to review")
   child.cmd("ReviewSubmit clipboard")
   wait_notice("clipboard: 1 sent")
-  eq(child.lua_get("vim.fn.getreg('+'):find('1. src/a.rs:4\\ncopy me', 1, true) ~= nil"), true)
+  eq(child.lua_get("vim.fn.getreg('r'):find('1. src/a.rs:4\\ncopy me', 1, true) ~= nil"), true)
   local applied
   for _, call in ipairs(helpers.calls(dir)) do
     if call.args[1] == "submit" and call.args[2] == "apply" then
