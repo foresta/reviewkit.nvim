@@ -358,6 +358,7 @@ pub fn reconcile_pending(
         if posted && unchanged(&p.id, &p.body) {
             sent.push(Sent {
                 comment_id: p.id.clone(),
+                version: None,
                 remote_id: None,
                 url: None,
             });
@@ -368,6 +369,7 @@ pub fn reconcile_pending(
         if posted && unchanged(&r.id, &r.body) {
             sent.push(Sent {
                 comment_id: r.id.clone(),
+                version: None,
                 remote_id: None,
                 url: None,
             });
@@ -406,6 +408,7 @@ pub fn reconcile_pending(
         },
         summary: String::new(),
         mode: DeliveryMode::Sent,
+        attempted: None,
     }))
 }
 
@@ -483,6 +486,7 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
             for id in &plan.thread_comment_ids {
                 sent.push(Sent {
                     comment_id: id.clone(),
+                    version: None,
                     remote_id: review_id.clone(),
                     url: url.clone(),
                 });
@@ -516,6 +520,7 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
         if node.is_object() {
             sent.push(Sent {
                 comment_id: reply.comment_id.clone(),
+                version: None,
                 remote_id: node["id"].as_str().map(str::to_string),
                 url: node["url"].as_str().map(str::to_string),
             });
@@ -554,6 +559,13 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
         decision,
         summary: String::new(),
         mode: DeliveryMode::Sent,
+        attempted: Some(
+            plan.thread_comment_ids
+                .iter()
+                .cloned()
+                .chain(plan.replies.iter().map(|r| r.comment_id.clone()))
+                .collect(),
+        ),
     })
 }
 

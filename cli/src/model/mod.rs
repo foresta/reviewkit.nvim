@@ -36,7 +36,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// Bumped for every field or enum value added to a persisted type. A CLI
 /// does not write a session last written by a higher revision: it would drop
 /// what it cannot represent. Recorded outside the contract, in `_writer`.
-pub const SCHEMA_REVISION: u32 = 2;
+pub const SCHEMA_REVISION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VersionInfo {

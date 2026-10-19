@@ -386,6 +386,7 @@ mod tests {
                 url: None,
                 sent: vec![Sent {
                     comment_id: "c_1".into(),
+                    version: None,
                     remote_id: None,
                     url: None,
                 }],
@@ -405,6 +406,7 @@ mod tests {
                 }],
                 decision: DecisionStatus::NotApplicable,
                 mode: DeliveryMode::Sent,
+                attempted: None,
                 summary: "1 sent, 1 skipped, 1 failed".into(),
             },
         });

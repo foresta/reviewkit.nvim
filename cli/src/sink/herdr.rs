@@ -246,6 +246,7 @@ pub fn submit(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Res
                 .into_iter()
                 .map(|c| Sent {
                     comment_id: c.id.clone(),
+                    version: None,
                     remote_id: None,
                     url: None,
                 })
@@ -260,6 +261,7 @@ pub fn submit(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Res
             } else {
                 DeliveryMode::Sent
             },
+            attempted: Some(to_send(session).iter().map(|c| c.id.clone()).collect()),
         },
         Err(error) if error.code == ErrorCode::EHerdrMissing => return Err(error),
         Err(error) => SinkResult {
@@ -280,6 +282,7 @@ pub fn submit(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Res
             },
             summary: String::new(),
             mode: DeliveryMode::Sent,
+            attempted: Some(to_send(session).iter().map(|c| c.id.clone()).collect()),
         },
     };
     Ok(result)

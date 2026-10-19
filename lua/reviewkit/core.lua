@@ -458,6 +458,18 @@ function M.submit(sink, opts, cb)
         })
       end
       result.sink = result.sink or sink
+      -- The sink worked from this snapshot; stamping it here lets the CLI
+      -- keep comments edited while the sink was running, whatever the sink.
+      local version = {}
+      local attempted = {}
+      for _, c in ipairs(session.comments) do
+        version[c.id] = c.updated_at
+        table.insert(attempted, c.id)
+      end
+      for _, s in ipairs(result.sent or {}) do
+        s.version = s.version or version[s.comment_id]
+      end
+      result.attempted = result.attempted or attempted
       cli.call({ "submit", "apply", "--session", session.id }, { stdin = result }, function(run_err, envelope)
         take_session(run_err, envelope, function(take_err, taken)
           cb(take_err, envelope and envelope.data or nil, taken)

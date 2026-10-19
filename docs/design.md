@@ -141,13 +141,14 @@ SubmitOptions {             -- submit の stdin（省略可）
 
 SinkResult {
   sink   at   url: string|null
-  sent:    { comment_id, remote_id?, url? }[]
+  sent:    { comment_id, remote_id?, url?, version? }[]  -- version: 渡したときのコメントの updated_at
   failed:  { comment_id|null, error: Error }[]          -- null は review 全体の失敗
   skipped: { comment_id, reason: Reason }[]
   thread_actions: { thread_id, action, status: "sent" | "failed", error?: Error }[]
   decision: "sent|failed|skipped|not_applicable"
   summary: string                                       -- "3 sent, 1 skipped (outside diff), 0 failed"
   mode: "sent" | "staged" | "copied"                    -- 既定 sent。staged / copied は消費しない
+  attempted?: comment_id[]                              -- 試行に含めたコメント。省略は全件
 }
 ```
 
@@ -155,7 +156,8 @@ SinkResult {
 - SinkResult の適用（D4）: `sent` のコメントには `deliveries` に `{ sink, at, mode, url? }` を足す。キューから消して
   `Session.history` へ移す（消費する）のは、`SinkResult.mode = sent` かつ sink がセッション種類の主な送り先
   （PR = github、local = herdr。`SubmitOptions.consume` で上書き。github は二重投稿を避けるため常に消費）のときだけ。
-  送れたコメントの `last_error` は消し、全体失敗の印はその sink へ送り済みのコメントには付けない。herdr の stage は `staged`、clipboard は
+  送れたコメントの `last_error` は消し、全体失敗の印はその sink へ送り済みのコメントと `attempted` 外のコメントには付けない。
+  `sent[].version` がコメントの今の `updated_at` と違う（送信中に編集された）ものは送れなかった扱いでキューに残し、結果からも外す。herdr の stage は `staged`、clipboard は
   `copied` で、消費しない。herdr は自分へ `sent` 済みのコメントを再送しない。本文・suggestion・kind を変えると `deliveries` は消える。
   `failed` は `last_error` を付けて残す。`skipped` はそのまま。`thread_actions` は `sent` のものだけ消す（PR の refresh でも、
   スレッドが消えたか GitHub 側で既にその状態になったものは消す）。`decision` は `sent` かつ消費のときだけ消す。`last_submit` に結果を記録する

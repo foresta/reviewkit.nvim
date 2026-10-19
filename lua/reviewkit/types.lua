@@ -247,6 +247,7 @@ M.SCHEMA_VERSION = 1
 ---@field comment_id string
 ---@field remote_id? string
 ---@field url? string
+---@field version? string The comment's `updated_at` when its text was handed to the sink. A comment edited since then was not what got delivered.
 
 ---@class reviewkit.Session
 ---@field base reviewkit.RevRef
@@ -293,6 +294,7 @@ M.SCHEMA_VERSION = 1
 --- default to empty and are filled by core.
 ---@class reviewkit.SinkResult
 ---@field at? string
+---@field attempted? string[] `None` means every queued comment; given, a whole failure marks only these, so comments added while the sink was sending stay unmarked.
 ---@field decision reviewkit.DecisionStatus
 ---@field failed reviewkit.Failed[]
 ---@field mode? reviewkit.DeliveryMode
