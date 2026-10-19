@@ -135,6 +135,10 @@ fn pr_number_without_a_github_origin_is_invalid_and_merged_prs_use_the_recorded_
     let state = tempfile::tempdir().unwrap();
     let remote = Remote::new();
     let gh = FakeGh::new(&remote, "MERGED", serde_json::json!([]));
+    git_in(
+        remote.clone.path(),
+        &["remote", "set-url", "origin", remote.bare.path().to_str().unwrap()],
+    );
     let out = reviewkit(&state, &remote, &gh)
         .args(["session", "open", "--pr", "7"])
         .output()
@@ -310,7 +314,10 @@ fn reopen_skips_the_fetch_when_nothing_moved_and_fetches_when_the_base_moves() {
         remote.clone.path(),
         &["commit", "-q", "--allow-empty", "-m", "base moved"],
     );
-    git_in(remote.clone.path(), &["push", "-q", "origin", "main"]);
+    git_in(
+        remote.clone.path(),
+        &["push", "-q", remote.bare.path().to_str().unwrap(), "main"],
+    );
     let new_base = git_in(remote.clone.path(), &["rev-parse", "main"]);
     let rules = std::fs::read_to_string(gh.dir.path().join("responses.json"))
         .unwrap()

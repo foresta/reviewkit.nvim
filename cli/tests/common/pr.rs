@@ -6,8 +6,7 @@ use std::process::Command as Process;
 use super::{Repo, fixture_bin, real_git};
 
 /// A bare "remote" with main and a PR branch exposed as refs/pull/7/head,
-/// plus the user's clone of it. The clone's origin is the bare path, so the
-/// mirror can fetch without a network.
+/// plus the user's clone of it, which does not have the PR's commits.
 pub struct Remote {
     pub bare: tempfile::TempDir,
     pub clone: Repo,
@@ -57,6 +56,14 @@ impl Remote {
         let head_sha = git_in(clone.path(), &["rev-parse", "pr-branch"]);
         let base_sha = git_in(clone.path(), &["rev-parse", "main"]);
         git_in(clone.path(), &["branch", "-D", "pr-branch"]);
+        // A reviewer's checkout has never fetched someone else's PR; without
+        // pruning, the objects made above would hide reads from the wrong repo.
+        git_in(clone.path(), &["reflog", "expire", "--expire=now", "--all"]);
+        git_in(clone.path(), &["gc", "-q", "--prune=now"]);
+        git_in(
+            clone.path(),
+            &["remote", "set-url", "origin", "https://github.com/o/r.git"],
+        );
         Self {
             bare,
             clone,
@@ -105,10 +112,10 @@ impl FakeGh {
     }
 }
 
-/// The clone's origin is a local bare path, not GitHub, so the mirror is
-/// created empty with `https://github.com/o/r.git` as its remote; git's
+/// The clone's origin is `https://github.com/o/r.git`, like a real checkout
+/// of the PR's repository, so the mirror is seeded from it; git's
 /// `url.<bare>.insteadOf` (via GIT_CONFIG_*) points that URL back at the
-/// bare repository for the fetch.
+/// bare repository for every fetch.
 pub fn reviewkit(state: &tempfile::TempDir, remote: &Remote, gh: &FakeGh) -> assert_cmd::Command {
     let mut cmd = reviewkit_at(state, remote, gh);
     cmd.arg("--cwd").arg(remote.clone.path());

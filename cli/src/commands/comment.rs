@@ -5,7 +5,7 @@ use crate::context::Context;
 use crate::core::{comments, files};
 use crate::envelope::Response;
 use crate::error::Result;
-use crate::ext::git::{Repository, SystemGit};
+use crate::ext::git::SystemGit;
 use crate::model::{Comment, CommentInput, CommentPatch};
 use crate::store::Store;
 
@@ -46,7 +46,7 @@ pub fn run(ctx: &Context, command: CommentCommand) -> Result<Response> {
             let input: CommentInput = stdin_json()?;
             let git = SystemGit::new(ctx.tools.git.as_deref())?;
             let (session, id) = store.update(&session, |s| {
-                let repo = Repository::at(&git, s.repo.root.clone());
+                let repo = files::object_repo(&git, s);
                 let file = files::read_side(s, &repo, input.side, &input.path)?;
                 comments::add(s, input, file)
             })?;
@@ -59,7 +59,7 @@ pub fn run(ctx: &Context, command: CommentCommand) -> Result<Response> {
                 let file = if comments::patch_moves_line(&patch) {
                     let index = comments::find(s, &id)?;
                     let (side, path) = (s.comments[index].side, s.comments[index].path.clone());
-                    let repo = Repository::at(&git, s.repo.root.clone());
+                    let repo = files::object_repo(&git, s);
                     files::read_side(s, &repo, side, &path)?
                 } else {
                     None
