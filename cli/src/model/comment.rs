@@ -19,8 +19,32 @@ pub struct Comment {
     pub stale: bool,
     pub commentable: Commentable,
     pub last_error: Option<LastError>,
+    /// Where this text already went. Cleared when the body or suggestion
+    /// changes: a delivery of the old text says nothing about the new one.
+    #[serde(default)]
+    pub deliveries: Vec<Delivery>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Delivery {
+    pub sink: String,
+    pub at: String,
+    pub mode: DeliveryMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// `staged` text was only typed into an agent's input and may be thrown
+/// away there; `copied` only reached a register. Neither consumes a comment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DeliveryMode {
+    #[default]
+    Sent,
+    Staged,
+    Copied,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

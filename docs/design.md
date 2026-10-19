@@ -68,6 +68,8 @@ Session {
   thread_actions: { thread_id, action: "resolve" | "unresolve" }[]
   viewed: { [path]: { blob: sha, at } }   -- reviewkit 内だけの既読。GitHub には送らない
   last_submit: { sink, at, result: SinkResult } | null
+  pending_submit: bool      -- 中断された GitHub 送信が残っている（読むたびに state dir から求める）
+  history: Comment[]        -- 消費されてキューを出たコメント（deliveries 付き）
   etags: { targets, comments, decision, threads, thread_actions, viewed }   -- 節ごとの内容ハッシュ
   created_at, updated_at: RFC 3339
 }
@@ -107,6 +109,7 @@ Comment {
   stale: bool
   commentable: { github: bool, reason: Reason|null }
   last_error: { sink, code, message, at } | null
+  deliveries: { sink, at, mode: "sent" | "staged" | "copied", url? }[]
   created_at, updated_at
 }
 Reason = "outside_diff" | "stale" | "binary" | "not_supported"
@@ -133,6 +136,7 @@ SubmitOptions {             -- submit の stdin（省略可）
   header?: string
   stage?: bool              -- herdr: 送信せず入力欄に置くだけ（pane send-text）
   match_foreground_cwd?: bool
+  consume?: bool            -- 送れたコメントをキューから消すか。既定は local の herdr だけ。github は常に消す
 }
 
 SinkResult {
@@ -143,12 +147,18 @@ SinkResult {
   thread_actions: { thread_id, action, status: "sent" | "failed", error?: Error }[]
   decision: "sent|failed|skipped|not_applicable"
   summary: string                                       -- "3 sent, 1 skipped (outside diff), 0 failed"
+  mode: "sent" | "staged" | "copied"                    -- 既定 sent。staged / copied は消費しない
 }
 ```
 
 - `side` は architecture の語彙（base / head）。GitHub の `LEFT` / `RIGHT`、`APPROVE` 等への変換は sink-github の内側だけで行う
-- SinkResult の適用（D4）: `sent` は queue から消す。`failed` は `last_error` を付けて残す。`skipped` はそのまま。
-  `thread_actions` は `sent` のものだけ消す（PR の refresh でも、スレッドが消えたか GitHub 側で既にその状態になったものは消す）。`decision` は `sent` のときだけ消す。`last_submit` に結果を記録する
+- SinkResult の適用（D4）: `sent` のコメントには `deliveries` に `{ sink, at, mode, url? }` を足す。キューから消して
+  `Session.history` へ移す（消費する）のは、`SinkResult.mode = sent` かつ sink がセッション種類の主な送り先
+  （PR = github、local = herdr。`SubmitOptions.consume` で上書き。github は二重投稿を避けるため常に消費）のときだけ。
+  送れたコメントの `last_error` は消し、全体失敗の印はその sink へ送り済みのコメントには付けない。herdr の stage は `staged`、clipboard は
+  `copied` で、消費しない。herdr は自分へ `sent` 済みのコメントを再送しない。本文・suggestion・kind を変えると `deliveries` は消える。
+  `failed` は `last_error` を付けて残す。`skipped` はそのまま。`thread_actions` は `sent` のものだけ消す（PR の refresh でも、
+  スレッドが消えたか GitHub 側で既にその状態になったものは消す）。`decision` は `sent` かつ消費のときだけ消す。`last_submit` に結果を記録する
 - sink-github で Decision が無く comments がある場合は `event = comment`、本文空で送る（行コメントは review の一部としてしか送れない）
 - sink-herdr のプロンプトは header、Decision の本文（あれば）、番号付きのコメント（`@path#L1-L2` 形式。`plain` は `path:1-2`）の順。
   Decision の event は送れないので、本文が空の Decision は `skipped` として残る

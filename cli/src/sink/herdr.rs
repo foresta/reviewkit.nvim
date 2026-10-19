@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::core::time;
 use crate::error::{Error, ErrorCode, Result};
 use crate::ext::herdr::{self, Agent, Herdr};
-use crate::model::{AgentType, Comment, DecisionStatus, Failed, Sent, Session, Side, SinkResult, SubmitOptions};
+use crate::model::{
+    AgentType, Comment, DecisionStatus, DeliveryMode, Failed, Sent, Session, Side, SinkResult, SubmitOptions,
+};
 
 pub const NAME: &str = "herdr";
 
@@ -94,6 +96,39 @@ fn reference(comment: &Comment, agent_type: AgentType) -> String {
     }
 }
 
+/// A comment the agent already received is not sent again; text that was
+/// only staged in its input may have been discarded there, so it is.
+fn to_send(session: &Session) -> Vec<&Comment> {
+    session
+        .comments
+        .iter()
+        .filter(|c| {
+            !c.deliveries
+                .iter()
+                .any(|d| d.sink == NAME && d.mode == DeliveryMode::Sent)
+        })
+        .collect()
+}
+
+/// An agent cannot open a GitHub thread, so a reply carries the thread's
+/// first remark it answers.
+fn reply_context(session: &Session, thread_id: &str) -> String {
+    match session.threads.iter().find(|t| t.id == thread_id) {
+        Some(thread) => {
+            let first = thread.comments.first();
+            let author = first.map(|c| c.author.as_str()).unwrap_or("?");
+            let said = first
+                .and_then(|c| c.body.lines().next())
+                .unwrap_or("")
+                .chars()
+                .take(120)
+                .collect::<String>();
+            format!("reply to the review thread by {author}: \"{said}\"")
+        }
+        None => format!("reply to review thread {thread_id}"),
+    }
+}
+
 /// header → decision body → numbered comments. Base-side and stale
 /// comments carry a note because the agent sees only the current file.
 pub fn format_prompt(session: &Session, opts: &SubmitOptions) -> String {
@@ -107,12 +142,15 @@ pub fn format_prompt(session: &Session, opts: &SubmitOptions) -> String {
     {
         sections.push(decision.body.trim_end().to_string());
     }
-    let blocks: Vec<String> = session
-        .comments
-        .iter()
+    let blocks: Vec<String> = to_send(session)
+        .into_iter()
         .enumerate()
         .map(|(i, c)| {
+            let reply = c.reply_to.as_deref().map(|t| reply_context(session, t));
             let mut notes: Vec<&str> = Vec::new();
+            if let Some(reply) = &reply {
+                notes.push(reply);
+            }
             if c.side == Side::Base {
                 notes.push("refers to the base version of the file");
             }
@@ -162,8 +200,10 @@ fn kind_label(kind: crate::model::CommentKind) -> &'static str {
 }
 
 pub fn preview(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Result<Preview> {
-    if session.comments.is_empty() && session.decision.as_ref().is_none_or(|d| d.body.trim().is_empty()) {
-        return Err(Error::invalid("nothing to submit: no comments and no decision body"));
+    if to_send(session).is_empty() && session.decision.as_ref().is_none_or(|d| d.body.trim().is_empty()) {
+        return Err(Error::invalid(
+            "nothing to submit: no comment the agent has not received yet, and no decision body",
+        ));
     }
     let target = match &opts.target {
         Some(target) => target.clone(),
@@ -202,9 +242,8 @@ pub fn submit(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Res
             sink: NAME.into(),
             at: time::now(),
             url: None,
-            sent: session
-                .comments
-                .iter()
+            sent: to_send(session)
+                .into_iter()
                 .map(|c| Sent {
                     comment_id: c.id.clone(),
                     remote_id: None,
@@ -216,6 +255,11 @@ pub fn submit(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Res
             thread_actions: Vec::new(),
             decision,
             summary: String::new(),
+            mode: if preview.stage {
+                DeliveryMode::Staged
+            } else {
+                DeliveryMode::Sent
+            },
         },
         Err(error) if error.code == ErrorCode::EHerdrMissing => return Err(error),
         Err(error) => SinkResult {
@@ -235,6 +279,7 @@ pub fn submit(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Res
                 decision
             },
             summary: String::new(),
+            mode: DeliveryMode::Sent,
         },
     };
     Ok(result)
@@ -342,6 +387,7 @@ mod tests {
                 reason: None,
             },
             last_error: None,
+            deliveries: Vec::new(),
             created_at: at.clone(),
             updated_at: at.clone(),
         };

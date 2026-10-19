@@ -26,6 +26,9 @@ local function label(comment)
   if comment.last_error then
     table.insert(parts, "(failed: " .. comment.last_error.code .. ")")
   end
+  for _, d in ipairs(comment.deliveries or {}) do
+    table.insert(parts, ("(%s %s)"):format(d.mode == "sent" and "→" or d.mode, d.sink))
+  end
   local first = comment.body:match("^[^\n]*") or ""
   table.insert(parts, first)
   return table.concat(parts, " ")

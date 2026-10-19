@@ -969,3 +969,68 @@ fn one_post_on_github_vouches_for_only_one_identical_queued_comment() {
     assert_eq!(posted.as_array().unwrap().len(), 1, "the one GitHub lacks is posted");
     assert_eq!(body["session"]["pending_submit"], false);
 }
+
+#[test]
+fn sending_a_pull_request_review_to_an_agent_keeps_it_for_github() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(
+        &remote,
+        "OPEN",
+        serde_json::json!([thread("keep.txt", Some(3), "RIGHT", false)]),
+    );
+    let id = open(&state, &remote, &gh);
+    let inline = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "fix this"}),
+    );
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "agreed", "reply_to": "PRRT_keep.txt"}),
+    );
+    decide(&state, &remote, &gh, &id, "request_changes", "please");
+    let herdr_dir = tempfile::tempdir().unwrap();
+    let to_agent = || {
+        let mut cmd = reviewkit(&state, &remote, &gh);
+        cmd.env("REVIEWKIT_HERDR", common::fixture_bin("herdr"))
+            .env("FAKE_HERDR_DIR", herdr_dir.path())
+            .args(["submit", "--session", &id, "--sink", "herdr", "--options", "-"])
+            .write_stdin(r#"{"target": "w1:p1"}"#)
+            .output()
+            .unwrap()
+    };
+    let sent = json(&to_agent());
+    assert_eq!(sent["data"]["sent"].as_array().unwrap().len(), 2);
+    let prompt = std::fs::read_to_string(herdr_dir.path().join("last_text")).unwrap();
+    assert!(prompt.contains("reply to the review thread by bob: \"hm\""), "{prompt}");
+    assert_eq!(sent["session"]["comments"].as_array().unwrap().len(), 2);
+    assert!(sent["session"]["decision"].is_object());
+
+    let again = json(&to_agent());
+    assert_eq!(
+        again["data"]["sent"],
+        serde_json::json!([]),
+        "comments the agent already has are not sent again"
+    );
+
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_1", "url": "u" } }, "reply0": { "comment": { "id": "C1" } } } }),
+        0,
+    );
+    let posted = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github"])
+            .output()
+            .unwrap(),
+    );
+    assert!(posted["session"]["comments"].as_array().unwrap().is_empty());
+    let history = posted["session"]["history"].as_array().unwrap();
+    assert!(history.iter().any(|c| c["id"] == inline.as_str()));
+}

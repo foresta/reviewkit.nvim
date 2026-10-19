@@ -223,6 +223,38 @@ T["orchestrator"]["ReviewSubmit clipboard goes through submit apply and fills th
     end
   end
   eq(vim.json.decode(applied.stdin).sent[1].comment_id, "c_1")
+  eq(vim.json.decode(applied.stdin).mode, "copied")
+end
+
+T["orchestrator"]["a clipboard that cannot be written reports a failure and copies nothing"] = function()
+  local with_comment = helpers.session({
+    source = { worktree = worktree },
+    comments = {
+      { id = "c_1", path = "src/a.rs", side = "head", line = 4, kind = "nit", body = "x", stale = false },
+    },
+    etags = { comments = "c1" },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = with_comment } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = with_comment } },
+    {
+      match = { "submit apply" },
+      body = { ok = true, data = { sink = "clipboard", summary = "0 sent, 1 failed" }, session = with_comment },
+    },
+  })
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("vim.fn.getreg = function() return '' end")
+  child.cmd("ReviewSubmit clipboard")
+  wait_notice("clipboard: 0 sent")
+  local applied
+  for _, call in ipairs(helpers.calls(dir)) do
+    if call.args[1] == "submit" and call.args[2] == "apply" then
+      applied = vim.json.decode(call.stdin)
+    end
+  end
+  eq(#applied.sent, 0)
+  eq(applied.failed[1].error.message:find("could not write register", 1, true) ~= nil, true)
 end
 
 T["orchestrator"]["decision picker then input window sets the decision"] = function()

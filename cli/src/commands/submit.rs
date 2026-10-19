@@ -47,7 +47,7 @@ pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
     let store = Store::new(ctx.state_dir.clone());
     if let Some(SubmitSubcommand::Apply { session }) = args.command {
         let result: SinkResult = super::stdin_json()?;
-        let (session, result) = store.update(&session, |s| apply::apply(s, result))?;
+        let (session, result) = store.update(&session, |s| apply::apply(s, result, None))?;
         return Response::with_session(result, &session);
     }
     let (Some(session_id), Some(sink_name)) = (args.session, args.sink) else {
@@ -74,7 +74,7 @@ pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
             // slip into the queue between formatting and clearing it.
             let (session, result) = store.update(&session_id, |s| {
                 let result = sink::herdr::submit(s, &opts, &herdr)?;
-                apply::apply(s, result)
+                apply::apply(s, result, opts.consume)
             })?;
             Response::with_session(result, &session)
         }
@@ -97,7 +97,7 @@ pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
                     let repo = repo_ref_of(s)?;
                     let found = sink::github::reconcile_pending(s, &gh, &repo, &session_dir)?;
                     if let Some(found) = &found {
-                        apply::apply(s, found.clone())?;
+                        apply::apply(s, found.clone(), opts.consume)?;
                     }
                     Ok(found)
                 })?;
@@ -117,7 +117,7 @@ pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
                         result.decision = crate::model::DecisionStatus::Sent;
                     }
                 }
-                apply::apply(s, result)
+                apply::apply(s, result, opts.consume)
             });
             let (session, result) = match (outcome, recovered) {
                 // Everything was already on GitHub: the recovery is the result.
