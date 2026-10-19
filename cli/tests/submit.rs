@@ -537,3 +537,76 @@ fn a_later_success_clears_the_failure_mark_and_a_failure_spares_comments_already
     assert!(comments[0]["last_error"].is_null(), "already with the agent");
     assert!(comments[2]["last_error"].is_object());
 }
+
+#[test]
+fn a_comment_edited_while_a_client_side_sink_ran_is_not_taken_as_delivered() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let listed = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["comment", "list", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    let first = listed["data"][0]["id"].as_str().unwrap().to_string();
+    let seen = listed["data"][0]["updated_at"].as_str().unwrap().to_string();
+    let second = listed["data"][1]["id"].as_str().unwrap().to_string();
+    json(
+        &cmd(&state, &repo, &herdr)
+            .args(["comment", "update", "--session", &id, "--id", &first])
+            .write_stdin(r#"{"body": "edited meanwhile"}"#)
+            .output()
+            .unwrap(),
+    );
+    let added = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["comment", "add", "--session", &id])
+            .write_stdin(r#"{"path": "keep.txt", "side": "head", "line": 3, "body": "added meanwhile"}"#)
+            .output()
+            .unwrap(),
+    );
+    let third = added["data"]["id"].as_str().unwrap().to_string();
+    let result = serde_json::json!({
+        "sink": "capture",
+        "sent": [{"comment_id": first, "version": seen}],
+        "failed": [],
+        "skipped": [],
+        "decision": "not_applicable"
+    });
+    let body = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "apply", "--session", &id])
+            .write_stdin(result.to_string())
+            .output()
+            .unwrap(),
+    );
+    let comments = body["session"]["comments"].as_array().unwrap();
+    let first_now = comments.iter().find(|c| c["id"] == first.as_str()).unwrap();
+    assert_eq!(
+        first_now["deliveries"],
+        serde_json::json!([]),
+        "the edited text was never sent"
+    );
+
+    let whole_failure = serde_json::json!({
+        "sink": "capture",
+        "sent": [],
+        "failed": [{"comment_id": null, "error": {"code": "E_INTERNAL", "message": "broken"}}],
+        "skipped": [],
+        "decision": "not_applicable",
+        "attempted": [second]
+    });
+    let failed = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "apply", "--session", &id])
+            .write_stdin(whole_failure.to_string())
+            .output()
+            .unwrap(),
+    );
+    let comments = failed["session"]["comments"].as_array().unwrap();
+    let marked = |cid: &str| comments.iter().find(|c| c["id"] == cid).unwrap()["last_error"].is_object();
+    assert!(marked(&second));
+    assert!(!marked(&third), "added after the attempt started");
+}

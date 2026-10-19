@@ -51,11 +51,19 @@ pub struct SinkResult {
     pub summary: String,
     #[serde(default)]
     pub mode: crate::model::DeliveryMode,
+    /// `None` means every queued comment; given, a whole failure marks only
+    /// these, so comments added while the sink was sending stay unmarked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempted: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Sent {
     pub comment_id: String,
+    /// The comment's `updated_at` when its text was handed to the sink. A
+    /// comment edited since then was not what got delivered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

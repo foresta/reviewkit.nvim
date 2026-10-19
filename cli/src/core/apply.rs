@@ -32,6 +32,31 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: Option<bool
         result.summary = summary(&result);
     }
     let consume = consumes(session, &result, consume);
+    let edited_meanwhile = |comment: &crate::model::Comment, sent: &crate::model::Sent| {
+        sent.version.as_deref().is_some_and(|v| v != comment.updated_at)
+    };
+    // An edit while the sink was sending means the delivered text is not
+    // the comment's text any more: it stays queued as if not sent.
+    // Entries for comments no longer queued (recovered and applied earlier)
+    // are kept as reported.
+    let edited: Vec<String> = result
+        .sent
+        .iter()
+        .filter(|s| {
+            session
+                .comments
+                .iter()
+                .find(|c| c.id == s.comment_id)
+                .is_some_and(|c| edited_meanwhile(c, s))
+        })
+        .map(|s| s.comment_id.clone())
+        .collect();
+    let reported = result.sent.len();
+    result.sent.retain(|s| !edited.contains(&s.comment_id));
+    let delivered: Vec<String> = result.sent.iter().map(|s| s.comment_id.clone()).collect();
+    if result.sent.len() != reported {
+        result.summary = summary(&result);
+    }
     for sent in &result.sent {
         if let Some(comment) = session.comments.iter_mut().find(|c| c.id == sent.comment_id) {
             comment.last_error = None;
@@ -46,7 +71,7 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: Option<bool
     if consume {
         let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut session.comments)
             .into_iter()
-            .partition(|c| result.sent.iter().any(|s| s.comment_id == c.id));
+            .partition(|c| delivered.contains(&c.id));
         session.comments = kept;
         session.history.extend(gone);
     }
@@ -70,8 +95,10 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: Option<bool
     {
         let error = whole.error.clone();
         let sink = result.sink.clone();
+        let attempted = result.attempted.clone();
         for comment in session.comments.iter_mut().filter(|c| {
-            !result.skipped.iter().any(|s| s.comment_id == c.id)
+            attempted.as_ref().is_none_or(|ids| ids.contains(&c.id))
+                && !result.skipped.iter().any(|s| s.comment_id == c.id)
                 && !c
                     .deliveries
                     .iter()
@@ -145,6 +172,7 @@ mod tests {
                 .iter()
                 .map(|id| Sent {
                     comment_id: (*id).into(),
+                    version: None,
                     remote_id: None,
                     url: None,
                 })
@@ -166,6 +194,7 @@ mod tests {
             thread_actions: vec![],
             decision,
             mode: DeliveryMode::Sent,
+            attempted: None,
             summary: String::new(),
         }
     }
