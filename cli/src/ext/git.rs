@@ -279,6 +279,30 @@ impl<'a> Repository<'a> {
         Ok(!out.is_empty())
     }
 
+    /// One git per batch rather than per file: a refresh of a working tree
+    /// with hundreds of changed or untracked files would otherwise spawn
+    /// hundreds of processes. A batch that fails (a file vanished
+    /// meanwhile) is retried per path so one file does not blank the rest.
+    pub fn hash_objects(&self, paths: &[String]) -> Vec<Option<String>> {
+        let mut ids = Vec::with_capacity(paths.len());
+        for chunk in paths.chunks(200) {
+            let mut args = vec!["hash-object", "--"];
+            args.extend(chunk.iter().map(String::as_str));
+            match self.run(&args) {
+                Ok(out) => {
+                    let lines: Vec<String> = text(&out).lines().map(str::to_string).collect();
+                    if lines.len() == chunk.len() {
+                        ids.extend(lines.into_iter().map(Some));
+                        continue;
+                    }
+                    ids.extend(chunk.iter().map(|p| self.hash_object(p).ok()));
+                }
+                Err(_) => ids.extend(chunk.iter().map(|p| self.hash_object(p).ok())),
+            }
+        }
+        ids
+    }
+
     pub fn hash_object(&self, path: &str) -> Result<String> {
         let out = self.run(&["hash-object", "--", path])?;
         Ok(text(&out).trim_end().to_string())

@@ -31,6 +31,18 @@ pub fn build(repo: &Repository<'_>, base_sha: &str, head: Option<&str>) -> Resul
             }
         }
     }
+    if head.is_none() {
+        let unhashed: Vec<usize> = targets
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.head_blob.is_none() && t.status != TargetStatus::Deleted)
+            .map(|(i, _)| i)
+            .collect();
+        let paths: Vec<String> = unhashed.iter().map(|&i| targets[i].path.clone()).collect();
+        for (i, id) in unhashed.into_iter().zip(repo.hash_objects(&paths)) {
+            targets[i].head_blob = id;
+        }
+    }
     for (i, target) in targets.iter_mut().enumerate() {
         target.id = format!("t_{}", i + 1);
     }
@@ -91,7 +103,8 @@ fn target_from_change(change: RawChange, patch: Patch, repo: &Repository<'_>, he
         (Some(blob), _, _) => Some(blob),
         (None, TargetStatus::Deleted, _) => None,
         (None, _, Some(head)) => repo.blob_id(head, &change.path),
-        (None, _, None) => repo.hash_object(&change.path).ok(),
+        // Hashed for all such files at once by `build`.
+        (None, _, None) => None,
     };
     Target {
         id: String::new(),
@@ -128,10 +141,21 @@ fn push_untracked(targets: &mut Vec<Target>, mut untracked: Target) {
 }
 
 fn untracked_target(repo: &Repository<'_>, path: &str) -> Result<Target> {
-    let bytes = std::fs::read(repo.root().join(path))?;
+    use std::io::Read;
+    let full = repo.root().join(path);
+    let size = std::fs::metadata(&full)?.len();
+    let too_large = size > TOO_LARGE_BYTES as u64;
+    // A large untracked file (a build artifact, a log) is only sniffed: its
+    // lines are never shown, so reading it whole on every refresh is waste.
+    let bytes = if too_large {
+        let mut head = Vec::with_capacity(8000);
+        std::fs::File::open(&full)?.take(8000).read_to_end(&mut head)?;
+        head
+    } else {
+        std::fs::read(&full)?
+    };
     let binary = is_binary(&bytes);
-    let too_large = bytes.len() > TOO_LARGE_BYTES;
-    let lines = if binary { 0 } else { count_lines(&bytes) };
+    let lines = if binary || too_large { 0 } else { count_lines(&bytes) };
     let whole_file = (lines > 0 && !too_large).then_some(Hunk {
         base_start: 0,
         base_count: 0,
@@ -145,7 +169,7 @@ fn untracked_target(repo: &Repository<'_>, path: &str) -> Result<Target> {
         status: TargetStatus::Untracked,
         reason: TargetReason::Changed,
         base_blob: None,
-        head_blob: repo.hash_object(path).ok(),
+        head_blob: None,
         binary,
         too_large,
         viewed: false,
