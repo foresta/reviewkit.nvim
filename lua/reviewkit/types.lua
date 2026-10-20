@@ -94,6 +94,7 @@ M.SCHEMA_VERSION = 1
 
 ---@class reviewkit.Delivery
 ---@field at string
+---@field consumed? boolean This delivery took the comment out of the queue: it reached the session's destination. Such a comment is never put back (an edit would deliver it twice) and is the only kind the history drops.
 ---@field mode reviewkit.DeliveryMode
 ---@field sink string
 ---@field url? string

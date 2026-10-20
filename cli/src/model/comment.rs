@@ -34,6 +34,11 @@ pub struct Delivery {
     pub mode: DeliveryMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// This delivery took the comment out of the queue: it reached the
+    /// session's destination. Such a comment is never put back (an edit
+    /// would deliver it twice) and is the only kind the history drops.
+    #[serde(default)]
+    pub consumed: bool,
 }
 
 /// `staged` text was only typed into an agent's input and may be thrown

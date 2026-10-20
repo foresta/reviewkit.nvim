@@ -84,8 +84,10 @@ Session {
   viewed: { [path]: { blob: sha, at } }   -- reviewkit 内だけの既読。GitHub には送らない
   last_submit: { sink, at, result: SinkResult } | null
   pending_submit: bool      -- 中断された GitHub 送信が残っている（読むたびに state dir から求める）
-  history: Comment[]        -- 消費されてキューを出たコメント（deliveries 付き）。保存はするが封筒では常に空。
-                            -- `history list` で取る。新しい順に 200 件まで残し、古いものは捨てる
+  history: Comment[]        -- キューを出たコメント（deliveries 付き）。宛先に届いて消費されたものと、`comment clear` で
+                            -- 移しただけのもの。保存はするが封筒では常に空。
+                            -- `history list` で取る。200 件を超えたら、消費済み（宛先に届いた）ものだけを古い順に捨てる。
+                            -- `comment clear` で移しただけのものは捨てない
   etags: { targets, comments, decision, threads, thread_actions, viewed }   -- 節ごとの内容ハッシュ
   created_at, updated_at: RFC 3339
 }
@@ -125,7 +127,7 @@ Comment {
   stale: bool
   commentable: { github: bool, reason: Reason|null }
   last_error: { sink, code, message, at } | null
-  deliveries: { sink, at, mode: "sent" | "staged" | "copied", url? }[]
+  deliveries: { sink, at, mode: "sent" | "staged" | "copied", url?, consumed }[]   -- consumed: この配送でキューを出た
   created_at, updated_at
 }
 Reason = "outside_diff" | "stale" | "binary" | "not_supported" | "delivered"
@@ -238,7 +240,12 @@ reviewkit submit --session ID --sink github|herdr [--dry-run] [--options -]
 reviewkit submit apply --session ID [--consume] (stdin: SinkResult の sent / failed / skipped / thread_actions / decision)
                                                          -> session   Lua 側 sink の結果を core に適用。at / summary は core が補う
 
-reviewkit history list   --session ID                    -> data: Comment[]   消費されたコメント（新しい順、200 件まで）
+reviewkit history list    --session ID                   -> data: Comment[]   キューを出たコメント（新しい順）。200 件を超えて捨てるのは消費済みだけ
+reviewkit history restore --session ID --id CID          -> session   キューの末尾へ戻す。deliveries は残す（同じ sink へは再送しない）。既にキューにあれば何もしない。
+                                                            宛先に届いて消費されたもの（Delivery.consumed）は E_INVALID（編集すると二重に届くため）
+reviewkit history clear   --session ID                   -> session   data: { removed }
+reviewkit comment clear   --session ID --delivered [--sink NAME] -> session   data: { moved: CID[] }
+                                                            mode = sent の配送があるコメントを history へ移す。--delivered は必須（全消しの事故を防ぐ）
 
 reviewkit thread list    --session ID [--refresh]        -> data: Thread[]   --refresh は session 全体を取り直し、session も返す
 reviewkit thread resolve --session ID --thread TID [--undo] -> session       GitHub 上の状態と同じになる操作は積まずに消す
@@ -347,6 +354,7 @@ core.register_sink(name, impl)  -- impl = { submit, available?, consumes? }。av
                              -- consumes(session, requested) は送れたコメントをキューから消すか（既定 false）
 core.sinks(cb)               -- sink list と登録済みの Lua sink（runtime = "lua"）をマージ。同名は Lua を優先
 core.sink_names()            -- 最後の sinks() と登録済みの名前。:ReviewSubmit の補完用（同期）
+core.history(cb) / core.restore(id, cb) / core.clear_delivered(sink?, cb) / core.clear_history(cb)
 core.on(event, fn)           -- User autocmd の薄い包み
 ```
 
@@ -373,7 +381,8 @@ require("reviewkit").setup({
 ```
 
 `:Review pr <number|url>`、`:Review diff <base> [<head>]`、`:Review resume`、`:Review refresh`、`:Review threads [refresh]`、
-`:ReviewSubmit herdr|github|clipboard`、`:ReviewClose`、`:ReviewInstall`、`:ReviewLog`。`:ReviewClose` は未送信の
+`:ReviewSubmit herdr|github|clipboard`、`:ReviewClose`、`:ReviewHistory`、`:ReviewInstall`、`:ReviewLog`。
+quickfix の一覧では、履歴の `r` でキューへ戻し、キューの `D` で配送済みを履歴へ移す（確認あり）。`:ReviewClose` は未送信の
 コメントがあると確認する（`!` の purge ではコメントも消えると明示する）。diff ビューのバッファだけのキーは
 `]f` `[f`（ファイル）、`]h` `[h`（hunk）、`]t` `[t`（行のあるスレッド。outdated とファイル単位はスレッド一覧から）、
 `]u`（未読の次のファイル）。`setup()` を呼ばなくてもコマンドは使える。

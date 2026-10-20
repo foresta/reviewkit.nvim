@@ -284,6 +284,98 @@ T["orchestrator"]["a PR refresh reloads worktree buffers whose files changed"] =
   eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]"), "rewritten")
 end
 
+local function history_rules()
+  local function comment(id, body)
+    return {
+      id = id,
+      path = "src/a.rs",
+      side = "head",
+      line = 2,
+      kind = "issue",
+      body = body,
+      deliveries = { { sink = "herdr", at = "t", mode = "sent" } },
+    }
+  end
+  local queued = helpers.session({
+    source = { worktree = worktree },
+    repo = { root = worktree },
+    comments = { comment("c_1", "still queued") },
+  })
+  return {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = queued } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = queued } },
+    {
+      match = { "history list" },
+      body = { ok = true, data = { comment("c_9", "newest"), comment("c_8", "older") } },
+    },
+    { match = { "history restore" }, body = { ok = true, data = vim.NIL, session = queued } },
+    { match = { "comment clear" }, body = { ok = true, data = { moved = { "c_1" } }, session = queued } },
+  }
+end
+
+local function calls_with(sub)
+  local found = {}
+  for _, call in ipairs(helpers.calls(dir)) do
+    if table.concat(call.args, " "):find(sub, 1, true) then
+      table.insert(found, call.args)
+    end
+  end
+  return found
+end
+
+local function wait_for_call(sub)
+  vim.wait(20000, function()
+    return #calls_with(sub) > 0
+  end, 50)
+end
+
+T["orchestrator"][":ReviewHistory lists what left the queue and r brings one back"] = function()
+  helpers.respond(dir, history_rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("ReviewHistory")
+  child.lua("vim.wait(20000, function() return vim.fn.getqflist({ title = 1 }).title == 'reviewkit history' end, 20)")
+  local items = child.lua_get("vim.tbl_map(function(i) return i.text end, vim.fn.getqflist())")
+  eq(#items, 2)
+  eq(items[1]:find("newest", 1, true) ~= nil, true)
+  child.cmd("copen")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 1, 0 })")
+  child.type_keys("r")
+  wait_for_call("history restore")
+  eq(#calls_with("history restore"), 1)
+  local args = calls_with("history restore")[1]
+  eq(args[#args], "c_9")
+end
+
+T["orchestrator"]["D in the queue list clears delivered comments after asking"] = function()
+  helpers.respond(dir, history_rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("require('reviewkit.view.queue').show_comments()")
+  child.cmd("copen")
+  child.lua("vim.fn.confirm = function() return 2 end")
+  child.type_keys("D")
+  eq(#calls_with("comment clear"), 0)
+  child.lua("vim.fn.confirm = function() return 1 end")
+  child.type_keys("D")
+  wait_for_call("comment clear")
+  eq(calls_with("comment clear")[1], { "comment", "clear", "--session", "local/abc/HEAD..worktree", "--delivered" })
+end
+
+T["orchestrator"]["D in a location list leaves the review queue alone"] = function()
+  helpers.respond(dir, history_rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("require('reviewkit.view.queue').show_comments()")
+  child.lua("vim.fn.setloclist(0, { { filename = 'x', lnum = 1, text = 'diagnostic' } })")
+  child.cmd("lopen")
+  child.lua("vim.fn.confirm = function() _G.asked = true return 1 end")
+  -- Unmapped there, D is Vim's own and fails on the unmodifiable list.
+  pcall(child.type_keys, "D")
+  eq(child.lua_get("_G.asked == nil"), true)
+  eq(#calls_with("comment clear"), 0)
+end
+
 T["orchestrator"]["commands without a session only notify"] = function()
   child.cmd("ReviewSubmit")
   child.cmd("ReviewClose")

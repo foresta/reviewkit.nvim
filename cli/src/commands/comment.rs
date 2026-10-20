@@ -30,6 +30,17 @@ pub enum CommentCommand {
         #[arg(long, value_name = "CID")]
         id: String,
     },
+    /// Move delivered comments to the history.
+    Clear {
+        #[arg(long, value_name = "ID")]
+        session: String,
+        /// Required, so that clearing never empties the queue by accident.
+        #[arg(long, required = true)]
+        delivered: bool,
+        /// Only comments delivered through this sink.
+        #[arg(long, value_name = "NAME")]
+        sink: Option<String>,
+    },
     /// Print queued comments, optionally for one path.
     List {
         #[arg(long, value_name = "ID")]
@@ -71,6 +82,10 @@ pub fn run(ctx: &Context, command: CommentCommand) -> Result<Response> {
         CommentCommand::Remove { session, id } => {
             let (session, _) = store.update(&session, |s| comments::remove(s, &id))?;
             Response::with_session(serde_json::Value::Null, &session)
+        }
+        CommentCommand::Clear { session, sink, .. } => {
+            let (session, moved) = store.update(&session, |s| Ok(comments::clear_delivered(s, sink.as_deref())))?;
+            Response::with_session(serde_json::json!({ "moved": moved }), &session)
         }
         CommentCommand::List { session, path } => {
             let session = store.load(&session)?;

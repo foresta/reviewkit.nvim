@@ -119,8 +119,16 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 | `:Review threads [refresh]` | list the pull request's review threads |
 | `:ReviewSubmit herdr\|github\|clipboard` | send the queue; comments leave it only at the session's own destination (GitHub for a PR, the agent for a local diff), so a PR review can go to an agent first and to GitHub later; GitHub submits are previewed first (`sinks.github.confirm = false` skips it) |
 | `:ReviewClose[!]` | close the session (`!` also deletes its state); asks first while comments are unsent |
+| `:ReviewHistory` | list the comments that left the queue; `r` puts back one that `D` moved there (a comment that reached its destination stays, since editing it would deliver it twice) |
 | `:ReviewInstall` | install or update the CLI (release download, else `cargo build`) |
 | `:ReviewLog` | show recent CLI calls and errors |
+
+A comment leaves the queue only when it reaches the session's own destination: GitHub for a
+pull request, the agent (herdr) for a local diff. Sending a PR review to the agent first keeps the
+comments queued and marked as delivered (`→ herdr` in the queue list); `D` in the queue list moves
+delivered comments to the history. Pass `consume = true` or `false` in the sink's options
+(`setup({ sinks = { herdr = { consume = false } } })`) to change it; GitHub always consumes, since
+keeping posted comments would post them twice.
 
 In the comment window, a first word like `nit:` sets the comment's kind (`issue`, `suggestion`,
 `question`, `praise`, `nit`; `issue` when omitted), and a ```` ```suggestion ```` block becomes a
