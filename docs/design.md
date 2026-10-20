@@ -238,6 +238,9 @@ reviewkit target viewed --session ID --path P [--undo]   -> session   既読の�
 reviewkit pr show --session ID                           -> data: PrInfo   pr.json から。無ければ E_NO_SESSION ではなく data: null
 reviewkit file base   --session ID --path P              -> data: { exists, binary, too_large, lines: string[]|null }
                                                                      targets 外の path も可。base で未追跡なら exists = false
+reviewkit file head   --session ID --path P              -> 同じ形。head がコミットのセッションだけ（作業ツリーなら E_INVALID）。
+                                                            view はこれを読み取り専用で head 側に出す（作業ツリーの別ブランチや未コミットの
+                                                            変更で、表示とコメントの行がずれないため）。文字コードは fileencodings の順に試す
 
 reviewkit comment add    --session ID  (stdin: CommentInput)         -> session
 reviewkit comment update --session ID --id CID (stdin: CommentPatch) -> session

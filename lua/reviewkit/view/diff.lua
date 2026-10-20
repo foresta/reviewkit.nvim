@@ -15,6 +15,8 @@ local state = {
   right = nil, ---@type integer?
   path = nil, ---@type string?
   base_bufs = {}, ---@type table<string, integer>
+  head_bufs = {}, ---@type table<string, integer>
+  show_seq = 0,
   showing = false,
   shape = nil, ---@type string?
   retarget = false,
@@ -22,9 +24,18 @@ local state = {
 
 --- The parts of a target that decide what the pair shows; a refresh that
 --- keeps them only needs a `diffupdate`, so the reviewer's folds survive.
+---@param session reviewkit.Session
+---@return boolean
+local function commit_head(session)
+  return session.source.kind == "local" and session.head.sha ~= nil and session.head.sha ~= vim.NIL
+end
+
+--- A working-tree head is the file itself and changes under the reviewer;
+--- a commit head is a copy, so its blob decides the pair too.
+---@param session reviewkit.Session
 ---@param target reviewkit.Target
 ---@return string
-local function shape(target)
+local function shape(session, target)
   return table.concat({
     target.path,
     target.status,
@@ -32,6 +43,7 @@ local function shape(target)
     target.old_path or "",
     tostring(target.binary),
     tostring(target.too_large),
+    commit_head(session) and (target.head_blob or "") or "",
   }, "\0")
 end
 
@@ -137,7 +149,8 @@ end
 ---@param cb fun(buf: integer)
 local function base_buffer(target, cb)
   local right = state.right
-  local encoding = right and api.nvim_win_is_valid(right) and vim.bo[api.nvim_win_get_buf(right)].fileencoding or ""
+  local right_buf = right and api.nvim_win_is_valid(right) and api.nvim_win_get_buf(right)
+  local encoding = right_buf and (vim.b[right_buf].reviewkit_encoding or vim.bo[right_buf].fileencoding) or ""
   local key = base_key(target) .. ":" .. encoding
   local cached = state.base_bufs[key]
   if cached and api.nvim_buf_is_valid(cached) then
@@ -169,6 +182,66 @@ local function base_buffer(target, cb)
       buf = scratch(name, lines, target.path, "base", false)
     end
     state.base_bufs[key] = buf
+    cb(buf)
+  end)
+end
+
+--- A commit's file has no editor to pick its encoding, so the first of
+--- 'fileencodings' that converts is used, as when Vim reads a file.
+---@param raw string
+---@return string[]? lines
+---@return string? encoding
+local function decode_guessing(raw)
+  -- `raw` only comes when the bytes are not UTF-8.
+  for _, enc in ipairs(vim.opt.fileencodings:get()) do
+    if enc ~= "ucs-bom" and enc ~= "default" and enc ~= "utf-8" then
+      local lines = decode(raw, enc)
+      if lines then
+        return lines, enc
+      end
+    end
+  end
+  return nil, nil
+end
+
+---@param session reviewkit.Session
+---@param target reviewkit.Target
+---@param cb fun(buf: integer)
+local function head_buffer(session, target, cb)
+  local key = (target.head_blob or session.head.sha) .. ":" .. target.path
+  local cached = state.head_bufs[key]
+  if cached and api.nvim_buf_is_valid(cached) then
+    return cb(cached)
+  end
+  local name = ("reviewkit://head/%s/%s"):format((target.head_blob or session.head.sha):sub(1, 8), target.path)
+  core.side_file("head", target.path, function(err, data)
+    if err or not data then
+      return cb(
+        scratch(
+          name,
+          { "(cannot read the head side: " .. (err and err.message or "no data") .. ")" },
+          target.path,
+          "head",
+          true
+        )
+      )
+    end
+    local buf
+    if not data.exists then
+      buf = scratch(name, { "(not present in head)" }, target.path, "head", true)
+    elseif data.binary then
+      buf = scratch(name, { "(binary file)" }, target.path, "head", true)
+    elseif data.too_large then
+      buf = scratch(name, { "(too large to show)" }, target.path, "head", true)
+    else
+      local lines, encoding = nil, nil
+      if data.raw then
+        lines, encoding = decode_guessing(data.raw)
+      end
+      buf = scratch(name, lines or data.lines or {}, target.path, "head", false)
+      vim.b[buf].reviewkit_encoding = encoding
+    end
+    state.head_bufs[key] = buf
     cb(buf)
   end)
 end
@@ -213,18 +286,31 @@ end
 
 ---@param session reviewkit.Session
 ---@param target reviewkit.Target
----@return boolean ok
-local function show_head(session, target)
+---@param done fun(ok: boolean)
+---@param current fun(): boolean false once a later show took over
+local function show_head(session, target, done, current)
   if target.status == "deleted" then
     local buf = scratch("reviewkit://deleted/" .. target.path, { "(deleted in head)" }, target.path, "head", true)
     api.nvim_win_set_buf(state.right, buf)
-    return true
+    return done(true)
+  end
+  -- Comments of such a session belong to the commit's lines; the working
+  -- tree may be another branch or carry edits that shift them.
+  if commit_head(session) then
+    return head_buffer(session, target, function(buf)
+      -- A later show owns the window now; this one must not touch it.
+      if not M.is_open() or not current() then
+        return
+      end
+      api.nvim_win_set_buf(state.right, buf)
+      done(true)
+    end)
   end
   local file = session.source.worktree .. "/" .. target.path
   local shown = api.nvim_win_get_buf(state.right)
   if M.location(shown) == target.path and not M.is_placeholder(shown) then
     -- Re-editing the shown file would fail with E37 once it is modified.
-    return true
+    return done(true)
   end
   local ok, err = pcall(api.nvim_win_call, state.right, function()
     vim.cmd("edit " .. vim.fn.fnameescape(file))
@@ -232,7 +318,7 @@ local function show_head(session, target)
   if not ok then
     vim.notify("[reviewkit] " .. tostring(err), vim.log.levels.WARN)
   end
-  return ok
+  done(ok)
 end
 
 ---@param path string
@@ -244,48 +330,58 @@ function M.show(path, on_shown)
     return
   end
   state.showing = true
+  state.show_seq = state.show_seq + 1
+  local seq = state.show_seq
   -- Buffers once diffed stay in Vim's diff set after they are hidden, and
   -- the ninth one is E96; the pair is reset whenever it changes.
   api.nvim_win_call(state.right, function()
     vim.cmd("diffoff!")
   end)
-  if not show_head(session, target) then
-    state.showing = false
-    local previous = state.path and core.target(state.path)
-    if previous and not previous.binary and not previous.too_large then
-      set_diff(state.left, true)
-      set_diff(state.right, true)
-    end
-    return
+  local function current()
+    return seq == state.show_seq
   end
-  state.path = path
-  state.shape = shape(target)
-  local function finish(left_buf)
-    if not M.is_open() or state.path ~= path then
+  show_head(session, target, function(ok)
+    if not current() then
       return
     end
-    api.nvim_win_set_buf(state.left, left_buf)
-    if not target.binary and not target.too_large then
-      set_diff(state.left, true)
-      set_diff(state.right, true)
+    if not ok then
+      state.showing = false
+      local previous = state.path and core.target(state.path)
+      if previous and not previous.binary and not previous.too_large then
+        set_diff(state.left, true)
+        set_diff(state.right, true)
+      end
+      return
     end
-    winbars(session, target)
-    keymaps(left_buf)
-    keymaps(api.nvim_win_get_buf(state.right))
-    state.showing = false
-    if on_shown then
-      pcall(on_shown)
+    state.path = path
+    state.shape = shape(session, target)
+    local function finish(left_buf)
+      if not M.is_open() or state.path ~= path or not current() then
+        return
+      end
+      api.nvim_win_set_buf(state.left, left_buf)
+      if not target.binary and not target.too_large then
+        set_diff(state.left, true)
+        set_diff(state.right, true)
+      end
+      winbars(session, target)
+      keymaps(left_buf)
+      keymaps(api.nvim_win_get_buf(state.right))
+      state.showing = false
+      if on_shown then
+        pcall(on_shown)
+      end
+      if state.retarget then
+        state.retarget = false
+        vim.schedule(M.retarget)
+      end
     end
-    if state.retarget then
-      state.retarget = false
-      vim.schedule(M.retarget)
+    if target.status == "added" or target.status == "untracked" then
+      finish(scratch("reviewkit://added/" .. path, { "(new file)" }, path, "base", true))
+    else
+      base_buffer(target, finish)
     end
-  end
-  if target.status == "added" or target.status == "untracked" then
-    finish(scratch("reviewkit://added/" .. path, { "(new file)" }, path, "base", true))
-  else
-    base_buffer(target, finish)
-  end
+  end, current)
 end
 
 ---@param path? string target to show first; the first target otherwise
@@ -345,7 +441,7 @@ function M.retarget()
   if not target then
     return M.show(targets[1].path)
   end
-  if shape(target) ~= state.shape then
+  if shape(session, target) ~= state.shape then
     return M.show(target.path)
   end
   winbars(session, target)
@@ -541,6 +637,7 @@ function M.attach()
   core.on("ReviewSessionClosed", function()
     M.close()
     state.base_bufs = {}
+    state.head_bufs = {}
   end, group)
 end
 

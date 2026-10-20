@@ -462,13 +462,20 @@ end
 ---@param path string
 ---@param cb fun(err: reviewkit.Error?, data: table?)
 function M.base_file(path, cb)
+  M.side_file("base", path, cb)
+end
+
+---@param side reviewkit.Side
+---@param path string
+---@param cb fun(err: reviewkit.Error?, data: table?)
+function M.side_file(side, path, cb)
   local session, err = require_session()
   if not session then
     return vim.schedule(function()
       cb(err)
     end)
   end
-  cli.call({ "file", "base", "--session", session.id, "--path", path }, {}, function(run_err, envelope)
+  cli.call({ "file", side, "--session", session.id, "--path", path }, {}, function(run_err, envelope)
     if run_err then
       return cb(run_err)
     end
