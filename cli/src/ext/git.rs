@@ -391,6 +391,50 @@ impl<'a> Repository<'a> {
         self.run(&["cat-file", "blob", &format!("{rev}:{path}")])
     }
 
+    /// `ls-tree` rather than `cat-file -s` per file: one git per batch.
+    /// `--literal-pathspecs` because a path such as `:x` is pathspec magic
+    /// otherwise; a batch that still fails (a user's GIT_*_PATHSPECS clashes
+    /// with it) is sized per file, since a size not found reads as small.
+    pub fn blob_sizes(&self, rev: &str, paths: &[String]) -> std::collections::HashMap<String, u64> {
+        let mut sizes = std::collections::HashMap::new();
+        for chunk in paths.chunks(200) {
+            let mut args = vec![
+                "--literal-pathspecs",
+                "ls-tree",
+                "-r",
+                "-l",
+                "-z",
+                "--full-tree",
+                rev,
+                "--",
+            ];
+            args.extend(chunk.iter().map(String::as_str));
+            let Ok(out) = self.run(&args) else {
+                for path in chunk {
+                    if let Some(size) = self.blob_size(rev, path) {
+                        sizes.insert(path.clone(), size);
+                    }
+                }
+                continue;
+            };
+            for entry in text(&out).split('\0') {
+                let Some((meta, path)) = entry.split_once('\t') else {
+                    continue;
+                };
+                if let Some(size) = meta.split_whitespace().nth(3).and_then(|s| s.parse().ok()) {
+                    sizes.insert(path.to_string(), size);
+                }
+            }
+        }
+        sizes
+    }
+
+    pub fn blob_size(&self, rev: &str, path: &str) -> Option<u64> {
+        self.run(&["cat-file", "-s", &format!("{rev}:{path}")])
+            .ok()
+            .and_then(|out| text(&out).trim_end().parse().ok())
+    }
+
     pub fn is_blob(&self, rev: &str, path: &str) -> bool {
         self.run(&["cat-file", "-t", &format!("{rev}:{path}")])
             .map(|out| text(&out).trim_end() == "blob")

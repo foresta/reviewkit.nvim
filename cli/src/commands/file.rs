@@ -79,6 +79,19 @@ fn side_file(repo: &crate::ext::git::Repository<'_>, rev: &str, path: &str) -> R
             raw: None,
         });
     }
+    // Sized before reading: a large blob is never shown, so reading it is waste.
+    if repo
+        .blob_size(rev, path)
+        .is_some_and(|size| size > TOO_LARGE_BYTES as u64)
+    {
+        return Ok(BaseFile {
+            exists: true,
+            binary: false,
+            too_large: true,
+            lines: None,
+            raw: None,
+        });
+    }
     let bytes = repo.read_blob(rev, path)?;
     let binary = is_binary(&bytes);
     let too_large = bytes.len() > TOO_LARGE_BYTES;

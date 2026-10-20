@@ -103,6 +103,10 @@ Target {                    -- 実ファイルは <source.worktree>/<path>。Lua
   status: "modified|added|deleted|renamed|copied|type|untracked"
   reason: "changed" | "thread" | "impact"
   base_blob: sha|null   head_blob: sha|null   binary: bool   too_large: bool
+                            -- too_large: base 側・head 側のどちらかのファイル、または差分が 1 MiB を超える。
+                            -- そのとき hunks は空で、View は diff をかけない（片側だけ全文で diff すると全行が
+                            -- 追加に見える）。`file base` / `file head` は同じ 1 MiB を自分の側のサイズで判定し、
+                            -- 超えれば読まずに lines を返さない。サイズは git の blob（作業ツリーはファイル）から取る
   viewed: bool              -- Session.viewed の blob が head_blob と一致するとき true。ファイルが変わると自動で false
   stats: { added, removed }
   hunks: Hunk[]
