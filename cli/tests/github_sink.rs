@@ -1955,3 +1955,62 @@ fn a_result_waiting_for_the_session_is_in_the_preview_so_the_confirmed_send_matc
         1
     );
 }
+
+#[test]
+fn every_gh_call_names_its_host_whatever_gh_host_says() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let opened = json(
+        &reviewkit(&state, &remote, &gh)
+            .env("GH_HOST", "ghe.example.com")
+            .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+            .output()
+            .unwrap(),
+    );
+    let id = opened["session"]["id"].as_str().unwrap().to_string();
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "x"}),
+    );
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_1", "url": "u" } } } }),
+        0,
+    );
+    let sent = json(
+        &reviewkit(&state, &remote, &gh)
+            .env("GH_HOST", "ghe.example.com")
+            .args(["submit", "--session", &id, "--sink", "github"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(sent["ok"], true, "{sent}");
+    let calls = gh.calls();
+    let mut checked = 0;
+    for call in &calls {
+        let args: Vec<&str> = call["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        match args.first() {
+            Some(&"pr") => {
+                let repo = args.iter().position(|a| *a == "--repo").map(|i| args[i + 1]);
+                assert_eq!(repo, Some("github.com/o/r"), "{args:?}");
+                checked += 1;
+            }
+            Some(&"api") => {
+                let host = args.iter().position(|a| *a == "--hostname").map(|i| args[i + 1]);
+                assert_eq!(host, Some("github.com"), "{args:?}");
+                checked += 1;
+            }
+            _ => {}
+        }
+    }
+    assert!(checked >= 3, "{calls:?}");
+}

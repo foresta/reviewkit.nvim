@@ -186,8 +186,9 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Ve
     })
 }
 
-/// Where a pull request lives. `host` goes to `--hostname` / `--repo` so
-/// GitHub Enterprise works without separate code paths.
+/// Where a pull request lives. `host` goes to `--hostname` / `--repo` on
+/// every call, github.com included: without it gh follows `GH_HOST`, and a
+/// GitHub Enterprise user who exports it would read and post elsewhere.
 #[derive(Debug, Clone)]
 pub struct RepoRef {
     pub host: String,
@@ -197,11 +198,7 @@ pub struct RepoRef {
 
 impl RepoRef {
     fn repo_flag(&self) -> String {
-        if self.host == "github.com" {
-            format!("{}/{}", self.owner, self.name)
-        } else {
-            format!("{}/{}/{}", self.host, self.owner, self.name)
-        }
+        format!("{}/{}/{}", self.host, self.owner, self.name)
     }
 }
 
@@ -329,10 +326,7 @@ pub struct GraphqlResponse {
 /// a mutation with several aliased fields can succeed in part.
 pub fn graphql(gh: &dyn Gh, host: &str, query: &str, variables: serde_json::Value) -> Result<GraphqlResponse> {
     let body = serde_json::json!({ "query": query, "variables": variables }).to_string();
-    let mut args = vec!["api", "graphql", "--input", "-"];
-    if host != "github.com" {
-        args.extend(["--hostname", host]);
-    }
+    let args = ["api", "graphql", "--input", "-", "--hostname", host];
     let out = gh.run_raw(&args, Some(&body))?;
     match serde_json::from_slice::<serde_json::Value>(&out.stdout) {
         Ok(mut body) if body.get("data").is_some() || body.get("errors").is_some() => Ok(GraphqlResponse {
