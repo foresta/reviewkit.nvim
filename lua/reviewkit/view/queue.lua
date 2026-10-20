@@ -139,8 +139,10 @@ end
 ---@param suffix string?
 ---@return boolean
 local function in_our_list(suffix)
+  -- The title is global: a code window must not act on the quickfix
+  -- list's lines just because that list is ours.
   local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
-  if info and info.loclist == 1 then
+  if not info or info.quickfix ~= 1 or info.loclist == 1 then
     return false
   end
   if suffix then
