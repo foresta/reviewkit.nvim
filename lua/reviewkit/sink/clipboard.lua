@@ -23,9 +23,9 @@ local function block(c, i)
   return lines
 end
 
---- A copy is never a delivery that consumes the queue (`mode = copied`),
---- and `setreg` does not fail when there is no clipboard provider, so the
---- register is read back before anything is reported as copied.
+--- `setreg` does not fail when there is no clipboard provider, so the
+--- register is read back before anything is reported as copied. `copied`
+--- rather than a delivery: a copy must not consume the queue.
 ---@param session reviewkit.Session
 ---@param opts table
 ---@param cb fun(err: reviewkit.Error?, result: reviewkit.SinkResult?)

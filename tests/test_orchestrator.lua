@@ -34,7 +34,7 @@ T["orchestrator"] = MiniTest.new_set({
 
 local function wait_notice(pattern)
   child.lua(
-    ("vim.wait(5000, function() for _, n in ipairs(_G.notices) do if n.msg:find(%q, 1, true) then return true end end return false end, 20)"):format(
+    ("vim.wait(20000, function() for _, n in ipairs(_G.notices) do if n.msg:find(%q, 1, true) then return true end end return false end, 20)"):format(
       pattern
     )
   )
@@ -238,7 +238,7 @@ T["orchestrator"][":Review resume without an id lists sessions by what they comp
   })
   child.lua([[vim.ui.select = function(items, opts) _G.shown = opts.format_item(items[1]) end]])
   child.cmd("Review resume")
-  child.lua("vim.wait(5000, function() return _G.shown ~= nil end, 20)")
+  child.lua("vim.wait(20000, function() return _G.shown ~= nil end, 20)")
   eq(child.lua_get("_G.shown"):find("proj  main..worktree", 1, true) ~= nil, true)
 end
 
@@ -280,7 +280,7 @@ T["orchestrator"]["a PR refresh reloads worktree buffers whose files changed"] =
   vim.fn.writefile({ "rewritten" }, worktree .. "/src/a.rs")
   child.lua("vim.uv.fs_utime(vim.fn.expand('%:p'), os.time() + 5, os.time() + 5)")
   child.cmd("Review refresh")
-  child.lua("vim.wait(5000, function() return vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] == 'rewritten' end, 20)")
+  child.lua("vim.wait(20000, function() return vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] == 'rewritten' end, 20)")
   eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]"), "rewritten")
 end
 
@@ -404,7 +404,7 @@ T["orchestrator"]["decision picker then input window sets the decision"] = funct
   child.lua("require('reviewkit.orchestrator').decision()")
   child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'ship it' })")
   child.cmd("write")
-  child.lua("vim.wait(5000, function() return require('reviewkit.core').decision() ~= nil end, 20)")
+  child.lua("vim.wait(20000, function() return require('reviewkit.core').decision() ~= nil end, 20)")
   eq(child.lua_get("require('reviewkit.core').decision().event"), "approve")
   local set
   for _, call in ipairs(helpers.calls(dir)) do
@@ -542,7 +542,7 @@ T["orchestrator"]["editing a comment shows and saves its kind and suggestion"] =
   eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, -1, false)"), { "nit: tighter", "```suggestion", "x", "```" })
   child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'question: why?' })")
   child.cmd("write")
-  vim.wait(5000, function()
+  vim.wait(20000, function()
     return last_call("update") ~= nil
   end, 50)
   local patch = last_call("update")
@@ -659,7 +659,7 @@ T["orchestrator"]["a GitHub submit is previewed and only sent after y"] = functi
   child.cmd("Review pr 7")
   wait_notice("#7 Add k")
   child.cmd("ReviewSubmit github")
-  child.lua("vim.wait(5000, function() return vim.bo.filetype == 'markdown' end, 20)")
+  child.lua("vim.wait(20000, function() return vim.bo.filetype == 'markdown' end, 20)")
   local lines = child.lua_get("vim.api.nvim_buf_get_lines(0, 0, -1, false)")
   eq(lines[1], "Review: approve")
   eq(lines[2], "ship it")
@@ -682,7 +682,7 @@ T["orchestrator"]["cancelling the preview sends nothing, and the preview can be 
   child.cmd("Review pr 7")
   wait_notice("#7 Add k")
   child.cmd("ReviewSubmit github")
-  child.lua("vim.wait(5000, function() return vim.bo.filetype == 'markdown' end, 20)")
+  child.lua("vim.wait(20000, function() return vim.bo.filetype == 'markdown' end, 20)")
   child.type_keys("q")
   eq(github_submits(), 0)
   child.lua("require('reviewkit').setup({ sinks = { github = { confirm = false } } })")

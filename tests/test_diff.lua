@@ -41,7 +41,10 @@ local function rules(session, extra)
 end
 
 local function wait(cond)
-  child.lua(("vim.wait(5000, function() return %s end, 20)"):format(cond))
+  assert(
+    child.lua_get(("vim.wait(20000, function() return %s end, 20)"):format(cond)),
+    "timed out waiting for " .. cond
+  )
 end
 
 local function open_review(session, extra)

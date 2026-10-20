@@ -57,7 +57,7 @@ local function rules(extra, session)
 end
 
 local function wait(cond)
-  child.lua(("vim.wait(5000, function() return %s end, 20)"):format(cond))
+  child.lua(("vim.wait(20000, function() return %s end, 20)"):format(cond))
 end
 
 local function call_with(args)

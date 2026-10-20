@@ -31,17 +31,20 @@ jobs:
         with:
           neovim: true
           version: stable
+      - name: Read pinned tool versions
+        id: versions
+        run: make print-versions >> "$GITHUB_OUTPUT"
       - uses: JohnnyMorganz/stylua-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          version: latest
+          version: ${{ steps.versions.outputs.stylua }}
           args: --check lua plugin tests scripts
       - name: Install lua-language-server
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p "$HOME/luals"
-          gh release download --repo LuaLS/lua-language-server --pattern '*-linux-x64.tar.gz' --output "$HOME/luals.tar.gz"
+          gh release download "${{ steps.versions.outputs.luals }}" --repo LuaLS/lua-language-server --pattern '*-linux-x64.tar.gz' --output "$HOME/luals.tar.gz"
           tar -xzf "$HOME/luals.tar.gz" -C "$HOME/luals"
           echo "$HOME/luals/bin" >> "$GITHUB_PATH"
       - run: cargo build
