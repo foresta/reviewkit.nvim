@@ -4,7 +4,6 @@ use crate::core::comments::SideFile;
 use crate::error::{Error, Result};
 use crate::ext::git::{Git, Repository};
 use crate::model::{Session, Side};
-use crate::source::local::is_binary;
 
 /// For a pull request `repo.root` is the reviewer's own checkout, which
 /// never fetched the PR's commits; only the PR worktree (backed by the
@@ -94,9 +93,20 @@ pub fn split_lines(text: &str) -> Vec<String> {
     lines
 }
 
+/// git's own heuristic: a NUL in the first 8000 bytes.
+pub fn is_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(8000).any(|b| *b == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_nul_in_the_first_8000_bytes_means_binary() {
+        assert!(is_binary(b"ab\0c"));
+        assert!(!is_binary(b"plain"));
+    }
 
     #[test]
     fn split_lines_matches_editor_line_numbers() {

@@ -90,8 +90,14 @@ fn dry_run_previews_the_prompt_and_resolves_the_target_by_cwd() {
             .output()
             .unwrap(),
     );
-    assert_eq!(body["data"]["preview"]["target"], "w1:p1");
-    let prompt = body["data"]["preview"]["prompt"].as_str().unwrap();
+    let preview = &body["data"]["preview"];
+    assert_eq!(preview["sink"], "herdr");
+    assert_eq!(preview["target"], "w1:p1");
+    assert_eq!(preview["mode"], "sent");
+    assert_eq!(preview["comment_ids"].as_array().unwrap().len(), 2);
+    assert_eq!(preview["decision"], "comment", "a decision with a body is sent");
+    assert!(preview["raw"].is_object());
+    let prompt = preview["text"].as_str().unwrap();
     assert!(
         prompt.starts_with("Two small things.\n\n1. @keep.txt#L3\nwhy C?\n\n2. @added.txt#L2\ntrailing newline"),
         "{prompt}"
@@ -164,6 +170,32 @@ fn stage_uses_send_text_and_explicit_target_skips_resolution() {
 }
 
 #[test]
+fn a_staged_dry_run_previews_staged_delivery() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let body = json(
+        &cmd(&state, &repo, &herdr)
+            .args([
+                "submit",
+                "--session",
+                &id,
+                "--sink",
+                "herdr",
+                "--dry-run",
+                "--options",
+                "-",
+            ])
+            .write_stdin(r#"{"target": "w9:p3", "stage": true}"#)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(body["data"]["preview"]["mode"], "staged");
+    assert_eq!(body["data"]["preview"]["target"], "w9:p3");
+}
+
+#[test]
 fn editing_a_delivered_comment_forgets_where_it_went() {
     let state = tempfile::tempdir().unwrap();
     let repo = Repo::new();
@@ -201,7 +233,7 @@ fn no_matching_agent_is_e_ambiguous_with_candidates() {
     let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(body["error"]["code"], "E_AMBIGUOUS");
     assert_eq!(body["error"]["details"]["candidates"].as_array().unwrap().len(), 2);
-    assert_eq!(body["error"]["details"]["candidates"][0]["pane_id"], "a:1");
+    assert_eq!(body["error"]["details"]["candidates"][0]["id"], "a:1");
 }
 
 #[test]
@@ -285,8 +317,8 @@ fn sink_list_and_targets() {
             .output()
             .unwrap(),
     );
-    assert_eq!(targets["data"]["agents"][0]["pane_id"], "w1:p1");
-    assert_eq!(targets["data"]["panes"].as_array().unwrap().len(), 1);
+    assert_eq!(targets["data"].as_array().unwrap().len(), 1);
+    assert_eq!(targets["data"][0]["id"], "w1:p1");
 }
 
 #[test]

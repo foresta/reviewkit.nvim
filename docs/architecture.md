@@ -44,7 +44,7 @@ View は Core のイベントを購読して描くだけ。Source と Sink は�
 
 | 部品 | 責務 | 依存 | 置き換え・拡張の例 |
 |---|---|---|---|
-| **core** | Session の生成・破棄。Target / Comment / Decision の保持と永続化。変更イベントの発火。Source / Sink の登録口 | なし | ― |
+| **core** | Session の生成・破棄。Target / Comment / Decision の保持と永続化。変更イベントの発火。Source / Sink の登録口 | lib/git（オブジェクトの読み取りだけ） | ― |
 | **source-local** | 作業ツリーや任意の 2 リビジョン間の差分から Target を作る | lib/git | base の指定（HEAD、merge-base、任意 ref） |
 | **source-pr** | PR 番号 / URL から base と head を取得し、ファイルを実体化して Target を作る。既存スレッドも Target の付帯情報として取り込む。差分の計算は lib/git に寄せる | lib/gh、lib/git | GitLab / 他ホスティング |
 | **source-graph**（将来） | 変更が影響する呼び出し元・参照元を解析し、diff 外の箇所を Target に追加する | LSP / treesitter | 依存グラフの深さ・方向の設定 |
@@ -57,6 +57,10 @@ View は Core のイベントを購読して描くだけ。Source と Sink は�
 core / view が内側、source / sink が外側。外側の部品は core の公開 API だけを使い、view を直接触らない。
 
 外部コマンドの呼び出しは **lib** 層に集約し、Source / Sink はそれを使う。lib は Session を知らない。
+core が lib/git を使うのは、行ずれの追従と base 側の読み出しで blob を引くときだけ。git を実行するのは lib で、
+Session をどう変えるかは core が決める。実装が git しかないので、ここに trait の継ぎ目は置かない。
+lib/gh は GitHub の応答を model の値型（Thread、PrInfo）に変換して返す。GitHub の語彙（`LEFT` / `RIGHT`、
+`APPROVE` 等）を持つのは lib/gh（読む向き）と sink-github（送る向き）の 2 箇所だけ。
 
 | lib | 中身 | 使う部品 |
 |---|---|---|

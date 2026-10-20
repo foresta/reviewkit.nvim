@@ -5,19 +5,17 @@ use serde::{Deserialize, Serialize};
 use crate::core::time;
 use crate::error::{Error, ErrorCode, Result};
 use crate::ext::gh::{self, Gh, RepoRef};
-use crate::model::DeliveryMode;
 use crate::model::session::ThreadActionKind;
 use crate::model::{
-    Comment, CommentKind, DecisionEvent, DecisionStatus, Failed, Reason, SendStatus, Sent, Session, Side, SinkResult,
-    Skipped, Source, ThreadActionResult,
+    Comment, CommentKind, DecisionEvent, DecisionStatus, DeliveryMode, Failed, PreviewReply, Reason, SendStatus, Sent,
+    Session, Side, SinkResult, Skipped, Source, SubmitPreview, ThreadAction, ThreadActionResult,
 };
 
 pub const NAME: &str = "github";
 
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Plan {
     pub mutation: String,
-    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
     pub variables: serde_json::Value,
     pub skipped: Vec<Skipped>,
     /// Comment ids in the order of `variables.threads`.
@@ -31,7 +29,7 @@ pub struct Plan {
     pub event: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannedReply {
     pub alias: String,
     pub comment_id: String,
@@ -39,7 +37,7 @@ pub struct PlannedReply {
     pub body: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannedAction {
     pub alias: String,
     pub thread_id: String,
@@ -343,6 +341,47 @@ pub fn plan(session: &Session) -> Result<Plan> {
         replies,
         actions,
         event,
+    })
+}
+
+pub fn preview(session: &Session) -> Result<SubmitPreview> {
+    let plan = plan(session)?;
+    Ok(SubmitPreview {
+        sink: NAME.into(),
+        comment_ids: plan.thread_comment_ids.clone(),
+        body_comment_ids: plan.body_comment_ids.clone(),
+        skipped: plan.skipped.clone(),
+        replies: plan
+            .replies
+            .iter()
+            .map(|r| PreviewReply {
+                comment_id: r.comment_id.clone(),
+                thread_id: r.thread_id.clone(),
+            })
+            .collect(),
+        thread_actions: plan
+            .actions
+            .iter()
+            .map(|a| ThreadAction {
+                thread_id: a.thread_id.clone(),
+                action: a.action,
+            })
+            .collect(),
+        // Comments without a Decision still post a COMMENT review: shown as
+        // one, so confirming the preview never hides that a review is made.
+        decision: plan.event.as_deref().and_then(|e| {
+            [
+                DecisionEvent::Approve,
+                DecisionEvent::RequestChanges,
+                DecisionEvent::Comment,
+            ]
+            .into_iter()
+            .find(|d| event_name(*d) == e)
+        }),
+        text: plan.variables.get("body").and_then(|b| b.as_str()).map(str::to_string),
+        target: None,
+        mode: DeliveryMode::Sent,
+        raw: serde_json::to_value(&plan).unwrap_or_default(),
     })
 }
 

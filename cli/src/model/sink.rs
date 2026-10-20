@@ -107,3 +107,48 @@ pub enum DecisionStatus {
     Skipped,
     NotApplicable,
 }
+
+/// What a submit would do, in the same shape for every sink. Comments are
+/// named by id; a client finds their path and text in its session.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SubmitPreview {
+    pub sink: String,
+    /// Comments placed on their lines.
+    pub comment_ids: Vec<String>,
+    /// Comments written into `text` because the destination cannot place
+    /// them on a line.
+    pub body_comment_ids: Vec<String>,
+    pub skipped: Vec<Skipped>,
+    pub replies: Vec<PreviewReply>,
+    pub thread_actions: Vec<super::ThreadAction>,
+    /// The review event that will be posted, also when it is implied (a
+    /// github review of comments without a Decision is a `comment`).
+    pub decision: Option<super::DecisionEvent>,
+    /// The text sent as a whole: the review body (github) or the prompt (herdr).
+    pub text: Option<String>,
+    /// Where it goes when the sink picks a destination (a herdr pane).
+    pub target: Option<String>,
+    pub mode: super::DeliveryMode,
+    /// The sink's own request, for debugging. Not part of the contract: it
+    /// changes whenever the sink's transport does.
+    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
+    pub raw: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreviewReply {
+    pub comment_id: String,
+    pub thread_id: String,
+}
+
+/// A destination a sink can send to, for a picker (`sink targets`, and the
+/// candidates of `E_AMBIGUOUS`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SinkTarget {
+    /// What `SubmitOptions.target` takes.
+    pub id: String,
+    pub name: Option<String>,
+    pub status: Option<String>,
+    pub cwd: Option<String>,
+    pub title: Option<String>,
+}

@@ -422,6 +422,24 @@ function M.pr_info(cb)
   end)
 end
 
+--- The base side of a target as `file base` returns it.
+---@param path string
+---@param cb fun(err: reviewkit.Error?, data: table?)
+function M.base_file(path, cb)
+  local session, err = require_session()
+  if not session then
+    return vim.schedule(function()
+      cb(err)
+    end)
+  end
+  cli.call({ "file", "base", "--session", session.id, "--path", path }, {}, function(run_err, envelope)
+    if run_err then
+      return cb(run_err)
+    end
+    cb(nil, envelope and envelope.data or {})
+  end)
+end
+
 --- A sink registered here runs in Lua (clipboard, a custom integration);
 --- its result goes through `submit apply` so the queue is updated by the
 --- same rules as for the built-in sinks.
@@ -496,7 +514,7 @@ end
 --- What `submit` would send, without sending it (`--dry-run`).
 ---@param sink string
 ---@param opts? table
----@param cb fun(err: reviewkit.Error?, preview: table?)
+---@param cb fun(err: reviewkit.Error?, preview: reviewkit.SubmitPreview?)
 function M.preview(sink, opts, cb)
   local session, err = require_session()
   if not session then

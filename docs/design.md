@@ -39,9 +39,9 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
 
 - `E_NOT_COMMENTABLE` は「行がファイルの範囲外」か「path がリポジトリに無い」ときだけ。diff 外や targets 外の path への
   コメントは積める（D4）。その場合 `commentable.github = false` で、sink-github は review 本文の「Comments outside the diff」節に
-  `path` と行、`blob/<sha>/path#L..` のリンク、本文を書いて送る（`Plan.body_comment_ids`）。stale だけは `skipped`。
+  `path` と行、`blob/<sha>/path#L..` のリンク、本文を書いて送る（`SubmitPreview.body_comment_ids`）。stale だけは `skipped`。
   issue 以外の kind は本文の先頭に `**nit:**` のように付ける
-- `E_AMBIGUOUS` は `details.candidates` に候補を載せる。cwd に一致する agent が 0 件なら全 agent を候補にする
+- `E_AMBIGUOUS` は `details.candidates` に候補（`SinkTarget[]`）を載せる。cwd に一致する agent が 0 件なら全 agent を候補にする
 - `E_GH_PENDING_REVIEW` は GitHub 側に pending review が残っていて `addPullRequestReview` が通らないとき
 - `E_SCHEMA_VERSION` は CLI が古い session.json を読んだとき。CLI と `types.lua` の版違いは Lua が `version` で検出する
 
@@ -154,7 +154,8 @@ SinkResult {
 }
 ```
 
-- `side` は architecture の語彙（base / head）。GitHub の `LEFT` / `RIGHT`、`APPROVE` 等への変換は sink-github の内側だけで行う
+- `side` は architecture の語彙（base / head）。GitHub の `LEFT` / `RIGHT`、`APPROVE` 等との変換は lib/gh（取り込み）と
+  sink-github（送信）の内側だけで行い、契約には出さない
 - SinkResult の適用（D4）: `sent` のコメントには `deliveries` に `{ sink, at, mode, url? }` を足す。キューから消して
   `Session.history` へ移す（消費する）のは、`SinkResult.mode = sent` かつ sink がセッション種類の主な送り先
   （PR = github、local = herdr。`SubmitOptions.consume` で上書き。github は二重投稿を避けるため常に消費）のときだけ。
@@ -204,9 +205,9 @@ reviewkit decision set   --session ID (stdin: DecisionInput)  -> session
 reviewkit decision clear --session ID                    -> session
 
 reviewkit sink list                                      -> data: { name, available, reason }[]
-reviewkit sink targets --sink herdr [--cwd]              -> data: { agents[], panes[] }   picker 用
+reviewkit sink targets --sink herdr [--cwd]              -> data: SinkTarget[]   picker 用
 reviewkit submit --session ID --sink github|herdr [--dry-run] [--options -]
-                                                         -> data: SinkResult（dry-run は data.preview）, session
+                                                         -> data: SinkResult（dry-run は data.preview: SubmitPreview）, session
                                                             --options - のときだけ stdin から SubmitOptions を読む
 reviewkit submit apply --session ID (stdin: SinkResult の sent / failed / skipped / thread_actions / decision)
                                                          -> session   Lua 側 sink の結果を core に適用。at / summary は core が補う
@@ -215,7 +216,13 @@ reviewkit thread list    --session ID [--refresh]        -> data: Thread[]   --r
 reviewkit thread resolve --session ID --thread TID [--undo] -> session       GitHub 上の状態と同じになる操作は積まずに消す
 ```
 
-- `--dry-run` は sink が送る内容そのもの（GraphQL の変数 / herdr のプロンプト文字列）を返す。整形の反復と view のプレビューに使う
+- `--dry-run` は sink によらない `SubmitPreview` を返す。コメントは id で並べ（行に置くもの / 本文に書くもの / skipped）、
+  返信・スレッド操作・Decision の event、まとめて送る本文（review の body / herdr のプロンプト）と送り先を添える。
+  path や行はクライアントが自分の Session から引く。sink が実際に送るリクエスト（GraphQL / herdr の引数）は
+  `raw` に入るが契約外で、sink の実装に合わせて予告なく変わる
+- `SinkTarget { id, name?, status?, cwd?, title? }` は送り先の候補。`id` を `SubmitOptions.target` に渡す。
+  `sink targets` は agent の無い pane も含めて全 pane を返す（stage は任意の pane に送れる）。
+  `E_AMBIGUOUS` の `details.candidates` は agent が動いている pane だけ
 - `submit` は送信前の失敗（未認証、pane 未解決）だけ `ok: false`。リクエストを送った後は部分失敗でも `ok: true` と SinkResult
 
 ## 5. 状態の所有と並行性

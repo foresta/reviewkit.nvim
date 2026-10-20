@@ -176,14 +176,12 @@ fn dry_run_returns_the_plan_and_sends_nothing() {
             .output()
             .unwrap(),
     );
-    assert_eq!(body["data"]["preview"]["event"], "COMMENT");
-    assert_eq!(body["data"]["preview"]["variables"]["body"], "");
-    assert!(
-        body["data"]["preview"]["mutation"]
-            .as_str()
-            .unwrap()
-            .starts_with("mutation(")
-    );
+    let preview = &body["data"]["preview"];
+    assert_eq!(preview["sink"], "github");
+    assert_eq!(preview["decision"], "comment", "comments alone still post a review");
+    assert_eq!(preview["text"], "");
+    assert_eq!(preview["comment_ids"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["mode"], "sent");
     assert!(mutation_calls(&gh).is_empty());
     assert!(body.get("session").is_none());
 }
@@ -1053,10 +1051,7 @@ fn a_comment_written_into_an_interrupted_review_body_is_not_sent_again() {
             .output()
             .unwrap(),
     );
-    let review_body = dry["data"]["preview"]["variables"]["body"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let review_body = dry["data"]["preview"]["text"].as_str().unwrap().to_string();
     pending(
         &state,
         serde_json::json!({

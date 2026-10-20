@@ -2,11 +2,11 @@ use clap::Subcommand;
 use serde::Serialize;
 
 use crate::context::Context;
+use crate::core::files::is_binary;
 use crate::core::{TOO_LARGE_BYTES, files};
 use crate::envelope::Response;
 use crate::error::Result;
 use crate::ext::git::SystemGit;
-use crate::source::local::is_binary;
 use crate::store::Store;
 
 #[derive(Debug, Subcommand)]

@@ -85,8 +85,8 @@ pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
             // comments the real submit will find already posted.
             if args.dry_run {
                 let session = store.load(&session_id)?;
-                let plan = sink::github::plan(&session)?;
-                return Response::new(serde_json::json!({ "preview": plan }));
+                let preview = sink::github::preview(&session)?;
+                return Response::new(serde_json::json!({ "preview": preview }));
             }
             // Phase 1: an interrupted earlier submit is reconciled and saved
             // on its own, so its record can go before a new one is written.

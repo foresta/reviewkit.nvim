@@ -2,7 +2,7 @@ local M = {}
 
 local api = vim.api
 
-local EVENTS = { APPROVE = "approve", REQUEST_CHANGES = "request changes", COMMENT = "comment" }
+local EVENTS = { approve = "approve", request_changes = "request changes", comment = "comment" }
 
 ---@param text string?
 ---@return string
@@ -10,50 +10,61 @@ local function first_line(text)
   return ((text or ""):match("^[^\n]*") or "")
 end
 
---- The plan is the GraphQL request itself, so what is listed is exactly
---- what GitHub will receive.
----@param plan table
+---@param comment reviewkit.Comment
+---@return string
+local function place(comment)
+  local range = comment.start_line and ("%d-%d"):format(comment.start_line, comment.line) or tostring(comment.line)
+  return ("%s:%s%s"):format(comment.path, range, comment.side == "base" and " (base)" or "")
+end
+
+--- Comments are named by id in the preview; their place and text come
+--- from the session, which is what the sink reads too.
+---@param preview reviewkit.SubmitPreview
 ---@param session? reviewkit.Session
 ---@return string[]
-function M.lines(plan, session)
-  local vars = plan.variables or {}
+function M.lines(preview, session)
+  local by_id = {}
+  for _, c in ipairs(session and session.comments or {}) do
+    by_id[c.id] = c
+  end
   local lines = {}
   if session and session.pending_submit then
     table.insert(lines, "An earlier submit was cut off: what it already posted is recognised, not sent again.")
     table.insert(lines, "")
   end
-  if plan.event then
-    table.insert(lines, ("Review: %s"):format(EVENTS[plan.event] or plan.event))
-    local body = vars.body or ""
-    if vim.trim(body) ~= "" then
-      vim.list_extend(lines, vim.split(body, "\n", { plain = true }))
+  if preview.decision then
+    table.insert(lines, ("Review: %s"):format(EVENTS[preview.decision] or preview.decision))
+  end
+  if preview.text and vim.trim(preview.text) ~= "" then
+    vim.list_extend(lines, vim.split(preview.text, "\n", { plain = true }))
+  end
+  if #lines > 0 then
+    table.insert(lines, "")
+  end
+  local ids = preview.comment_ids or {}
+  if #ids > 0 then
+    table.insert(lines, ("Comments (%d)"):format(#ids))
+    for _, id in ipairs(ids) do
+      local c = by_id[id]
+      table.insert(lines, c and ("  %s  %s"):format(place(c), first_line(c.body)) or ("  " .. id))
     end
     table.insert(lines, "")
   end
-  local threads = vars.threads or {}
-  if #threads > 0 then
-    table.insert(lines, ("Comments (%d)"):format(#threads))
-    for _, t in ipairs(threads) do
-      local range = t.startLine and ("%d-%d"):format(t.startLine, t.line) or tostring(t.line)
-      local side = t.side == "LEFT" and " (base)" or ""
-      table.insert(lines, ("  %s:%s%s  %s"):format(t.path, range, side, first_line(t.body)))
-    end
-    table.insert(lines, "")
-  end
-  local in_body = plan.body_comment_ids or {}
+  local in_body = preview.body_comment_ids or {}
   if #in_body > 0 then
     table.insert(lines, ("Outside the diff, written into the review body above (%d)"):format(#in_body))
     table.insert(lines, "")
   end
-  local replies = plan.replies or {}
+  local replies = preview.replies or {}
   if #replies > 0 then
     table.insert(lines, ("Replies (%d)"):format(#replies))
     for _, r in ipairs(replies) do
-      table.insert(lines, "  " .. first_line(r.body))
+      local c = by_id[r.comment_id]
+      table.insert(lines, "  " .. (c and first_line(c.body) or r.comment_id))
     end
     table.insert(lines, "")
   end
-  local actions = plan.actions or {}
+  local actions = preview.thread_actions or {}
   if #actions > 0 then
     table.insert(lines, ("Thread actions (%d)"):format(#actions))
     for _, a in ipairs(actions) do
@@ -61,26 +72,23 @@ function M.lines(plan, session)
     end
     table.insert(lines, "")
   end
-  local skipped = plan.skipped or {}
+  local skipped = preview.skipped or {}
   if #skipped > 0 then
     table.insert(lines, ("Not sent, stay queued (%d)"):format(#skipped))
-    local where = {}
-    for _, c in ipairs(session and session.comments or {}) do
-      where[c.id] = ("%s:%d"):format(c.path, c.line)
-    end
     for _, s in ipairs(skipped) do
-      table.insert(lines, ("  %s (%s)"):format(where[s.comment_id] or s.comment_id, s.reason))
+      local c = by_id[s.comment_id]
+      table.insert(lines, ("  %s (%s)"):format(c and place(c) or s.comment_id, s.reason))
     end
   end
   return lines
 end
 
----@param plan table
+---@param preview reviewkit.SubmitPreview
 ---@param session? reviewkit.Session
 ---@param on_confirm fun()
 ---@return integer buf
-function M.show(plan, session, on_confirm)
-  local lines = M.lines(plan, session)
+function M.show(preview, session, on_confirm)
+  local lines = M.lines(preview, session)
   local buf = api.nvim_create_buf(false, true)
   vim.bo[buf].bufhidden = "wipe"
   api.nvim_buf_set_lines(buf, 0, -1, false, lines)

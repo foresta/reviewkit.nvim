@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::core::files::is_binary;
 use crate::core::{TOO_LARGE_BYTES, commentable};
 use crate::error::Result;
 use crate::ext::diffparse::{self, Patch};
@@ -186,11 +187,6 @@ fn untracked_target(repo: &Repository<'_>, path: &str) -> Result<Target> {
     })
 }
 
-/// git's own heuristic: a NUL in the first 8000 bytes.
-pub fn is_binary(bytes: &[u8]) -> bool {
-    bytes.iter().take(8000).any(|b| *b == 0)
-}
-
 pub fn count_lines(bytes: &[u8]) -> u32 {
     if bytes.is_empty() {
         return 0;
@@ -208,7 +204,5 @@ mod tests {
         assert_eq!(count_lines(b""), 0);
         assert_eq!(count_lines(b"a\n"), 1);
         assert_eq!(count_lines(b"a\nb"), 2);
-        assert!(is_binary(b"ab\0c"));
-        assert!(!is_binary(b"plain"));
     }
 }

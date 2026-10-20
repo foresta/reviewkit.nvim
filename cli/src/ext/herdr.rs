@@ -108,7 +108,7 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Ve
 /// The subset of `herdr agent list` the sink needs. Extra fields are
 /// ignored and `pane_id` may be absent, so one odd entry never breaks the
 /// whole listing.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
     #[serde(default)]
     pub pane_id: Option<String>,
@@ -125,7 +125,7 @@ pub struct Agent {
     pub workspace_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pane {
     pub pane_id: String,
     #[serde(default)]
