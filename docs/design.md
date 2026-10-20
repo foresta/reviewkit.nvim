@@ -217,7 +217,10 @@ SinkResult {
   再投稿されないため
 - sink-github で Decision が無く comments がある場合は `event = comment` で送る（行コメントは review の一部としてしか送れない）。本文は diff の外のコメントの節だけ（無ければ空）
 - sink-herdr のプロンプトは header、Decision の本文（あれば）、番号付きのコメント（`@path#L1-L2` 形式。`plain` は `path:1-2`）の順。
-  Decision の event は送れないので、本文が空の Decision は `skipped` として残る
+  Decision の event は送れないので、本文が空の Decision は `skipped` として残る。
+  PR のセッションでは header の次に、PR の番号と URL、head のブランチと commit、その commit を展開した worktree の場所を書く
+  （コメントの行番号はその commit のもので、エージェントの checkout とは限らない）。送り先のエージェントの checkout の HEAD が
+  PR の head と違えば、プロンプトにそう書き、結果の `summary` にも添える
 
 ## 4. CLI サブコマンド
 

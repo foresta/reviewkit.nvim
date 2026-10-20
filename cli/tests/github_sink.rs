@@ -2014,3 +2014,89 @@ fn every_gh_call_names_its_host_whatever_gh_host_says() {
     }
     assert!(checked >= 3, "{calls:?}");
 }
+
+#[test]
+fn a_pr_review_sent_to_an_agent_names_the_pr_and_flags_a_checkout_elsewhere() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "fix this"}),
+    );
+    let herdr_dir = tempfile::tempdir().unwrap();
+    let cwd = remote.clone.path().to_str().unwrap();
+    std::fs::write(
+        herdr_dir.path().join("agents.json"),
+        serde_json::json!({ "result": { "agents": [ { "pane_id": "w1:p1", "agent": "claude", "cwd": cwd, "foreground_cwd": cwd } ] } }).to_string(),
+    )
+    .unwrap();
+    let sent = json(
+        &reviewkit(&state, &remote, &gh)
+            .env("REVIEWKIT_HERDR", common::fixture_bin("herdr"))
+            .env("FAKE_HERDR_DIR", herdr_dir.path())
+            .args(["submit", "--session", &id, "--sink", "herdr"])
+            .output()
+            .unwrap(),
+    );
+    let prompt = std::fs::read_to_string(herdr_dir.path().join("last_text")).unwrap();
+    assert!(
+        prompt.starts_with(&format!(
+            "Review of pull request #7 (https://github.com/o/r/pull/7), branch `feature` at {}.",
+            remote.head_sha
+        )),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Your checkout is at"), "{prompt}");
+    assert!(
+        sent["data"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("not at the pull request head"),
+        "{sent}"
+    );
+}
+
+#[test]
+fn an_agent_matched_by_its_process_cwd_is_checked_there_not_in_its_shell_cwd() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "fix this"}),
+    );
+    let herdr_dir = tempfile::tempdir().unwrap();
+    let shell = tempfile::tempdir().unwrap();
+    let process = remote.clone.path().to_str().unwrap();
+    std::fs::write(
+        herdr_dir.path().join("agents.json"),
+        serde_json::json!({ "result": { "agents": [
+            { "pane_id": "w1:p1", "agent": "claude", "cwd": shell.path().to_str().unwrap(), "foreground_cwd": process }
+        ] } })
+        .to_string(),
+    )
+    .unwrap();
+    let sent = json(
+        &reviewkit(&state, &remote, &gh)
+            .env("REVIEWKIT_HERDR", common::fixture_bin("herdr"))
+            .env("FAKE_HERDR_DIR", herdr_dir.path())
+            .args(["submit", "--session", &id, "--sink", "herdr"])
+            .output()
+            .unwrap(),
+    );
+    let prompt = std::fs::read_to_string(herdr_dir.path().join("last_text")).unwrap();
+    assert!(prompt.contains("Your checkout is at"), "{prompt}");
+    assert_eq!(
+        sent["data"]["summary"],
+        "1 sent, 0 failed; the agent's checkout is not at the pull request head"
+    );
+}
