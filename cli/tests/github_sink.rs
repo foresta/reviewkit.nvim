@@ -302,21 +302,12 @@ fn an_interrupted_submit_is_reconciled_against_github_before_resending() {
     )
     .unwrap();
     // GitHub now shows that thread.
-    let mut on_github = thread("keep.txt", Some(3), "RIGHT", false);
-    on_github["comments"]["nodes"][0]["body"] = serde_json::json!("already there");
-    let mut rules: Vec<serde_json::Value> =
-        serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
-    for rule in rules.iter_mut() {
-        let nodes = &mut rule["body"]["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"];
-        if nodes.is_array() {
-            *nodes = serde_json::json!([on_github]);
-        }
-    }
-    std::fs::write(
-        gh.dir.path().join("responses.json"),
-        serde_json::Value::Array(rules).to_string(),
-    )
-    .unwrap();
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", "already there")]),
+        serde_json::json!([]),
+    );
     answer_mutation(
         &gh,
         serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_2", "url": "u2" } } } }),
@@ -742,9 +733,11 @@ fn an_edit_after_the_crash_is_not_mistaken_for_what_was_posted() {
         body["data"]["sent"][0]["remote_id"], "PRR_4",
         "the edited text is really sent"
     );
-    assert_eq!(
-        mutation_calls(&gh)[0]["variables"]["threads"][0]["body"],
-        "edited later"
+    assert!(
+        mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+            .as_str()
+            .unwrap()
+            .starts_with("edited later\n\n<!-- reviewkit:")
     );
 }
 
@@ -1237,6 +1230,12 @@ fn a_selection_after_an_interrupted_submit_records_both_and_keeps_the_decision()
         &state,
         serde_json::json!({ "at": "2000-01-01T00:00:00Z", "comments": [ { "id": posted, "path": "keep.txt", "side": "head", "line": 3, "body": "already there" } ] }),
     );
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", "already there")]),
+        serde_json::json!([]),
+    );
     answer_mutation(
         &gh,
         serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_2", "url": "u2" } } } }),
@@ -1402,4 +1401,349 @@ fn clearing_delivered_comments_keeps_those_an_interrupted_submit_carried() {
         "reconcile must still find it in the queue"
     );
     assert_eq!(cleared["session"]["comments"].as_array().unwrap().len(), 1);
+}
+
+/// Makes the next submit die after the request left: GitHub may or may not
+/// have posted it.
+fn interrupt_next_submit(gh: &FakeGh) {
+    let mut rules: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
+    rules.retain(|r| r["match"][1] != "mutation(");
+    rules.insert(
+        0,
+        serde_json::json!({ "match": ["api graphql", "mutation("], "stderr": "connection reset by peer", "exit": 1 }),
+    );
+    std::fs::write(
+        gh.dir.path().join("responses.json"),
+        serde_json::Value::Array(rules).to_string(),
+    )
+    .unwrap();
+}
+
+fn submit_github(state: &tempfile::TempDir, remote: &Remote, gh: &FakeGh, id: &str) -> serde_json::Value {
+    serde_json::from_slice(
+        &reviewkit(state, remote, gh)
+            .args(["submit", "--session", id, "--sink", "github"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+}
+
+fn marker_line(body: &str) -> String {
+    body.lines()
+        .find(|l| l.starts_with("<!-- reviewkit:"))
+        .unwrap_or_else(|| panic!("no marker in {body:?}"))
+        .to_string()
+}
+
+fn pending_file(state: &tempfile::TempDir) -> std::path::PathBuf {
+    state.path().join("sessions/pr/github.com/o/r/7/pending_submit.json")
+}
+
+#[test]
+fn a_same_text_comment_without_the_marker_is_not_taken_for_an_interrupted_post() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "same"}),
+    );
+    interrupt_next_submit(&gh);
+    assert_eq!(
+        submit_github(&state, &remote, &gh, &id)["error"]["details"]["outcome"],
+        "unknown"
+    );
+    // Typed in the web UI by the same user, after the attempt began.
+    let mut web = posted_thread("keep.txt", 3, "me", "same");
+    web["comments"]["nodes"][0]["createdAt"] = serde_json::json!("2999-01-01T00:00:00Z");
+    github_shows(&gh, "me", serde_json::json!([web]), serde_json::json!([]));
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_9", "url": "u9" } } } }),
+        0,
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["data"]["sent"][0]["remote_id"], "PRR_9", "it was really posted");
+    assert_eq!(mutation_calls(&gh).len(), 2);
+}
+
+#[test]
+fn an_interrupted_post_is_found_by_its_marker_after_an_edit_on_github_and_shown_without_it() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let posted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "typo"}),
+    );
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let sent_body = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(sent_body.starts_with("typo\n\n<!-- reviewkit:"), "{sent_body}");
+    let edited = format!("fixed the typo on GitHub\n\n{}", marker_line(&sent_body));
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", &edited)]),
+        serde_json::json!([]),
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["data"]["sent"][0]["comment_id"], posted);
+    assert_eq!(mutation_calls(&gh).len(), 1, "not posted twice");
+    assert_eq!(
+        body["session"]["threads"][0]["comments"][0]["body"], "fixed the typo on GitHub",
+        "the marker is not shown"
+    );
+    assert!(!pending_file(&state).exists());
+}
+
+#[test]
+fn a_post_from_an_earlier_attempt_does_not_vouch_for_a_later_one() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "again"}),
+    );
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    std::fs::remove_file(pending_file(&state)).unwrap();
+    submit_github(&state, &remote, &gh, &id);
+    let calls = mutation_calls(&gh);
+    let first = calls[0]["variables"]["threads"][0]["body"].as_str().unwrap();
+    let second = calls[1]["variables"]["threads"][0]["body"].as_str().unwrap();
+    assert_ne!(marker_line(first), marker_line(second));
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", first)]),
+        serde_json::json!([]),
+    );
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_5", "url": "u5" } } } }),
+        0,
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["data"]["sent"][0]["remote_id"], "PRR_5");
+    assert_eq!(mutation_calls(&gh).len(), 3);
+}
+
+#[test]
+fn someone_quoting_the_marker_does_not_count_as_our_post() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "quoted"}),
+    );
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let sent_body = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "bob", &sent_body)]),
+        serde_json::json!([]),
+    );
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_6", "url": "u6" } } } }),
+        0,
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["data"]["sent"][0]["remote_id"], "PRR_6");
+}
+
+#[test]
+fn without_a_viewer_only_a_marker_can_vouch_for_a_post() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let posted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "legacy"}),
+    );
+    // Written by a version that posted without markers.
+    pending(
+        &state,
+        serde_json::json!({ "at": "2026-01-01T00:00:00Z", "comments": [ { "id": posted, "path": "keep.txt", "side": "head", "line": 3, "body": "legacy" } ] }),
+    );
+    github_shows(
+        &gh,
+        "",
+        serde_json::json!([posted_thread("keep.txt", 3, "bob", "legacy")]),
+        serde_json::json!([]),
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["error"]["code"], "E_TOOL");
+    assert_eq!(body["error"]["retryable"], true);
+    assert!(body["error"]["hint"].as_str().unwrap().contains("pending_submit.json"));
+    assert!(mutation_calls(&gh).is_empty());
+    assert!(pending_file(&state).exists());
+
+    // A marked attempt needs no viewer.
+    std::fs::remove_file(pending_file(&state)).unwrap();
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let sent_body = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    github_shows(
+        &gh,
+        "",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", &sent_body)]),
+        serde_json::json!([]),
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["data"]["sent"][0]["comment_id"], posted);
+    assert_eq!(mutation_calls(&gh).len(), 1);
+}
+
+#[test]
+fn a_decision_only_review_is_not_reconciled_without_a_viewer() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    decide(&state, &remote, &gh, &id, "approve", "");
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    assert!(
+        mutation_calls(&gh)[0]["variables"]["body"]
+            .as_str()
+            .is_some_and(|b| b.is_empty()),
+        "an approval without a body gets no marker"
+    );
+    github_shows(
+        &gh,
+        "",
+        serde_json::json!([]),
+        serde_json::json!([
+            { "state": "APPROVED", "body": "", "submittedAt": "2999-01-01T00:00:00Z", "url": "r", "author": {"login": "bob"} }
+        ]),
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["error"]["code"], "E_TOOL");
+    assert_eq!(mutation_calls(&gh).len(), 1);
+}
+
+#[test]
+fn a_review_body_with_comments_outside_the_diff_is_found_by_its_marker() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let outside = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 7, "body": "far away"}),
+    );
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let review_body = mutation_calls(&gh)[0]["variables"]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let marker = marker_line(&review_body);
+    // The same text, posted again by hand, does not count; the marked one does.
+    let by_hand = review_body.replace(&marker, "").trim_end().to_string();
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([]),
+        serde_json::json!([
+            { "state": "COMMENTED", "body": by_hand, "submittedAt": "2999-01-01T00:00:00Z", "url": "r1", "author": {"login": "me"} }
+        ]),
+    );
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_7", "url": "u7" } } } }),
+        0,
+    );
+    interrupt_next_submit(&gh);
+    let resent = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(resent["error"]["details"]["outcome"], "unknown", "resent, not claimed");
+    let review_body = mutation_calls(&gh)[1]["variables"]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([]),
+        serde_json::json!([
+            { "state": "COMMENTED", "body": review_body, "submittedAt": "2999-01-01T00:00:00Z", "url": "r2", "author": {"login": "me"} }
+        ]),
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["data"]["sent"][0]["comment_id"], outside);
+    assert_eq!(mutation_calls(&gh).len(), 2);
+}
+
+#[test]
+fn a_decision_sent_with_threads_is_found_through_their_markers_and_not_resent() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "with it"}),
+    );
+    decide(&state, &remote, &gh, &id, "approve", "");
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let sent_body = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The review itself is past the reviews fetched; only its thread shows.
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", &sent_body)]),
+        serde_json::json!([]),
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["data"]["decision"], "sent");
+    assert!(body["session"]["decision"].is_null());
+    assert_eq!(mutation_calls(&gh).len(), 1, "not approved twice");
 }

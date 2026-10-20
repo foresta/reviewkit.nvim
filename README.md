@@ -135,6 +135,9 @@ delivered comments to the history. Pass `consume = true` or `false` in the sink'
 (`setup({ sinks = { herdr = { consume = false } } })`) to change it; GitHub always consumes, since
 keeping posted comments would post them twice.
 
+Comments posted to GitHub end with a hidden HTML comment (`<!-- reviewkit:… -->`). If a submit is
+interrupted, the next one uses it to find what already reached GitHub instead of posting it again.
+
 In the comment window, a first word like `nit:` sets the comment's kind (`issue`, `suggestion`,
 `question`, `praise`, `nit`; `issue` when omitted), and a ```` ```suggestion ```` block becomes a
 suggested replacement. `:w` saves, `q` cancels.

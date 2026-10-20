@@ -156,7 +156,7 @@ pub fn fetch(session: &Session, src: &PrSource<'_>, store: &Store, meta: Option<
     };
     let checkout = materialize(src, &repo_ref, &meta)?;
     let worktree = Repository::at(src.git, checkout.worktree.clone());
-    let details = gh::pr_details(src.gh, &repo_ref, number, time::now())?;
+    let details = gh::pr_details(src.gh, &repo_ref, number, time::now())?.without_markers();
 
     let mut targets = targets::build(&worktree, &checkout.base, Some(&checkout.head))?;
     add_thread_targets(&mut targets, &details.threads, &worktree, &checkout.head);

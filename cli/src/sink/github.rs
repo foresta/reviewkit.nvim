@@ -27,6 +27,8 @@ pub struct Plan {
     pub replies: Vec<PlannedReply>,
     pub actions: Vec<PlannedAction>,
     pub event: Option<String>,
+    #[serde(default)]
+    pub attempt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,7 +192,7 @@ fn skip_reason(comment: &Comment) -> Option<Reason> {
 /// One request for everything (architecture D1): the review with its
 /// inline threads, thread replies and resolve/unresolve as aliased fields of
 /// a single mutation, so a partial failure is reported per alias.
-pub fn plan(session: &Session) -> Result<Plan> {
+pub fn plan(session: &Session, attempt: &str) -> Result<Plan> {
     let Source::Pr { node_id, .. } = &session.source else {
         return Err(Error::invalid("the github sink needs a pull request session"));
     };
@@ -247,7 +249,7 @@ pub fn plan(session: &Session) -> Result<Plan> {
             "path": comment.path,
             "line": comment.line,
             "side": side_name(comment.side),
-            "body": body_with_suggestion(comment),
+            "body": gh::with_marker(&body_with_suggestion(comment), &comment_marker(&comment.id, attempt)),
         });
         if let Some(start) = comment.start_line.filter(|s| *s < comment.line) {
             thread["startLine"] = serde_json::json!(start);
@@ -258,7 +260,7 @@ pub fn plan(session: &Session) -> Result<Plan> {
     }
 
     let decision_body = session.decision.as_ref().map(|d| d.body.clone()).unwrap_or_default();
-    let body = review_body(session, &decision_body, &outside);
+    let mut body = review_body(session, &decision_body, &outside);
     let body_comment_ids: Vec<String> = outside.iter().map(|c| c.id.clone()).collect();
     // A decision without a body still needs the review; comments without a
     // decision go as a COMMENT review.
@@ -282,6 +284,11 @@ pub fn plan(session: &Session) -> Result<Plan> {
     }
     if event.is_none() && replies.is_empty() && session.thread_actions.is_empty() {
         return Err(nothing_to_submit());
+    }
+    // Only a body that carries comments is marked: a review with threads is
+    // found through them, and a bare approval stays bare.
+    if !outside.is_empty() {
+        body = gh::with_marker(&body, &review_marker(attempt));
     }
     if body.chars().count() > MAX_REVIEW_BODY {
         return Err(Error::invalid(format!(
@@ -323,7 +330,10 @@ pub fn plan(session: &Session) -> Result<Plan> {
         ));
         variables.insert(
             alias.clone(),
-            serde_json::json!({ "pullRequestReviewThreadId": reply.thread_id, "body": reply.body }),
+            serde_json::json!({
+                "pullRequestReviewThreadId": reply.thread_id,
+                "body": gh::with_marker(&reply.body, &comment_marker(&reply.comment_id, attempt)),
+            }),
         );
     }
     let mut actions = Vec::new();
@@ -354,11 +364,20 @@ pub fn plan(session: &Session) -> Result<Plan> {
         replies,
         actions,
         event,
+        attempt: attempt.to_string(),
     })
 }
 
+fn comment_marker(comment_id: &str, attempt: &str) -> String {
+    gh::marker(&format!("comment\n{comment_id}\n{attempt}"))
+}
+
+fn review_marker(attempt: &str) -> String {
+    gh::marker(&format!("review\n{attempt}"))
+}
+
 pub fn preview(session: &Session) -> Result<SubmitPreview> {
-    let plan = plan(session)?;
+    let plan = plan(session, &time::now())?;
     Ok(SubmitPreview {
         sink: NAME.into(),
         comment_ids: plan.thread_comment_ids.clone(),
@@ -391,7 +410,11 @@ pub fn preview(session: &Session) -> Result<SubmitPreview> {
             .into_iter()
             .find(|d| event_name(*d) == e)
         }),
-        text: plan.variables.get("body").and_then(|b| b.as_str()).map(str::to_string),
+        text: plan
+            .variables
+            .get("body")
+            .and_then(|b| b.as_str())
+            .map(gh::strip_markers),
         target: None,
         mode: DeliveryMode::Sent,
         raw: serde_json::to_value(&plan).unwrap_or_default(),
@@ -433,6 +456,10 @@ pub struct PendingSubmit {
     /// review must not clear a decision it never sent.
     #[serde(default = "carried")]
     pub carries_decision: bool,
+    /// Posted with hidden markers; a record without them comes from a
+    /// version that did not add them and is matched by text.
+    #[serde(default)]
+    pub marked: bool,
 }
 
 fn carried() -> bool {
@@ -569,6 +596,21 @@ pub fn reconcile_pending(
         .hint("retry; nothing is sent until the earlier submit is reconciled"));
     }
     let viewer = details.viewer.as_str();
+    // Without a viewer only a marker says whose post it is; text alone
+    // would match anyone's.
+    let review_by_text = pending.event.is_some() && pending.comments.is_empty() && pending.review_body.is_none();
+    if viewer.is_empty() && (!pending.marked || review_by_text) {
+        return Err(Error::tool(
+            "gh",
+            ErrorCode::ETool,
+            "cannot check what an interrupted submit already posted: GitHub did not say who is signed in",
+        )
+        .retryable()
+        .hint(format!(
+            "retry; if it keeps failing, check the pull request on GitHub and delete {}",
+            path.display()
+        )));
+    }
     let mine = |author: &str| viewer.is_empty() || author == viewer;
     let unchanged = |id: &str, body: &str| {
         session
@@ -576,8 +618,15 @@ pub fn reconcile_pending(
             .iter()
             .any(|c| c.id == id && same_text(&body_with_suggestion(c), body))
     };
+    let marked = |id: &str| {
+        let marker = comment_marker(id, &pending.at);
+        details
+            .threads
+            .iter()
+            .flat_map(|t| t.comments.iter())
+            .any(|c| mine(&c.author) && gh::has_marker(&c.body, &marker))
+    };
 
-    let mut sent = Vec::new();
     // Each remote post vouches for one pending comment only: two queued
     // comments with the same text must not both count as posted when only
     // one reached GitHub.
@@ -597,10 +646,17 @@ pub fn reconcile_pending(
         }
         false
     };
+    let mut sent = Vec::new();
+    let mut any_comment_posted = false;
     // Not matched by line: a push between the attempt and now moves or
     // outdates the thread, and a missed match posts the comment twice.
     for p in &pending.comments {
-        let posted = claim(&|t| t.path == p.path && t.side == p.side, &p.body);
+        let posted = if pending.marked {
+            marked(&p.id)
+        } else {
+            claim(&|t| t.path == p.path && t.side == p.side, &p.body)
+        };
+        any_comment_posted |= posted;
         if posted && unchanged(&p.id, &p.body) {
             sent.push(Sent {
                 comment_id: p.id.clone(),
@@ -611,7 +667,11 @@ pub fn reconcile_pending(
         }
     }
     for r in &pending.replies {
-        let posted = claim(&|t| t.id == r.thread_id, &r.body);
+        let posted = if pending.marked {
+            marked(&r.id)
+        } else {
+            claim(&|t| t.id == r.thread_id, &r.body)
+        };
         if posted && unchanged(&r.id, &r.body) {
             sent.push(Sent {
                 comment_id: r.id.clone(),
@@ -623,13 +683,24 @@ pub fn reconcile_pending(
     }
     let posted_body = pending.review_body.as_deref().unwrap_or(&pending.decision_body);
     let review_posted = pending.event.as_deref().is_some_and(|event| {
-        details.info.timeline.iter().any(|item| {
-            item.kind == crate::model::TimelineKind::Review
-                && mine(&item.author)
-                && item.state.as_deref() == Some(review_state(event))
-                && same_text(item.body.as_deref().unwrap_or(""), posted_body)
-                && after(&item.created_at, &pending.at)
-        })
+        let reviews = || {
+            details
+                .info
+                .timeline
+                .iter()
+                .filter(|item| item.kind == crate::model::TimelineKind::Review && mine(&item.author))
+        };
+        let body = |item: &crate::model::TimelineItem| item.body.clone().unwrap_or_default();
+        if !pending.marked || review_by_text {
+            return reviews().any(|item| {
+                item.state.as_deref() == Some(review_state(event))
+                    && same_text(&body(item), posted_body)
+                    && after(&item.created_at, &pending.at)
+            });
+        }
+        // The review and its threads are one mutation: one thread found
+        // means the review is there, even past the reviews fetched.
+        any_comment_posted || reviews().any(|item| gh::has_marker(&body(item), &review_marker(&pending.at)))
     });
     let decision_posted = decision_posted(session, &pending, review_posted);
     if review_posted {
@@ -648,7 +719,7 @@ pub fn reconcile_pending(
             }
         }
     }
-    session.threads = details.threads;
+    session.threads = details.without_markers().threads;
     crate::core::threads::prune_actions(session);
     if sent.is_empty() && !decision_posted {
         return Ok(None);
@@ -705,7 +776,7 @@ fn write_pending(session: &Session, plan: &Plan, session_dir: &Path) -> Result<(
         })
         .collect();
     let pending = PendingSubmit {
-        at: time::now(),
+        at: plan.attempt.clone(),
         comments,
         replies,
         event: plan.event.clone(),
@@ -714,6 +785,7 @@ fn write_pending(session: &Session, plan: &Plan, session_dir: &Path) -> Result<(
             .then(|| plan.variables["body"].as_str().unwrap_or_default().to_string()),
         body_comments,
         carries_decision: session.decision.is_some() && plan.event.is_some(),
+        marked: true,
     };
     let bytes = serde_json::to_vec_pretty(&pending)
         .map_err(|err| Error::internal(format!("cannot serialize pending_submit.json: {err}")))?;
@@ -731,7 +803,7 @@ fn write_pending(session: &Session, plan: &Plan, session_dir: &Path) -> Result<(
 /// the queue keeps exactly what did not get through. `pending_submit.json`
 /// is left for the caller to remove after the result is saved.
 pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path) -> Result<SinkResult> {
-    let plan = plan(session)?;
+    let plan = plan(session, &time::now())?;
     write_pending(session, &plan, session_dir)?;
     let response = gh::graphql(gh, &repo.host, &plan.mutation, plan.variables.clone()).map_err(|err| {
         if err.code == ErrorCode::EToolMissing {
@@ -1059,7 +1131,7 @@ mod tests {
 
     #[test]
     fn plan_variables_match_the_github_api() {
-        let plan = plan(&pr_session()).unwrap();
+        let plan = plan(&pr_session(), "t").unwrap();
         insta::assert_json_snapshot!(plan.variables);
         insta::assert_snapshot!(plan.mutation);
         assert_eq!(plan.thread_comment_ids, vec!["c_1", "c_2"]);
@@ -1091,6 +1163,7 @@ mod tests {
             review_body: None,
             body_comments: vec![],
             carries_decision: carries,
+            marked: true,
         };
         assert!(decision_posted(&s, &pending(true), true));
         assert!(!decision_posted(&s, &pending(false), true), "a comments-only review");
@@ -1120,7 +1193,7 @@ mod tests {
             url: None,
             consumed: false,
         });
-        let plan = plan(&s).unwrap();
+        let plan = plan(&s, "t").unwrap();
         assert_eq!(
             plan.thread_comment_ids,
             vec!["c_2"],
@@ -1154,7 +1227,7 @@ mod tests {
             github: false,
             reason: Some(Reason::OutsideDiff),
         };
-        let plan = plan(&s).unwrap();
+        let plan = plan(&s, "t").unwrap();
         assert_eq!(plan.replies.len(), 1);
         assert!(plan.skipped.iter().all(|sk| sk.comment_id != "c_5"));
     }
@@ -1165,7 +1238,7 @@ mod tests {
         s.decision = None;
         s.comments
             .retain(|c| c.commentable.github || c.stale || c.reply_to.is_some());
-        let plan = plan(&s).unwrap();
+        let plan = plan(&s, "t").unwrap();
         assert_eq!(plan.event.as_deref(), Some("COMMENT"));
         assert_eq!(plan.variables["body"], "");
     }
@@ -1175,7 +1248,7 @@ mod tests {
         let mut s = pr_session();
         s.comments[3].kind = CommentKind::Nit;
         s.comments[3].start_line = Some(5);
-        let plan = plan(&s).unwrap();
+        let plan = plan(&s, "t").unwrap();
         let body = plan.variables["body"].as_str().unwrap();
         assert!(
             body.starts_with("please\n\n---\n\n### Comments outside the diff"),
@@ -1227,9 +1300,9 @@ mod tests {
         s.comments.clear();
         s.thread_actions.clear();
         s.decision.as_mut().unwrap().body = "  ".into();
-        assert_eq!(plan(&s).unwrap_err().code, ErrorCode::EInvalid);
+        assert_eq!(plan(&s, "t").unwrap_err().code, ErrorCode::EInvalid);
         s.decision.as_mut().unwrap().event = DecisionEvent::Approve;
-        assert_eq!(plan(&s).unwrap().event.as_deref(), Some("APPROVE"));
+        assert_eq!(plan(&s, "t").unwrap().event.as_deref(), Some("APPROVE"));
     }
 
     #[test]
@@ -1238,12 +1311,12 @@ mod tests {
         s.comments.clear();
         s.decision = None;
         s.thread_actions.clear();
-        assert_eq!(plan(&s).unwrap_err().code, ErrorCode::EInvalid);
+        assert_eq!(plan(&s, "t").unwrap_err().code, ErrorCode::EInvalid);
         s.source = Source::Local {
             base_spec: "HEAD".into(),
             head_spec: "worktree".into(),
             worktree: PathBuf::from("/repo"),
         };
-        assert_eq!(plan(&s).unwrap_err().code, ErrorCode::EInvalid);
+        assert_eq!(plan(&s, "t").unwrap_err().code, ErrorCode::EInvalid);
     }
 }

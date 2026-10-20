@@ -440,6 +440,64 @@ pub fn pr_details(gh: &dyn Gh, repo: &RepoRef, number: u64, fetched_at: String) 
     })
 }
 
+const MARKER_PREFIX: &str = "<!-- reviewkit:";
+const MARKER_SUFFIX: &str = " -->";
+
+/// The hidden line a posted body ends with, so an interrupted submit can
+/// tell its own post from the same text typed on GitHub. The key is hashed
+/// so the line does not expose local ids or times.
+pub fn marker(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(key.as_bytes());
+    let hex: String = digest[..6].iter().map(|b| format!("{b:02x}")).collect();
+    format!("{MARKER_PREFIX}{hex}{MARKER_SUFFIX}")
+}
+
+pub fn with_marker(body: &str, marker: &str) -> String {
+    format!("{}\n\n{marker}", body.trim_end())
+}
+
+pub fn has_marker(body: &str, marker: &str) -> bool {
+    body.lines().any(|l| l.trim() == marker)
+}
+
+fn is_marker(line: &str) -> bool {
+    let line = line.trim();
+    line.starts_with(MARKER_PREFIX) && line.ends_with(MARKER_SUFFIX)
+}
+
+pub fn strip_markers(body: &str) -> String {
+    if !body.lines().any(is_marker) {
+        return body.to_string();
+    }
+    body.lines()
+        .filter(|l| !is_marker(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
+}
+
+impl PrDetails {
+    pub fn without_markers(mut self) -> Self {
+        for c in self.threads.iter_mut().flat_map(|t| t.comments.iter_mut()) {
+            c.body = strip_markers(&c.body);
+        }
+        for item in &mut self.info.timeline {
+            if let Some(body) = item.body.take() {
+                let stripped = strip_markers(&body);
+                // A review whose body was only the marker reads as having none.
+                item.body = if stripped.is_empty() && stripped != body {
+                    None
+                } else {
+                    Some(stripped)
+                };
+            }
+        }
+        self
+    }
+}
+
 fn login(node: &serde_json::Value) -> String {
     node["author"]["login"].as_str().unwrap_or("ghost").to_string()
 }
@@ -588,6 +646,27 @@ mod tests {
         assert!(!looks_transient(
             "HTTP 404: Not Found (https://api.github.com/repos/o/connection-pool)"
         ));
+    }
+
+    #[test]
+    fn markers_are_found_and_stripped_whatever_the_line_endings() {
+        let m = marker("k");
+        assert_ne!(m, marker("k2"));
+        let posted = with_marker("text\n", &m);
+        assert_eq!(posted, format!("text\n\n{m}"));
+        let edited = format!("edited\r\n\r\n{m}\r\n");
+        assert!(has_marker(&edited, &m));
+        assert!(
+            !has_marker(&format!("> {m}"), &m),
+            "a quoted marker is not the post's own"
+        );
+        assert_eq!(strip_markers(&edited), "edited");
+        assert_eq!(
+            strip_markers("plain\r\n"),
+            "plain\r\n",
+            "unmarked bodies are left alone"
+        );
+        assert_eq!(strip_markers(&m), "");
     }
 
     #[test]
