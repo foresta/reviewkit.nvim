@@ -376,6 +376,56 @@ T["orchestrator"]["D in a location list leaves the review queue alone"] = functi
   eq(#calls_with("comment clear"), 0)
 end
 
+local function two_comment_rules()
+  local function comment(id, body)
+    return { id = id, path = "src/a.rs", side = "head", line = 2, kind = "issue", body = body, deliveries = {} }
+  end
+  local session = helpers.session({
+    source = { worktree = worktree },
+    repo = { root = worktree },
+    comments = { comment("c_1", "first"), comment("c_2", "second") },
+  })
+  return {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = session } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = session } },
+    {
+      match = { "submit", "--sink herdr" },
+      body = {
+        ok = true,
+        data = { sink = "herdr", sent = {}, failed = {}, skipped = {}, summary = "1 sent" },
+        session = session,
+      },
+    },
+  }
+end
+
+T["orchestrator"]["a range of the queue list submits only those comments"] = function()
+  helpers.respond(dir, two_comment_rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("require('reviewkit.view.queue').show_comments()")
+  child.cmd("copen")
+  child.cmd("2ReviewSubmit herdr")
+  wait_for_call("--sink herdr")
+  local calls = helpers.calls(dir)
+  local sent
+  for _, call in ipairs(calls) do
+    if table.concat(call.args, " "):find("--sink herdr", 1, true) then
+      sent = vim.json.decode(call.stdin)
+    end
+  end
+  eq(sent.comment_ids, { "c_2" })
+end
+
+T["orchestrator"]["a range outside the queue list is refused"] = function()
+  helpers.respond(dir, two_comment_rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("1ReviewSubmit herdr")
+  eq(#calls_with("--sink herdr"), 0)
+  eq(child.lua_get("_G.notices[#_G.notices].msg"):find("queue list", 1, true) ~= nil, true)
+end
+
 T["orchestrator"]["commands without a session only notify"] = function()
   child.cmd("ReviewSubmit")
   child.cmd("ReviewClose")

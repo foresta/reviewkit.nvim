@@ -14,6 +14,14 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
         result.summary = summary(&result);
     }
     let consume = consume && result.mode == DeliveryMode::Sent;
+    // A client sink reporting a comment it was not given cannot deliver it.
+    if let Some(attempted) = &result.attempted {
+        let reported = result.sent.len();
+        result.sent.retain(|s| attempted.contains(&s.comment_id));
+        if result.sent.len() != reported {
+            result.summary = summary(&result);
+        }
+    }
     let edited_meanwhile = |comment: &crate::model::Comment, sent: &crate::model::Sent| {
         sent.version.as_deref().is_some_and(|v| v != comment.updated_at)
     };

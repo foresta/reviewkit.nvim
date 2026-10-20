@@ -842,9 +842,10 @@ impl super::Sink for GithubSink {
         &self,
         _ctx: &crate::context::Context,
         session: &Session,
-        _opts: &crate::model::SubmitOptions,
+        opts: &crate::model::SubmitOptions,
     ) -> Result<SubmitPreview> {
-        preview(session)
+        let view = crate::core::comments::narrowed(session, opts.comment_ids.as_deref())?;
+        preview(view.as_ref().unwrap_or(session))
     }
 
     fn submit(
@@ -880,9 +881,16 @@ impl super::Sink for GithubSink {
         // lost or cleared by it. Other commands see E_LOCKED meanwhile.
         let outcome = store.update(id, |s| {
             let repo = repo_ref_of(s)?;
-            let mut result = submit(s, &gh, &repo, &session_dir)?;
+            let view = crate::core::comments::narrowed(s, opts.comment_ids.as_deref())?;
+            let mut result = submit(view.as_ref().unwrap_or(s), &gh, &repo, &session_dir)?;
+            if view.is_some() && s.decision.is_some() {
+                result.decision = DecisionStatus::Skipped;
+            }
             if let Some(recovered) = &recovered {
                 result.sent.splice(0..0, recovered.sent.clone());
+                if let Some(attempted) = result.attempted.as_mut() {
+                    attempted.extend(recovered.sent.iter().map(|s| s.comment_id.clone()));
+                }
                 // The recovered decision was cleared in phase 1; one set since
                 // is another decision, which only this send can post.
                 if recovered.decision == DecisionStatus::Sent && s.decision.is_none() {

@@ -530,6 +530,114 @@ function M.sink_names()
   return names
 end
 
+---@param session reviewkit.Session
+---@param ids string[]
+---@param cb fun(err: reviewkit.Error?, view: reviewkit.Session?)
+local function narrowed(session, ids, cb)
+  if #ids == 0 then
+    return vim.schedule(function()
+      cb({ code = "E_INVALID", message = "nothing selected: comment_ids is empty", retryable = false, details = {} })
+    end)
+  end
+  local queued = {}
+  for _, c in ipairs(session.comments) do
+    queued[c.id] = true
+  end
+  local function finish(sent)
+    for _, id in ipairs(ids) do
+      if not queued[id] and not sent[id] then
+        return cb({ code = "E_NO_COMMENT", message = "no such comment: " .. id, retryable = false, details = {} })
+      end
+    end
+    local chosen = {}
+    for _, id in ipairs(ids) do
+      chosen[id] = true
+    end
+    local view = vim.deepcopy(session)
+    view.comments = vim.tbl_filter(function(c)
+      return chosen[c.id]
+    end, view.comments)
+    view.decision = nil
+    view.thread_actions = {}
+    view.history = {}
+    cb(nil, view)
+  end
+  local missing = vim.tbl_filter(function(id)
+    return not queued[id]
+  end, ids)
+  if #missing == 0 then
+    return vim.schedule(function()
+      finish({})
+    end)
+  end
+  -- Like the CLI: an id already in the history was sent and is dropped.
+  M.history(function(err, history)
+    if err then
+      return cb(err)
+    end
+    local sent = {}
+    for _, c in ipairs(history or {}) do
+      sent[c.id] = true
+    end
+    finish(sent)
+  end)
+end
+
+---@param session reviewkit.Session
+---@param sink string
+---@param lua_sink reviewkit.LuaSink
+---@param opts table
+---@param cb fun(err: reviewkit.Error?, result: reviewkit.SinkResult?, session: reviewkit.Session?)
+---@param decision_left boolean
+local function submit_lua(session, sink, lua_sink, opts, cb, decision_left)
+  local merged = vim.tbl_extend("force", config.get().sinks[sink] or {}, opts)
+  lua_sink.submit(session, merged, function(sink_err, result)
+    if sink_err then
+      return cb(sink_err)
+    end
+    if type(result) ~= "table" then
+      return cb({
+        code = "E_INVALID",
+        message = "sink " .. sink .. " returned no result",
+        retryable = false,
+        details = {},
+      })
+    end
+    result.sink = result.sink or sink
+    -- The sink worked from this snapshot; stamping it here lets the CLI
+    -- keep comments edited while the sink was running, whatever the sink.
+    local version = {}
+    local attempted = {}
+    for _, c in ipairs(session.comments) do
+      version[c.id] = c.updated_at
+      table.insert(attempted, c.id)
+    end
+    for _, s in ipairs(result.sent or {}) do
+      s.version = s.version or version[s.comment_id]
+    end
+    result.attempted = result.attempted or attempted
+    -- "" matches no decision: one set while a sink that saw none was
+    -- running must not be recorded as delivered.
+    result.decision_version = result.decision_version or (session.decision and session.decision.updated_at or "")
+    if decision_left and result.decision == "not_applicable" then
+      result.decision = "skipped"
+    end
+    local consume = merged.consume
+    if consume == nil and lua_sink.consumes then
+      consume = lua_sink.consumes(session, nil)
+    end
+    local args = { "submit", "apply", "--session", session.id }
+    if consume then
+      table.insert(args, "--consume")
+    end
+    cli.call(args, { stdin = result }, function(run_err, envelope)
+      take_session(run_err, envelope, function(take_err, taken)
+        cb(take_err, envelope and envelope.data or nil, taken)
+      end, { submitted = envelope and envelope.data or nil })
+    end)
+  end)
+end
+
 ---@param sink string
 ---@param opts? table
 ---@param cb fun(err: reviewkit.Error?, result: reviewkit.SinkResult?, session: reviewkit.Session?)
@@ -542,50 +650,26 @@ function M.submit(sink, opts, cb)
   end
   opts = opts or {}
   local lua_sink = state.sinks[sink]
-  if lua_sink then
-    local merged = vim.tbl_extend("force", config.get().sinks[sink] or {}, opts)
-    return lua_sink.submit(session, merged, function(sink_err, result)
-      if sink_err then
-        return cb(sink_err)
+  if lua_sink and opts.comment_ids then
+    -- The same view the CLI gives its own sinks: the chosen comments only,
+    -- without the decision and thread actions.
+    return narrowed(session, opts.comment_ids, function(narrow_err, view)
+      if narrow_err or not view then
+        return cb(narrow_err)
       end
-      if type(result) ~= "table" then
+      if #view.comments == 0 then
         return cb({
           code = "E_INVALID",
-          message = "sink " .. sink .. " returned no result",
+          message = "nothing to submit: the selection was already sent",
           retryable = false,
           details = {},
         })
       end
-      result.sink = result.sink or sink
-      -- The sink worked from this snapshot; stamping it here lets the CLI
-      -- keep comments edited while the sink was running, whatever the sink.
-      local version = {}
-      local attempted = {}
-      for _, c in ipairs(session.comments) do
-        version[c.id] = c.updated_at
-        table.insert(attempted, c.id)
-      end
-      for _, s in ipairs(result.sent or {}) do
-        s.version = s.version or version[s.comment_id]
-      end
-      result.attempted = result.attempted or attempted
-      -- "" matches no decision: one set while a sink that saw none was
-      -- running must not be recorded as delivered.
-      result.decision_version = result.decision_version or (session.decision and session.decision.updated_at or "")
-      local consume = merged.consume
-      if consume == nil and lua_sink.consumes then
-        consume = lua_sink.consumes(session, nil)
-      end
-      local args = { "submit", "apply", "--session", session.id }
-      if consume then
-        table.insert(args, "--consume")
-      end
-      cli.call(args, { stdin = result }, function(run_err, envelope)
-        take_session(run_err, envelope, function(take_err, taken)
-          cb(take_err, envelope and envelope.data or nil, taken)
-        end, { submitted = envelope and envelope.data or nil })
-      end)
+      submit_lua(view, sink, lua_sink, opts, cb, session.decision ~= nil)
     end)
+  end
+  if lua_sink then
+    return submit_lua(session, sink, lua_sink, opts, cb, false)
   end
   local args = { "submit", "--session", session.id, "--sink", sink }
   local stdin = nil

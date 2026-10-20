@@ -231,6 +231,31 @@ pub fn restore(session: &mut Session, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// The session a sink sees for a selection: only the chosen queued
+/// comments, no decision and no thread actions. `None` without a selection.
+/// The result is applied to the real session.
+pub fn narrowed(session: &Session, ids: Option<&[String]>) -> Result<Option<Session>> {
+    let Some(ids) = ids else {
+        return Ok(None);
+    };
+    if ids.is_empty() {
+        return Err(Error::invalid("nothing selected: comment_ids is empty"));
+    }
+    for id in ids {
+        let queued = session.comments.iter().any(|c| &c.id == id);
+        let sent = session.history.iter().any(|c| &c.id == id);
+        if !queued && !sent {
+            return Err(Error::new(ErrorCode::ENoComment, format!("no such comment: {id}")));
+        }
+    }
+    let mut view = session.clone();
+    view.comments.retain(|c| ids.contains(&c.id));
+    view.decision = None;
+    view.thread_actions.clear();
+    view.history.clear();
+    Ok(Some(view))
+}
+
 pub fn find(session: &Session, id: &str) -> Result<usize> {
     session
         .comments

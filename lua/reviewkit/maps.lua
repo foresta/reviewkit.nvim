@@ -16,6 +16,7 @@ return {
   { "n", "<leader>rq", "toggle_queue", "reviewkit: toggle the queue list" },
   { "n", "<leader>rv", "toggle_viewed", "reviewkit: toggle viewed for this file" },
   { "n", "<leader>rs", "submit_default", "reviewkit: submit to herdr" },
+  { "x", "<leader>rs", "submit_selected", "reviewkit: submit the selected comments of the queue list" },
   { "n", "<leader>ro", "open_diff", "reviewkit: open the side-by-side view" },
   { "n", "]f", "next_file", "reviewkit: next target", true },
   { "n", "[f", "prev_file", "reviewkit: previous target", true },

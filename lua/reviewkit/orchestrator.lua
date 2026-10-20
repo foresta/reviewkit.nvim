@@ -652,7 +652,10 @@ function M.submit(sink, opts)
       return
     end
     state.previewing = true
-    return core.preview(sink, {}, function(err, plan)
+    local preview_opts = vim.deepcopy(opts)
+    preview_opts.confirmed = nil
+    -- What is shown must be what is sent, selection included.
+    return core.preview(sink, preview_opts, function(err, plan)
       state.previewing = false
       if err then
         return notify_error(err)
@@ -709,6 +712,35 @@ function M.close(opts)
     end
     notify(opts.purge and "review closed and its state deleted" or "review closed")
   end)
+end
+
+--- Sends the comments on lines `first`..`last` of the queue list only.
+---@param sink string?
+---@param first integer
+---@param last integer
+function M.submit_range(sink, first, last)
+  local ids = require("reviewkit.view.queue").selected_ids(first, last)
+  if not ids then
+    return notify("select comments in the queue list (<leader>rq) to send only those")
+  end
+  if #ids == 0 then
+    return notify("no comment on the selected lines")
+  end
+  local function go(name)
+    M.submit(name, { comment_ids = ids })
+  end
+  if sink then
+    return go(sink)
+  end
+  vim.ui.select(
+    core.sink_names(),
+    { prompt = ("Send %d comment%s to"):format(#ids, #ids == 1 and "" or "s") },
+    function(choice)
+      if choice then
+        go(choice)
+      end
+    end
+  )
 end
 
 function M.history()
@@ -841,6 +873,10 @@ local actions = {
   toggle_viewed = M.toggle_viewed,
   submit_default = function()
     M.submit("herdr")
+  end,
+  submit_selected = function()
+    vim.cmd("normal! \27")
+    M.submit_range(nil, vim.fn.line("'<"), vim.fn.line("'>"))
   end,
   open_diff = function()
     require("reviewkit.view.diff").open()
