@@ -186,6 +186,7 @@ M.SCHEMA_VERSION = 1
 
 ---@class reviewkit.Plan
 ---@field actions reviewkit.PlannedAction[]
+---@field body_comment_ids? string[] Comments written into the review body because GitHub cannot place them on a diff line; they share the review's fate.
 ---@field event? string
 ---@field mutation string
 ---@field replies reviewkit.PlannedReply[]

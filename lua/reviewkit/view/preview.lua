@@ -40,6 +40,11 @@ function M.lines(plan, session)
     end
     table.insert(lines, "")
   end
+  local in_body = plan.body_comment_ids or {}
+  if #in_body > 0 then
+    table.insert(lines, ("Outside the diff, written into the review body above (%d)"):format(#in_body))
+    table.insert(lines, "")
+  end
   local replies = plan.replies or {}
   if #replies > 0 then
     table.insert(lines, ("Replies (%d)"):format(#replies))

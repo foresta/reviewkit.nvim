@@ -8,8 +8,8 @@ use crate::ext::gh::{self, Gh, RepoRef};
 use crate::model::DeliveryMode;
 use crate::model::session::ThreadActionKind;
 use crate::model::{
-    Comment, DecisionEvent, DecisionStatus, Failed, Reason, SendStatus, Sent, Session, Side, SinkResult, Skipped,
-    Source, ThreadActionResult,
+    Comment, CommentKind, DecisionEvent, DecisionStatus, Failed, Reason, SendStatus, Sent, Session, Side, SinkResult,
+    Skipped, Source, ThreadActionResult,
 };
 
 pub const NAME: &str = "github";
@@ -22,6 +22,10 @@ pub struct Plan {
     pub skipped: Vec<Skipped>,
     /// Comment ids in the order of `variables.threads`.
     pub thread_comment_ids: Vec<String>,
+    /// Comments written into the review body because GitHub cannot place
+    /// them on a diff line; they share the review's fate.
+    #[serde(default)]
+    pub body_comment_ids: Vec<String>,
     pub replies: Vec<PlannedReply>,
     pub actions: Vec<PlannedAction>,
     pub event: Option<String>,
@@ -70,21 +74,109 @@ fn event_name(event: DecisionEvent) -> &'static str {
     }
 }
 
-/// GitHub renders a suggestion only from a fenced block of that language.
-fn body_with_suggestion(comment: &Comment) -> String {
-    // An empty suggestion is GitHub's way to propose deleting the lines,
-    // so it still gets its (empty) fence.
-    match comment.suggestion.as_deref() {
-        Some(suggestion) if suggestion.trim().is_empty() => {
-            format!("{}\n\n```suggestion\n```", comment.body.trim_end())
-        }
-        Some(suggestion) => format!(
-            "{}\n\n```suggestion\n{}\n```",
-            comment.body.trim_end(),
-            suggestion.trim_end()
-        ),
-        None => comment.body.clone(),
+/// Conventional Comments style: the kind leads the text so readers on
+/// GitHub see it; issue is the default and left unmarked to keep the tone.
+fn kind_prefix(comment: &Comment) -> String {
+    match comment.kind {
+        CommentKind::Issue => String::new(),
+        kind => format!("**{}:** ", kind_name(kind)),
     }
+}
+
+fn kind_name(kind: CommentKind) -> &'static str {
+    match kind {
+        CommentKind::Issue => "issue",
+        CommentKind::Suggestion => "suggestion",
+        CommentKind::Question => "question",
+        CommentKind::Praise => "praise",
+        CommentKind::Nit => "nit",
+    }
+}
+
+/// GitHub renders a suggestion only from a fenced block of that language,
+/// and only on a diff line; in the review body it would be dead markup, so
+/// there it is plain text.
+fn body_with_suggestion(comment: &Comment) -> String {
+    github_text(comment, true)
+}
+
+fn github_text(comment: &Comment, inline: bool) -> String {
+    let body = format!("{}{}", kind_prefix(comment), comment.body.trim_end());
+    match (comment.suggestion.as_deref(), inline) {
+        (None, _) => body,
+        // An empty suggestion is GitHub's way to propose deleting the lines,
+        // so it still gets its (empty) fence.
+        (Some(s), true) if s.trim().is_empty() => format!("{body}\n\n```suggestion\n```"),
+        (Some(s), true) => format!("{body}\n\n```suggestion\n{}\n```", s.trim_end()),
+        (Some(s), false) if s.trim().is_empty() => format!("{body}\n\nSuggested: delete these lines."),
+        (Some(s), false) => format!("{body}\n\nSuggested replacement:\n```\n{}\n```", s.trim_end()),
+    }
+}
+
+/// `https://<host>/<owner>/<repo>/blob/<sha>/<path>#L<a>-L<b>`, which GitHub
+/// expands into a code snippet when it stands on its own line.
+fn permalink(session: &Session, comment: &Comment) -> Option<String> {
+    let Source::Pr { url, number, .. } = &session.source else {
+        return None;
+    };
+    let repo = url.strip_suffix(&format!("/pull/{number}"))?;
+    let sha = match comment.side {
+        Side::Head => session.head.sha.clone()?,
+        Side::Base => session.base.sha.clone(),
+    };
+    let path = match comment.side {
+        Side::Base => crate::core::files::base_git_path(session, &comment.path).to_string(),
+        Side::Head => comment.path.clone(),
+    };
+    let lines = if comment.commentable.reason == Some(Reason::Binary) {
+        String::new()
+    } else {
+        match comment.start_line.filter(|s| *s < comment.line) {
+            Some(start) => format!("#L{start}-L{}", comment.line),
+            None => format!("#L{}", comment.line),
+        }
+    };
+    let path: String = path
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    Some(format!("{repo}/blob/{sha}/{path}{lines}"))
+}
+
+/// GitHub's limit on a review body; checked before sending because a body
+/// over it fails the whole review on every attempt.
+const MAX_REVIEW_BODY: usize = 65_536;
+
+/// Comments GitHub cannot take on a diff line travel in the review body,
+/// each with where it points, instead of staying queued forever.
+fn review_body(session: &Session, decision_body: &str, outside: &[&Comment]) -> String {
+    if outside.is_empty() {
+        return decision_body.to_string();
+    }
+    let mut parts = Vec::new();
+    if !decision_body.trim().is_empty() {
+        parts.push(decision_body.trim_end().to_string());
+        parts.push("---".to_string());
+    }
+    parts.push("### Comments outside the diff".to_string());
+    for comment in outside {
+        let range = match comment.start_line.filter(|s| *s < comment.line) {
+            _ if comment.commentable.reason == Some(Reason::Binary) => String::new(),
+            Some(start) => format!(" L{start}-L{}", comment.line),
+            None => format!(" L{}", comment.line),
+        };
+        let side = if comment.side == Side::Base { " (base)" } else { "" };
+        let mut entry = format!("**`{}`{range}{side}**", comment.path);
+        if let Some(link) = permalink(session, comment) {
+            entry.push_str(&format!("\n{link}"));
+        }
+        entry.push_str(&format!("\n\n{}", github_text(comment, false)));
+        parts.push(entry);
+    }
+    parts.join("\n\n")
 }
 
 fn skip_reason(comment: &Comment) -> Option<Reason> {
@@ -113,11 +205,18 @@ pub fn plan(session: &Session) -> Result<Plan> {
     let mut skipped = Vec::new();
     let mut threads = Vec::new();
     let mut thread_comment_ids = Vec::new();
+    let mut outside: Vec<&Comment> = Vec::new();
     let mut replies = Vec::new();
     for comment in &session.comments {
         // A reply is posted into its thread, not at a line, so a moved or
         // outdated line is no reason to hold it back.
         if let Some(reason) = skip_reason(comment).filter(|_| comment.reply_to.is_none()) {
+            // A stale comment's line no longer says where it points, so it
+            // is held back rather than sent to a wrong place in the body.
+            if matches!(reason, Reason::OutsideDiff | Reason::Binary) {
+                outside.push(comment);
+                continue;
+            }
             skipped.push(Skipped {
                 comment_id: comment.id.clone(),
                 reason,
@@ -147,9 +246,12 @@ pub fn plan(session: &Session) -> Result<Plan> {
         thread_comment_ids.push(comment.id.clone());
     }
 
-    // A decision without a body still needs the review; inline comments
-    // without a decision go as a COMMENT review with an empty body.
-    let event = match (&session.decision, threads.is_empty()) {
+    let decision_body = session.decision.as_ref().map(|d| d.body.clone()).unwrap_or_default();
+    let body = review_body(session, &decision_body, &outside);
+    let body_comment_ids: Vec<String> = outside.iter().map(|c| c.id.clone()).collect();
+    // A decision without a body still needs the review; comments without a
+    // decision go as a COMMENT review.
+    let event = match (&session.decision, threads.is_empty() && outside.is_empty()) {
         (Some(decision), _) => Some(event_name(decision.event).to_string()),
         (None, false) => Some("COMMENT".to_string()),
         (None, true) => None,
@@ -158,7 +260,7 @@ pub fn plan(session: &Session) -> Result<Plan> {
     // inline threads; caught here so it is a pre-send error, not a failed send.
     if let Some(decision) = &session.decision
         && threads.is_empty()
-        && decision.body.trim().is_empty()
+        && body.trim().is_empty()
         && decision.event != DecisionEvent::Approve
     {
         return Err(Error::invalid(format!(
@@ -169,6 +271,13 @@ pub fn plan(session: &Session) -> Result<Plan> {
     }
     if event.is_none() && replies.is_empty() && session.thread_actions.is_empty() {
         return Err(nothing_to_submit());
+    }
+    if body.chars().count() > MAX_REVIEW_BODY {
+        return Err(Error::invalid(format!(
+            "the review body would be {} characters, over GitHub's {MAX_REVIEW_BODY}",
+            body.chars().count()
+        ))
+        .hint("shorten the decision body or the comments outside the diff"));
     }
 
     let mut declarations: Vec<String> = Vec::new();
@@ -192,10 +301,7 @@ pub fn plan(session: &Session) -> Result<Plan> {
         variables.insert("prId".into(), serde_json::json!(node_id));
         variables.insert("commit".into(), serde_json::json!(head));
         variables.insert("event".into(), serde_json::json!(event));
-        variables.insert(
-            "body".into(),
-            serde_json::json!(session.decision.as_ref().map(|d| d.body.clone()).unwrap_or_default()),
-        );
+        variables.insert("body".into(), serde_json::json!(body));
         variables.insert("threads".into(), serde_json::Value::Array(threads));
     }
     for reply in &replies {
@@ -233,6 +339,7 @@ pub fn plan(session: &Session) -> Result<Plan> {
         variables: serde_json::Value::Object(variables),
         skipped,
         thread_comment_ids,
+        body_comment_ids,
         replies,
         actions,
         event,
@@ -254,6 +361,18 @@ pub struct PendingSubmit {
     pub event: Option<String>,
     #[serde(default)]
     pub decision_body: String,
+    /// The review body as sent, when comments outside the diff were written
+    /// into it; it is what the timeline shows, not the decision body.
+    #[serde(default)]
+    pub review_body: Option<String>,
+    #[serde(default)]
+    pub body_comments: Vec<PendingBodyComment>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PendingBodyComment {
+    pub id: String,
+    pub text: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -383,16 +502,33 @@ pub fn reconcile_pending(
     let decision_unchanged = session.decision.as_ref().is_some_and(|d| {
         Some(event_name(d.event)) == pending.event.as_deref() && same_text(&d.body, &pending.decision_body)
     });
-    let decision_posted = decision_unchanged
-        && pending.event.as_deref().is_some_and(|event| {
-            details.info.timeline.iter().any(|item| {
-                item.kind == crate::model::TimelineKind::Review
-                    && mine(&item.author)
-                    && item.state.as_deref() == Some(review_state(event))
-                    && same_text(item.body.as_deref().unwrap_or(""), &pending.decision_body)
-                    && after(&item.created_at, &pending.at)
-            })
-        });
+    let posted_body = pending.review_body.as_deref().unwrap_or(&pending.decision_body);
+    let review_posted = pending.event.as_deref().is_some_and(|event| {
+        details.info.timeline.iter().any(|item| {
+            item.kind == crate::model::TimelineKind::Review
+                && mine(&item.author)
+                && item.state.as_deref() == Some(review_state(event))
+                && same_text(item.body.as_deref().unwrap_or(""), posted_body)
+                && after(&item.created_at, &pending.at)
+        })
+    });
+    let decision_posted = decision_unchanged && review_posted;
+    if review_posted {
+        for b in &pending.body_comments {
+            let unchanged = session
+                .comments
+                .iter()
+                .any(|c| c.id == b.id && same_text(&github_text(c, false), &b.text));
+            if unchanged {
+                sent.push(Sent {
+                    comment_id: b.id.clone(),
+                    version: None,
+                    remote_id: None,
+                    url: None,
+                });
+            }
+        }
+    }
     session.threads = details.threads;
     crate::core::threads::prune_actions(session);
     if sent.is_empty() && !decision_posted {
@@ -439,12 +575,24 @@ fn write_pending(session: &Session, plan: &Plan, session_dir: &Path) -> Result<(
             body: r.body.clone(),
         })
         .collect();
+    let body_comments: Vec<PendingBodyComment> = session
+        .comments
+        .iter()
+        .filter(|c| plan.body_comment_ids.contains(&c.id))
+        .map(|c| PendingBodyComment {
+            id: c.id.clone(),
+            text: github_text(c, false),
+        })
+        .collect();
     let pending = PendingSubmit {
         at: time::now(),
         comments,
         replies,
         event: plan.event.clone(),
         decision_body: session.decision.as_ref().map(|d| d.body.clone()).unwrap_or_default(),
+        review_body: (!body_comments.is_empty())
+            .then(|| plan.variables["body"].as_str().unwrap_or_default().to_string()),
+        body_comments,
     };
     let bytes = serde_json::to_vec_pretty(&pending)
         .map_err(|err| Error::internal(format!("cannot serialize pending_submit.json: {err}")))?;
@@ -488,7 +636,7 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
         if review.is_object() {
             url = review["url"].as_str().map(str::to_string);
             let review_id = review["id"].as_str().map(str::to_string);
-            for id in &plan.thread_comment_ids {
+            for id in plan.thread_comment_ids.iter().chain(&plan.body_comment_ids) {
                 sent.push(Sent {
                     comment_id: id.clone(),
                     version: None,
@@ -506,13 +654,13 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
             }
             // Per comment, so each keeps its own last_error even when a reply
             // in the same request succeeded.
-            for id in &plan.thread_comment_ids {
+            for id in plan.thread_comment_ids.iter().chain(&plan.body_comment_ids) {
                 failed.push(Failed {
                     comment_id: Some(id.clone()),
                     error: error.clone(),
                 });
             }
-            if plan.thread_comment_ids.is_empty() {
+            if plan.thread_comment_ids.is_empty() && plan.body_comment_ids.is_empty() {
                 failed.push(Failed {
                     comment_id: None,
                     error,
@@ -567,6 +715,7 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
         attempted: Some(
             plan.thread_comment_ids
                 .iter()
+                .chain(&plan.body_comment_ids)
                 .cloned()
                 .chain(plan.replies.iter().map(|r| r.comment_id.clone()))
                 .collect(),
@@ -677,7 +826,8 @@ mod tests {
         insta::assert_snapshot!(plan.mutation);
         assert_eq!(plan.thread_comment_ids, vec!["c_1", "c_2"]);
         let skipped: Vec<(&str, Reason)> = plan.skipped.iter().map(|s| (s.comment_id.as_str(), s.reason)).collect();
-        assert_eq!(skipped, vec![("c_3", Reason::Stale), ("c_4", Reason::OutsideDiff)]);
+        assert_eq!(skipped, vec![("c_3", Reason::Stale)]);
+        assert_eq!(plan.body_comment_ids, vec!["c_4"]);
         assert_eq!(plan.replies.len(), 1);
         assert_eq!(
             (plan.replies[0].alias.as_str(), plan.replies[0].comment_id.as_str()),
@@ -711,9 +861,62 @@ mod tests {
     fn comments_without_a_decision_become_a_comment_review_with_an_empty_body() {
         let mut s = pr_session();
         s.decision = None;
+        s.comments
+            .retain(|c| c.commentable.github || c.stale || c.reply_to.is_some());
         let plan = plan(&s).unwrap();
         assert_eq!(plan.event.as_deref(), Some("COMMENT"));
         assert_eq!(plan.variables["body"], "");
+    }
+
+    #[test]
+    fn comments_outside_the_diff_are_written_into_the_review_body_with_a_link() {
+        let mut s = pr_session();
+        s.comments[3].kind = CommentKind::Nit;
+        s.comments[3].start_line = Some(5);
+        let plan = plan(&s).unwrap();
+        let body = plan.variables["body"].as_str().unwrap();
+        assert!(
+            body.starts_with("please\n\n---\n\n### Comments outside the diff"),
+            "{body}"
+        );
+        let path = &s.comments[3].path;
+        let head = s.head.sha.clone().unwrap();
+        assert!(
+            body.contains(&format!(
+                "**`{path}` L5-L6**\nhttps://github.com/o/r/blob/{head}/{path}#L5-L6\n\n**nit:** "
+            )),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn a_base_side_comment_links_the_old_path_at_the_base_commit() {
+        let mut s = pr_session();
+        s.comments[3].side = Side::Base;
+        s.comments[3].path = "dir/new name.rs".into();
+        let mut target: crate::model::Target = serde_json::from_value(serde_json::json!({
+            "id": "t_1", "path": "dir/new name.rs", "old_path": "dir/old name.rs", "status": "renamed",
+            "reason": "changed", "base_blob": null, "head_blob": null, "binary": false, "too_large": false,
+            "viewed": false, "stats": {"added": 0, "removed": 0}, "hunks": [],
+            "commentable": {"base": [], "head": []}, "range": null
+        }))
+        .unwrap();
+        target.viewed = false;
+        s.targets = vec![target];
+        let link = permalink(&s, &s.comments[3]).unwrap();
+        assert_eq!(
+            link,
+            format!("https://github.com/o/r/blob/{}/dir/old%20name.rs#L6", s.base.sha)
+        );
+    }
+
+    #[test]
+    fn the_kind_leads_inline_comments_except_issues() {
+        let mut s = pr_session();
+        s.comments[0].kind = CommentKind::Question;
+        assert!(github_text(&s.comments[0], true).starts_with("**question:** "));
+        s.comments[0].kind = CommentKind::Issue;
+        assert!(!github_text(&s.comments[0], true).starts_with("**"));
     }
 
     #[test]

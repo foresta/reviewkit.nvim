@@ -114,14 +114,10 @@ fn submit_sends_one_review_and_clears_what_github_accepted() {
         .iter()
         .map(|s| s["comment_id"].as_str().unwrap())
         .collect();
-    assert_eq!(sent, vec![inside.as_str(), reply.as_str()]);
-    assert_eq!(result["sent"][1]["remote_id"], "PRRC_9");
-    assert_eq!(result["skipped"][0]["comment_id"], outside);
-    assert_eq!(result["skipped"][0]["reason"], "outside_diff");
-    assert_eq!(
-        result["summary"],
-        "2 sent, 1 skipped (outside diff), 0 failed, decision sent"
-    );
+    assert_eq!(sent, vec![inside.as_str(), outside.as_str(), reply.as_str()]);
+    assert_eq!(result["sent"][2]["remote_id"], "PRRC_9");
+    assert_eq!(result["skipped"], serde_json::json!([]));
+    assert_eq!(result["summary"], "3 sent, 0 failed, decision sent");
 
     let session = &body["session"];
     let left: Vec<&str> = session["comments"]
@@ -130,7 +126,7 @@ fn submit_sends_one_review_and_clears_what_github_accepted() {
         .iter()
         .map(|c| c["id"].as_str().unwrap())
         .collect();
-    assert_eq!(left, vec![outside.as_str()], "only the skipped comment stays");
+    assert!(left.is_empty(), "the comment outside the diff went in the review body");
     assert!(session["decision"].is_null());
     assert_eq!(session["last_submit"]["sink"], "github");
 
@@ -138,7 +134,10 @@ fn submit_sends_one_review_and_clears_what_github_accepted() {
     assert_eq!(sent_mutations.len(), 1);
     let vars = &sent_mutations[0]["variables"];
     assert_eq!(vars["event"], "REQUEST_CHANGES");
-    assert_eq!(vars["body"], "please fix");
+    let review_body = vars["body"].as_str().unwrap();
+    assert!(review_body.starts_with("please fix\n\n---\n\n### Comments outside the diff"));
+    assert!(review_body.contains("**`keep.txt` L7**"));
+    assert!(review_body.contains("far away"));
     assert_eq!(vars["prId"], "PR_node");
     assert_eq!(vars["commit"], remote.head_sha);
     assert_eq!(vars["threads"].as_array().unwrap().len(), 1);
@@ -1033,4 +1032,57 @@ fn sending_a_pull_request_review_to_an_agent_keeps_it_for_github() {
     assert!(posted["session"]["comments"].as_array().unwrap().is_empty());
     let history = posted["session"]["history"].as_array().unwrap();
     assert!(history.iter().any(|c| c["id"] == inline.as_str()));
+}
+
+#[test]
+fn a_comment_written_into_an_interrupted_review_body_is_not_sent_again() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let outside = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 7, "body": "far away"}),
+    );
+    let dry = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github", "--dry-run"])
+            .output()
+            .unwrap(),
+    );
+    let review_body = dry["data"]["preview"]["variables"]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    pending(
+        &state,
+        serde_json::json!({
+            "at": "2026-01-01T00:00:00Z",
+            "comments": [],
+            "event": "COMMENT",
+            "decision_body": "",
+            "review_body": review_body,
+            "body_comments": [ { "id": outside, "text": "far away" } ]
+        }),
+    );
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([]),
+        serde_json::json!([
+            { "state": "COMMENTED", "body": review_body, "submittedAt": "2026-01-01T00:00:01Z", "url": "r", "author": {"login": "me"} }
+        ]),
+    );
+    let body = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github"])
+            .output()
+            .unwrap(),
+    );
+    assert!(mutation_calls(&gh).is_empty(), "nothing is posted twice");
+    assert_eq!(body["data"]["sent"][0]["comment_id"], outside.as_str());
+    assert!(body["session"]["comments"].as_array().unwrap().is_empty());
 }
