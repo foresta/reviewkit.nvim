@@ -417,6 +417,25 @@ T["orchestrator"]["a range of the queue list submits only those comments"] = fun
   eq(sent.comment_ids, { "c_2" })
 end
 
+T["orchestrator"]["visual <leader>rs in the queue list submits the selected lines"] = function()
+  helpers.respond(dir, two_comment_rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("require('reviewkit.view.queue').show_comments()")
+  child.cmd("copen")
+  child.lua("vim.ui.select = function(items, _, on_choice) on_choice('herdr') end")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 2, 0 })")
+  child.type_keys("V", "\\rs")
+  wait_for_call("--sink herdr")
+  local sent
+  for _, call in ipairs(helpers.calls(dir)) do
+    if table.concat(call.args, " "):find("--sink herdr", 1, true) then
+      sent = vim.json.decode(call.stdin)
+    end
+  end
+  eq(sent.comment_ids, { "c_2" })
+end
+
 T["orchestrator"]["a range outside the queue list is refused"] = function()
   helpers.respond(dir, two_comment_rules())
   child.cmd("Review diff HEAD~1")
@@ -754,7 +773,8 @@ local function github_rules()
     },
     head = { ref = "f", sha = string.rep("c", 40), dirty = false },
   })
-  pr.comments = { { id = "c_1", path = "src/a.rs", side = "head", line = 4, body = "nit: tighter\nmore" } }
+  pr.comments =
+    { { id = "c_1", path = "src/a.rs", side = "head", line = 4, kind = "issue", body = "nit: tighter\nmore" } }
   local plan = {
     sink = "github",
     decision = "approve",
@@ -831,6 +851,25 @@ T["orchestrator"]["cancelling the preview sends nothing, and the preview can be 
   child.cmd("ReviewSubmit github")
   wait_notice("pullrequestreview-1")
   eq(github_submits(), 1)
+end
+
+T["orchestrator"]["the GitHub confirmation previews the same selection it sends"] = function()
+  helpers.respond(dir, github_rules())
+  child.cmd("Review pr 7")
+  wait_notice("#7 Add k")
+  child.lua("require('reviewkit.view.queue').show_comments()")
+  child.cmd("copen")
+  child.cmd("1ReviewSubmit github")
+  wait_for_call("--dry-run")
+  local preview = calls_with("--dry-run")[1]
+  local stdin
+  for _, call in ipairs(helpers.calls(dir)) do
+    if table.concat(call.args, " "):find("--dry-run", 1, true) then
+      stdin = vim.json.decode(call.stdin)
+    end
+  end
+  eq(preview ~= nil, true)
+  eq(stdin.comment_ids, { "c_1" })
 end
 
 return T
