@@ -219,7 +219,13 @@ impl Store {
     /// returned guard because the borrow checker cannot yet return a guard
     /// out of a retry loop.
     fn with_lock<T>(&self, id: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
-        lock_while(&self.dir.lock_file(id)?, self.lock_timeout, &format!("session {id}"), f)
+        lock_while(&self.dir.lock_file(id)?, self.lock_timeout, &format!("session {id}"), f).map_err(|err| {
+            if err.code == ErrorCode::ELocked {
+                err.hint("a submit may still be running; try again when it finishes")
+            } else {
+                err
+            }
+        })
     }
 
     /// Serializes slow work on one session (fetching a pull request) without
@@ -767,6 +773,7 @@ mod tests {
         let err = store.update("local/abc/x", |_| Ok(())).unwrap_err();
         assert_eq!(err.code, ErrorCode::ELocked);
         assert!(err.retryable);
+        assert!(err.hint.as_deref().is_some_and(|h| h.contains("submit")));
     }
 
     #[test]

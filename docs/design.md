@@ -293,7 +293,10 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   Session の封筒を重くしない。変更系は advisory lock → 読む → 適用 → `rev += 1` → temp + rename。
   ロックはプロセス終了で解放される。CLI のロック待ちは短く（2 秒）、Lua の `cli.call` が `E_LOCKED` を間隔を空けて数回再試行する。
   PR の refresh（gh と git fetch）はロックの外で取得し、ロックの中では読み直したセッションに当てるだけにする。
-  GitHub への送信は、送信中の編集を失わないよう今はロックを持ったまま行う（版の照合で外せるようになるまで）。
+  送信はロックを持ったまま行う（送信中の編集を失わないため。版の照合で外せるようになるまで）。持つのは github の送信
+  （中断した送信の照合で gh から PR を取り直す段も含む。gh の呼び出しごとに timeout があり、それが送信の間続く）と herdr の送信（`agent prompt` / `pane send-text`）。
+  その間の変更系（コメントの追加・編集、decision）は再試行の後に `E_LOCKED`（hint で送信中の可能性を示す）で失敗する。
+  入力窓から保存したものが失敗したときは、Lua が入力した本文のまま入力窓を開き直し、本文を失わない。
   PR の取得はセッションごとの fetch.lock で直列にし、リポジトリごとの mirror は `mirror.lock` で守る（作成は一時ディレクトリから rename）。
   git の fetch / clone は `REVIEWKIT_GIT_TIMEOUT_MS`（既定 120 秒）で打ち切り、認証のプロンプトは出さない
 - PR の実体化は `<state-dir>/repos/<key>/mirror.git`（bare。ローカルからの clone でオブジェクトはハードリンク）と

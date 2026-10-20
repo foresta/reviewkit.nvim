@@ -461,32 +461,31 @@ function M.comment(opts)
     vim.list_extend(lines, vim.api.nvim_buf_get_lines(buf, (start_line or line) - 1, line, false))
     table.insert(lines, "```")
   end
-  require("reviewkit.view.input").open({
+  require("reviewkit.view.input").open_keeping({
     title = "Comment " .. where .. (outside and " (outside the diff; agent only)" or ""),
     lines = lines,
     start_insert = true,
     footer = " :w save · q cancel · first line `nit:` sets the kind ",
-    on_save = function(text)
-      if vim.trim(text) == "" then
-        return
+  }, function(text, done)
+    if vim.trim(text) == "" then
+      return
+    end
+    local body, kind, suggestion = compose(text)
+    core.add_comment({
+      path = path,
+      side = side,
+      line = line,
+      start_line = start_line,
+      kind = kind,
+      body = body,
+      suggestion = suggestion,
+    }, function(err)
+      if err then
+        return done(err)
       end
-      local body, kind, suggestion = compose(text)
-      core.add_comment({
-        path = path,
-        side = side,
-        line = line,
-        start_line = start_line,
-        kind = kind,
-        body = body,
-        suggestion = suggestion,
-      }, function(err)
-        if err then
-          return notify_error(err)
-        end
-        notify("queued " .. where)
-      end)
-    end,
-  })
+      notify("queued " .. where)
+    end)
+  end)
 end
 
 function M.edit_comment()
@@ -495,18 +494,13 @@ function M.edit_comment()
   if not comment then
     return notify("no comment on this line")
   end
-  require("reviewkit.view.input").open({
+  require("reviewkit.view.input").open_keeping({
     title = ("Edit %s:%d"):format(comment.path, comment.line),
     lines = render(comment),
-    on_save = function(text)
-      local body, kind, suggestion = compose(text)
-      core.update_comment(comment.id, { body = body, kind = kind, suggestion = suggestion or vim.NIL }, function(err)
-        if err then
-          notify_error(err)
-        end
-      end)
-    end,
-  })
+  }, function(text, done)
+    local body, kind, suggestion = compose(text)
+    core.update_comment(comment.id, { body = body, kind = kind, suggestion = suggestion or vim.NIL }, done)
+  end)
 end
 
 --- Stale comments are offered first: re-anchoring them is what this is for.
@@ -586,17 +580,12 @@ function M.decision()
       end)
     end
     local current = core.decision()
-    require("reviewkit.view.input").open({
+    require("reviewkit.view.input").open_keeping({
       title = "Decision: " .. choice,
       lines = current and vim.split(current.body, "\n") or {},
-      on_save = function(body)
-        core.set_decision({ event = choice, body = body }, function(err)
-          if err then
-            notify_error(err)
-          end
-        end)
-      end,
-    })
+    }, function(body, done)
+      core.set_decision({ event = choice, body = body }, done)
+    end)
   end)
 end
 

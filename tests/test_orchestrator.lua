@@ -653,6 +653,64 @@ local function last_call(sub)
   return found
 end
 
+T["orchestrator"]["a comment that cannot be saved while a submit runs reopens with its text"] = function()
+  helpers.respond(
+    dir,
+    rules({
+      {
+        match = { "comment add" },
+        body = {
+          ok = false,
+          error = {
+            code = "E_LOCKED",
+            message = "session is locked by another process",
+            hint = "a submit may still be running; try again when it finishes",
+            retryable = true,
+            details = {},
+          },
+        },
+        exit = 5,
+      },
+    })
+  )
+  child.lua("require('reviewkit.cli').LOCK_RETRY_MS = {}")
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 4, 0 })")
+  child.lua("require('reviewkit.orchestrator').comment()")
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'nit: keep me', 'second line' })")
+  child.cmd("write")
+  wait_notice("a submit may still be running")
+  child.lua(
+    "vim.wait(5000, function() return vim.api.nvim_buf_get_name(0):find('reviewkit://input', 1, true) ~= nil end, 20)"
+  )
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, -1, false)"), { "nit: keep me", "second line" })
+  eq(child.lua_get("vim.bo.modified"), true)
+end
+
+T["orchestrator"]["a save refused twice reopens with the same text each time"] = function()
+  child.lua([[
+    _G.saves = {}
+    require("reviewkit.view.input").open_keeping({ title = "x" }, function(text, done)
+      table.insert(_G.saves, text)
+      done({ code = "E_NO_COMMENT", message = "gone", retryable = false, details = {} })
+    end)
+  ]])
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'kept', 'text' })")
+  child.cmd("write")
+  child.cmd("write")
+  eq(child.lua_get("_G.saves"), { "kept\ntext", "kept\ntext" })
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, -1, false)"), { "kept", "text" })
+  eq(child.lua_get("vim.bo.modified"), true)
+  eq(
+    child.lua_get(
+      "#vim.tbl_filter(function(w) return vim.api.nvim_win_get_config(w).relative ~= '' end, vim.api.nvim_list_wins())"
+    ),
+    1
+  )
+end
+
 T["orchestrator"]["a suggestion starts from the selected lines and is sent apart from the body"] = function()
   helpers.respond(
     dir,

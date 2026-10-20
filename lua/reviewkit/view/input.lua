@@ -10,6 +10,7 @@ local counter = 0
 ---@field on_save fun(body: string)
 ---@field on_cancel? fun()
 ---@field start_insert? boolean
+---@field modified? boolean
 
 --- A small floating buffer: `:w` (or <C-s>) saves and closes, `q` discards.
 --- It is `acwrite` so `:w` is caught by BufWriteCmd and nothing touches disk.
@@ -24,7 +25,8 @@ function M.open(opts)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   api.nvim_buf_set_lines(buf, 0, -1, false, opts.lines or {})
-  vim.bo[buf].modified = false
+  -- Text brought back after a failed save is unsaved work: `q` must ask.
+  vim.bo[buf].modified = opts.modified == true
   vim.bo[buf].filetype = "markdown"
 
   local width = math.min(90, vim.o.columns - 8)
@@ -81,6 +83,41 @@ function M.open(opts)
     vim.cmd("startinsert")
   end
   return buf, win
+end
+
+--- The window closes on `:w` before the CLI answers; a save refused then
+--- (a submit holding the session, a rejected input) would lose the text.
+---@param opts table reviewkit.InputOpts without on_save
+---@param save fun(text: string, done: fun(err?: reviewkit.Error))
+function M.open_keeping(opts, save)
+  M.open(vim.tbl_extend("force", opts, {
+    on_save = function(text)
+      save(text, function(err)
+        if not err then
+          return
+        end
+        local msg = ("[reviewkit] %s: %s"):format(err.code, err.message)
+        if err.hint then
+          msg = msg .. "\n" .. err.hint
+        end
+        vim.notify(msg, vim.log.levels.ERROR)
+        local again =
+          vim.tbl_extend("force", opts, { lines = vim.split(text, "\n", { plain = true }), modified = true })
+        local function reopen()
+          -- No window can open from the command-line window (E11).
+          if vim.fn.getcmdwintype() ~= "" then
+            api.nvim_create_autocmd("CmdwinLeave", { once = true, callback = vim.schedule_wrap(reopen) })
+            return
+          end
+          if not pcall(M.open_keeping, again, save) then
+            vim.fn.setreg('"', text)
+            vim.notify("[reviewkit] the text is kept in the unnamed register", vim.log.levels.WARN)
+          end
+        end
+        reopen()
+      end)
+    end,
+  }) --[[@as reviewkit.InputOpts]])
 end
 
 return M
