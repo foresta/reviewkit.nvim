@@ -165,7 +165,10 @@ SubmitOptions {             -- submit の stdin（省略可）。sink 固有の�
   consume?: bool            -- 送れたコメントをキューから消すか。既定は sink が決める（Sink::consumes）
   comment_ids?: string[]    -- 送るコメントを選ぶ。省略はキュー全体。選んだときは decision とスレッド操作を送らない
                             -- （decision は skipped）。キューに無く history にある id は送信済みとして落とす。
-                            -- どちらにも無い id は E_NO_COMMENT、`[]` は E_INVALID。共通の予約語は consume とこれの 2 つ
+                            -- どちらにも無い id は E_NO_COMMENT、`[]` は E_INVALID
+  expect_digest?: string    -- 確認したプレビューの `digest`。送る内容がそれと違えば送らずに E_CONFLICT
+                            -- （details.reason = "preview_changed"）。digest を返さない sink に渡すと E_INVALID。
+                            -- 共通の予約語は consume・comment_ids・expect_digest の 3 つ
   ...HerdrOptions | GithubOptions
 }
 HerdrOptions {
@@ -274,6 +277,11 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   返信・スレッド操作・Decision の event、まとめて送る本文（review の body / herdr のプロンプト）と送り先を添える。
   path や行はクライアントが自分の Session から引く。sink が実際に送るリクエスト（GraphQL / herdr の引数）は
   `raw` に入るが契約外で、sink の実装に合わせて予告なく変わる
+- `SubmitPreview.digest`（github だけ）は送る内容（review の event・本文・行コメント・返信・スレッド操作）のハッシュ。試行ごとの
+  marker は含めない。プレビューも中断した送信の照合を（保存せずに）行ってから作るので、確認した内容と実際に送る内容が揃う。
+  submit は `expect_digest` を、ロックを取って照合を済ませた後の送る直前の内容と比べる。確認から送信までの間に別のインスタンスが
+  decision やコメントを変えた・refresh した場合は送らず、Lua はプレビューを出し直す。`--expect-rev` は使わない（既読や
+  送る内容に関係の無い変更でも弾くため）。照合だけで送るものが無くなったときのプレビューは空で、確認すると submit が照合を保存する
 - `SinkTarget { id, name?, status?, cwd?, title? }` は送り先の候補。`id` を `HerdrOptions.target` に渡す。
   `sink targets` は agent の無い pane も含めて全 pane を返す（stage は任意の pane に送れる）。
   `E_AMBIGUOUS` の `details.candidates` は agent が動いている pane だけ

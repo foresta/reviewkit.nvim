@@ -4,7 +4,7 @@
 local M = {}
 
 M.SCHEMA_VERSION = 1
-M.SCHEMA_REVISION = 8
+M.SCHEMA_REVISION = 9
 
 ---@alias reviewkit.AgentType "claude"|"plain"
 
@@ -328,12 +328,13 @@ M.SCHEMA_REVISION = 8
 
 ---@alias reviewkit.SubjectType "line"|"file"
 
---- `consume` and `comment_ids` are the keys every sink shares; the rest of
+--- `consume`, `comment_ids` and `expect_digest` are the keys every sink shares; the rest of
 --- the object is the chosen sink's own options (`HerdrOptions`,
 --- `GithubOptions`), kept flat so a client can pass one table per sink as it is.
 ---@class reviewkit.SubmitOptions
 ---@field comment_ids? string[] Sends only these queued comments, without the decision and thread actions. An id already in the history counts as sent and is dropped.
 ---@field consume? boolean Whether delivered comments leave the queue. By default only the session kind's own destination consumes them; github always does, since keeping posted comments would post them again.
+---@field expect_digest? string The `digest` of the preview the user confirmed; a send that differs from it is refused instead of posting something not shown.
 
 --- What a submit would do, in the same shape for every sink. Comments are
 --- named by id; a client finds their path and text in its session.
@@ -341,6 +342,7 @@ M.SCHEMA_REVISION = 8
 ---@field body_comment_ids string[] Comments written into `text` because the destination cannot place them on a line.
 ---@field comment_ids string[] Comments placed on their lines.
 ---@field decision? reviewkit.DecisionEvent The review event that will be posted, also when it is implied (a github review of comments without a Decision is a `comment`).
+---@field digest? string What `SubmitOptions.expect_digest` is compared with; only sinks that can check it under the session lock give one.
 ---@field mode reviewkit.DeliveryMode
 ---@field raw table The sink's own request, for debugging. Not part of the contract: it changes whenever the sink's transport does.
 ---@field replies reviewkit.PreviewReply[]

@@ -418,7 +418,35 @@ pub fn preview(session: &Session) -> Result<SubmitPreview> {
         target: None,
         mode: DeliveryMode::Sent,
         raw: serde_json::to_value(&plan).unwrap_or_default(),
+        digest: Some(digest(session)?),
     })
+}
+
+/// Planned with no attempt, so the per-attempt markers do not make two
+/// plans of the same content differ.
+fn digest(session: &Session) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let plan = plan(session, "")?;
+    let mut hasher = Sha256::new();
+    hasher.update(plan.mutation.as_bytes());
+    hasher.update([0]);
+    hasher.update(plan.variables.to_string().as_bytes());
+    Ok(hasher.finalize()[..12].iter().map(|b| format!("{b:02x}")).collect())
+}
+
+fn check_digest(session: &Session, expected: Option<&str>) -> Result<()> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    if digest(session)? == expected {
+        return Ok(());
+    }
+    Err(Error::new(
+        ErrorCode::EConflict,
+        "the review changed after it was previewed; nothing was sent",
+    )
+    .details(serde_json::json!({ "reason": "preview_changed" }))
+    .hint("preview it again"))
 }
 
 /// The decision counts as posted only when the found review carried it and
@@ -951,17 +979,50 @@ impl super::Sink for GithubSink {
         true
     }
 
-    /// The preview does not reconcile an interrupted submit; it may list
-    /// comments the real submit will find already posted.
+    /// An interrupted submit is reconciled here too, on a copy: a preview
+    /// that still listed what already reached GitHub could never match the
+    /// digest of the send, which reconciles first.
     fn preview(
         &self,
-        _ctx: &crate::context::Context,
+        ctx: &crate::context::Context,
         session: &Session,
         opts: &crate::model::SubmitOptions,
     ) -> Result<SubmitPreview> {
         let _: crate::model::GithubOptions = opts.sink_options()?;
-        let view = crate::core::comments::narrowed(session, opts.comment_ids.as_deref())?;
-        preview(view.as_ref().unwrap_or(session))
+        let mut session = session.clone();
+        let session_dir = crate::store::Store::new(ctx.state_dir.clone())
+            .state_dir()
+            .session_dir(&session.id)?;
+        let mut recovered = false;
+        if pending_path(&session_dir).exists() {
+            let gh = gh::SystemGh::new(ctx.tools.gh.as_deref())?;
+            let repo = repo_ref_of(&session)?;
+            if let Some(found) = reconcile_pending(&mut session, &gh, &repo, &session_dir)? {
+                crate::core::apply::apply(&mut session, found, true)?;
+                recovered = true;
+            }
+        }
+        let planned = crate::core::comments::narrowed(&session, opts.comment_ids.as_deref())
+            .and_then(|view| preview(view.as_ref().unwrap_or(&session)));
+        match planned {
+            // Only the send saves the recovery, so the confirmation must still
+            // let it run when nothing is left to post.
+            Err(err) if recovered && is_nothing_to_submit(&err) => Ok(SubmitPreview {
+                sink: NAME.into(),
+                comment_ids: Vec::new(),
+                body_comment_ids: Vec::new(),
+                skipped: Vec::new(),
+                replies: Vec::new(),
+                thread_actions: Vec::new(),
+                decision: None,
+                text: None,
+                target: None,
+                mode: DeliveryMode::Sent,
+                raw: serde_json::Value::Null,
+                digest: Some("recovered".into()),
+            }),
+            other => other,
+        }
     }
 
     fn submit(
@@ -998,6 +1059,7 @@ impl super::Sink for GithubSink {
         let outcome = store.update(id, |s| {
             let repo = repo_ref_of(s)?;
             let view = crate::core::comments::narrowed(s, opts.comment_ids.as_deref())?;
+            check_digest(view.as_ref().unwrap_or(s), opts.expect_digest.as_deref())?;
             let mut result = submit(view.as_ref().unwrap_or(s), &gh, &repo, &session_dir)?;
             if view.is_some() && s.decision.is_some() {
                 result.decision = DecisionStatus::Skipped;

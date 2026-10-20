@@ -661,7 +661,7 @@ function M.submit(sink, opts)
         return notify_error(err)
       end
       require("reviewkit.view.preview").show(plan, core.session(), function()
-        M.submit(sink, vim.tbl_extend("force", opts, { confirmed = true }))
+        M.submit(sink, vim.tbl_extend("force", opts, { confirmed = true, expect_digest = plan.digest }))
       end)
     end)
   end
@@ -681,6 +681,13 @@ function M.submit(sink, opts)
           M.submit(sink, vim.tbl_extend("force", opts, { target = choice.id }))
         end
       end)
+    end
+    if err and err.code == "E_CONFLICT" and (err.details or {}).reason == "preview_changed" then
+      vim.notify("[reviewkit] the review changed after the preview; check it again", vim.log.levels.WARN)
+      local again = vim.deepcopy(opts)
+      again.confirmed = nil
+      again.expect_digest = nil
+      return M.submit(sink, again)
     end
     if err then
       return notify_error(err)

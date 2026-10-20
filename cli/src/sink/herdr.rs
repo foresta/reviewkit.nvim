@@ -288,6 +288,7 @@ pub fn preview(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Res
             DeliveryMode::Sent
         },
         raw: serde_json::to_value(&request).unwrap_or_default(),
+        digest: None,
     })
 }
 
@@ -410,6 +411,11 @@ impl super::Sink for HerdrSink {
         opts: &SubmitOptions,
     ) -> Result<(Session, SinkResult)> {
         let options: HerdrOptions = opts.sink_options()?;
+        if opts.expect_digest.is_some() {
+            return Err(crate::error::Error::invalid(
+                "the herdr sink gives no preview digest to expect",
+            ));
+        }
         let herdr = herdr::SystemHerdr::new(ctx.tools.herdr.as_deref())?;
         store.update(id, |s| {
             let view = crate::core::comments::narrowed(s, opts.comment_ids.as_deref())?;
