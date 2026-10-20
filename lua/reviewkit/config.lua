@@ -5,7 +5,7 @@ local M = {}
 ---@field tools { git?: string, gh?: string, herdr?: string }
 ---@field set_keymaps boolean
 ---@field view { queue: "quickfix"|"float" }
----@field sinks { herdr: { agent_type: "claude"|"plain", header?: string, match_foreground_cwd: boolean, consume?: boolean }, github: table, clipboard: { register: string } }
+---@field sinks { herdr: { agent_type: "claude"|"plain", header?: string, match_foreground_cwd: boolean, consume?: boolean }, github: { confirm: boolean }, clipboard: { register: string } }
 
 ---@type reviewkit.Config
 local defaults = {
@@ -15,7 +15,7 @@ local defaults = {
   view = { queue = "quickfix" },
   sinks = {
     herdr = { agent_type = "claude", header = nil, match_foreground_cwd = true },
-    github = {},
+    github = { confirm = true },
     clipboard = { register = "+" },
   },
 }

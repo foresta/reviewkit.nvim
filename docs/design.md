@@ -318,7 +318,7 @@ require("reviewkit").setup({
   view = { queue = "quickfix" },                  -- "quickfix" | "float"
   sinks = {
     herdr = { agent_type = "claude", header = nil, match_foreground_cwd = true },   -- SubmitOptions に詰める
-    github = {},
+    github = { confirm = true },                    -- :ReviewSubmit github は送る内容を見せて確認する
     clipboard = { register = "+" },
   },
 })

@@ -481,6 +481,7 @@ function M.submit(sink, opts, cb)
   local stdin = nil
   local sink_defaults = config.get().sinks[sink]
   local merged = vim.tbl_extend("force", sink_defaults or {}, opts)
+  merged.confirm = nil
   if next(merged) ~= nil then
     vim.list_extend(args, { "--options", "-" })
     stdin = merged
@@ -489,6 +490,33 @@ function M.submit(sink, opts, cb)
     take_session(run_err, envelope, function(take_err, taken)
       cb(take_err, envelope and envelope.data or nil, taken)
     end, { submitted = envelope and envelope.data or nil })
+  end)
+end
+
+--- What `submit` would send, without sending it (`--dry-run`).
+---@param sink string
+---@param opts? table
+---@param cb fun(err: reviewkit.Error?, preview: table?)
+function M.preview(sink, opts, cb)
+  local session, err = require_session()
+  if not session then
+    return vim.schedule(function()
+      cb(err)
+    end)
+  end
+  local args = { "submit", "--session", session.id, "--sink", sink, "--dry-run" }
+  local merged = vim.tbl_extend("force", config.get().sinks[sink] or {}, opts or {})
+  merged.confirm = nil
+  local stdin = nil
+  if next(merged) ~= nil then
+    vim.list_extend(args, { "--options", "-" })
+    stdin = merged
+  end
+  cli.call(args, { stdin = stdin }, function(run_err, envelope)
+    if run_err then
+      return cb(run_err)
+    end
+    cb(nil, envelope and envelope.data and envelope.data.preview or nil)
   end)
 end
 
