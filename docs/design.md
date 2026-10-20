@@ -298,8 +298,15 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
 - 選択送信: sink には選んだコメントだけを持ち decision とスレッド操作を持たないセッションの写しを渡し、結果は本物のセッションに
   適用する。Lua の sink にも同じ写しを渡し、`attempted` は選んだ id にする。apply は `attempted` 外の `sent` を無視する
 - 二重送信の防止: gh を呼ぶ前に `pending_submit.json` を書く。次の GitHub への submit で残っていれば threads を取り直し、
-  「同じファイル・side に、自分が、同じ本文で、試行の開始以後に投稿したもの」を送信済みとみなしてから消す（行は push で動くので見ない）。
-  review 本文に書いたコメントは、自分の review が送った本文のまま投稿されていれば送信済みとみなす。
+  照合してから消す。行コメントと返信の本文の末尾には、独立した行で `<!-- reviewkit:<hash> -->` を付ける。hash は
+  （コメントの id, 試行の時刻 `at`）から作るので、同じコメントの前の試行の投稿とも、Web UI で書いた同じ本文とも区別できる。
+  照合はこの marker の一致で行い、viewer が分かっていれば投稿者が viewer であることも求める（引用で marker を写した他人の投稿を拾わない）。
+  review は、運んだ行コメントのどれかが見つかれば投稿済み（review と行コメントは 1 つの mutation で作られる）。
+  diff 外のコメントを書き込んだ review は本文にも marker を付け、それで探す。decision だけの review は marker を持たず、
+  「自分の、同じ state・同じ本文の、試行の開始以後の review」で探す。marker を付ける前の版が書いた pending（`marked` が無い）は
+  本文と時刻で照合する。本文で照合する場合（decision だけの review と、古い pending）は、viewer が取れなければ照合せず、
+  再試行可のエラーで止める（誰の投稿でも一致してしまうため）。
+  marker は表示（threads、`pr.json`）に出す前に剥がし、照合は剥がす前の本文で行う。
   残っている間は Session の `pending_submit` が true（ファイルの有無から毎回求める）で、Lua は開いたときに知らせる。
   記録には review が decision を運んだかも残し、運んでいない review（comment だけの送信）を照合しても decision は消さない
 - 送信の故障時の挙動（送信の経路を変えるときはここを先に直す）:

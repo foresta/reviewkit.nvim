@@ -4,23 +4,23 @@ expression: plan.variables
 ---
 {
   "action0": "PRRT_2",
-  "body": "please\n\n---\n\n### Comments outside the diff\n\n**`src/a.rs` L6**\nhttps://github.com/o/r/blob/cccccccccccccccccccccccccccccccccccccccc/src/a.rs#L6\n\nbody of c_4",
+  "body": "please\n\n---\n\n### Comments outside the diff\n\n**`src/a.rs` L6**\nhttps://github.com/o/r/blob/cccccccccccccccccccccccccccccccccccccccc/src/a.rs#L6\n\nbody of c_4\n\n<!-- reviewkit:f73590ddf7a0 -->",
   "commit": "cccccccccccccccccccccccccccccccccccccccc",
   "event": "REQUEST_CHANGES",
   "prId": "PR_node",
   "reply0": {
-    "body": "body of c_5",
+    "body": "body of c_5\n\n<!-- reviewkit:e6643066d5a4 -->",
     "pullRequestReviewThreadId": "PRRT_1"
   },
   "threads": [
     {
-      "body": "body of c_1",
+      "body": "body of c_1\n\n<!-- reviewkit:c9cd5085fd69 -->",
       "line": 3,
       "path": "src/a.rs",
       "side": "RIGHT"
     },
     {
-      "body": "body of c_2\n\n```suggestion\nlet x = 1;\n```",
+      "body": "body of c_2\n\n```suggestion\nlet x = 1;\n```\n\n<!-- reviewkit:e368847b8977 -->",
       "line": 10,
       "path": "src/a.rs",
       "side": "LEFT",
