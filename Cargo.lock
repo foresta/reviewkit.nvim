@@ -718,6 +718,7 @@ dependencies = [
  "fd-lock",
  "insta",
  "jiff",
+ "libc",
  "log",
  "schemars",
  "serde",

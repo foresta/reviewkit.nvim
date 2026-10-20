@@ -681,3 +681,86 @@ fn a_large_file_whose_name_looks_like_pathspec_magic_is_still_sized() {
     assert_eq!(big["too_large"], true, "{big}");
     assert_eq!(big["hunks"], serde_json::json!([]));
 }
+
+fn logging_git(bin: &tempfile::TempDir, line: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let log = bin.path().join("calls");
+    let wrapper = bin.path().join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\necho \"{line}\" >> {}\nexec {} \"$@\"\n",
+            log.display(),
+            real_git().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    (wrapper, log)
+}
+
+#[test]
+fn a_git_dir_inherited_from_the_caller_does_not_redirect_git() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let other = Repo::new();
+    other.write("elsewhere.txt", "x\n");
+    let body = json(
+        &reviewkit(&state, &repo)
+            .env("GIT_DIR", other.path().join(".git"))
+            .env("GIT_WORK_TREE", other.path())
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        std::path::Path::new(body["session"]["repo"]["root"].as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        repo.path().canonicalize().unwrap()
+    );
+    let paths: Vec<&str> = body["session"]["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["path"].as_str().unwrap())
+        .collect();
+    assert!(!paths.contains(&"elsewhere.txt"), "{paths:?}");
+}
+
+#[test]
+fn git_runs_without_optional_locks_askpass_or_a_terminal() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.write("keep.txt", "changed\n");
+    let bin = tempfile::tempdir().unwrap();
+    let (wrapper, log) = logging_git(
+        &bin,
+        "locks=$GIT_OPTIONAL_LOCKS askpass=[$GIT_ASKPASS$SSH_ASKPASS] require=$SSH_ASKPASS_REQUIRE index=[$GIT_INDEX_FILE] pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') tty=$(ps -o tty= -p $$ | tr -d ' ')",
+    );
+    json(
+        &reviewkit(&state, &repo)
+            .env("REVIEWKIT_GIT", &wrapper)
+            .env("GIT_ASKPASS", "/bin/false")
+            .env("SSH_ASKPASS", "/bin/false")
+            .env("GIT_INDEX_FILE", "/nonexistent/index")
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(calls.lines().count() > 0);
+    for line in calls.lines() {
+        assert!(line.starts_with("locks=0 askpass=[] require=never index=[] "), "{line}");
+        assert!(
+            line.ends_with("tty=??") || line.ends_with("tty=?"),
+            "no terminal: {line}"
+        );
+        let field = |name: &str| {
+            line.split_whitespace()
+                .find_map(|w| w.strip_prefix(&format!("{name}=")))
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(field("pgid"), field("pid"), "a session of its own: {line}");
+    }
+}

@@ -304,7 +304,13 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   その間の変更系（コメントの追加・編集、decision）は再試行の後に `E_LOCKED`（hint で送信中の可能性を示す）で失敗する。
   入力窓から保存したものが失敗したときは、Lua が入力した本文のまま入力窓を開き直し、本文を失わない。
   PR の取得はセッションごとの fetch.lock で直列にし、リポジトリごとの mirror は `mirror.lock` で守る（作成は一時ディレクトリから rename）。
-  git の fetch / clone は `REVIEWKIT_GIT_TIMEOUT_MS`（既定 120 秒）で打ち切り、認証のプロンプトは出さない
+  git の fetch / clone は `REVIEWKIT_GIT_TIMEOUT_MS`（既定 120 秒）で打ち切り、認証のプロンプトは出さない。
+  git は呼び出し元の環境に左右されないよう、リポジトリを指す変数（`GIT_DIR`、`GIT_WORK_TREE`、`GIT_INDEX_FILE` など。
+  フックやコミットエディタから起動した Neovim が持つ）と pathspec の解釈を変える変数を外し、`GIT_OPTIONAL_LOCKS=0` で
+  `status` が index.lock を取らないようにし（利用者の `git add` / `commit` と衝突しない）、制御端末を持たない新しいセッションで
+  動かす（ssh のホスト鍵やパスフレーズの確認が端末に出て、ロックを持ったまま待つことがない。確認が要る接続は失敗する）。
+  askpass（`GIT_ASKPASS`、`SSH_ASKPASS`、`core.askPass`）も使わない（エディタやデスクトップの入力窓が出て同じく待つため）。
+  timeout で打ち切るときはセッションのプロセスグループごと止める
 - PR の実体化は `<state-dir>/repos/<key>/mirror.git`（bare。ローカルからの clone でオブジェクトはハードリンク）と
   `<state-dir>/repos/<key>/pr/<n>/`（worktree）。2 回目以降は同じ worktree を使い回し、head が同じなら fetch しない。
   ユーザーのリポジトリには何も書かない
