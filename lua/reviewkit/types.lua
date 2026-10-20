@@ -5,18 +5,6 @@ local M = {}
 
 M.SCHEMA_VERSION = 1
 
---- The subset of `herdr agent list` the sink needs. Extra fields are
---- ignored and `pane_id` may be absent, so one odd entry never breaks the
---- whole listing.
----@class reviewkit.Agent
----@field agent string
----@field agent_status? string
----@field cwd? string
----@field foreground_cwd? string
----@field pane_id? string
----@field terminal_title_stripped? string
----@field workspace_id? string
-
 ---@alias reviewkit.AgentType "claude"|"plain"
 
 --- Where the comment was made, kept so a later refresh can tell whether the
@@ -31,13 +19,6 @@ M.SCHEMA_VERSION = 1
 ---@field after string[]
 ---@field before string[]
 ---@field lines string[]
-
----@class reviewkit.Candidate
----@field agent string
----@field agent_status? string
----@field cwd? string
----@field pane_id string
----@field title? string
 
 ---@class reviewkit.Check
 ---@field conclusion? string
@@ -175,36 +156,6 @@ M.SCHEMA_VERSION = 1
 ---@field result reviewkit.SinkResult
 ---@field sink string
 
----@class reviewkit.Pane
----@field agent? string
----@field agent_status? string
----@field cwd? string
----@field foreground_cwd? string
----@field pane_id string
----@field terminal_title_stripped? string
----@field workspace_id? string
-
----@class reviewkit.Plan
----@field actions reviewkit.PlannedAction[]
----@field body_comment_ids? string[] Comments written into the review body because GitHub cannot place them on a diff line; they share the review's fate.
----@field event? string
----@field mutation string
----@field replies reviewkit.PlannedReply[]
----@field skipped reviewkit.Skipped[]
----@field thread_comment_ids string[] Comment ids in the order of `variables.threads`.
----@field variables table
-
----@class reviewkit.PlannedAction
----@field action reviewkit.ThreadActionKind
----@field alias string
----@field thread_id string
-
----@class reviewkit.PlannedReply
----@field alias string
----@field body string
----@field comment_id string
----@field thread_id string
-
 --- Kept in `pr.json`, not in the session, so the envelope stays small.
 ---@class reviewkit.PrInfo
 ---@field author string
@@ -220,10 +171,9 @@ M.SCHEMA_VERSION = 1
 --- GitHub's own spelling, so sink-github passes it through unchanged.
 ---@alias reviewkit.PrState "OPEN"|"CLOSED"|"MERGED"
 
----@class reviewkit.Preview
----@field prompt string
----@field stage boolean
----@field target string
+---@class reviewkit.PreviewReply
+---@field comment_id string
+---@field thread_id string
 
 ---@class reviewkit.Range
 ---@field end integer
@@ -306,6 +256,15 @@ M.SCHEMA_VERSION = 1
 ---@field thread_actions? reviewkit.ThreadActionResult[]
 ---@field url? string
 
+--- A destination a sink can send to, for a picker (`sink targets`, and the
+--- candidates of `E_AMBIGUOUS`).
+---@class reviewkit.SinkTarget
+---@field cwd? string
+---@field id string What `SubmitOptions.target` takes.
+---@field name? string
+---@field status? string
+---@field title? string
+
 ---@class reviewkit.Skipped
 ---@field comment_id string
 ---@field reason reviewkit.Reason
@@ -350,6 +309,21 @@ M.SCHEMA_VERSION = 1
 ---@field match_foreground_cwd? boolean
 ---@field stage? boolean
 ---@field target? string
+
+--- What a submit would do, in the same shape for every sink. Comments are
+--- named by id; a client finds their path and text in its session.
+---@class reviewkit.SubmitPreview
+---@field body_comment_ids string[] Comments written into `text` because the destination cannot place them on a line.
+---@field comment_ids string[] Comments placed on their lines.
+---@field decision? reviewkit.DecisionEvent The review event that will be posted, also when it is implied (a github review of comments without a Decision is a `comment`).
+---@field mode reviewkit.DeliveryMode
+---@field raw table The sink's own request, for debugging. Not part of the contract: it changes whenever the sink's transport does.
+---@field replies reviewkit.PreviewReply[]
+---@field sink string
+---@field skipped reviewkit.Skipped[]
+---@field target? string Where it goes when the sink picks a destination (a herdr pane).
+---@field text? string The text sent as a whole: the review body (github) or the prompt (herdr).
+---@field thread_actions reviewkit.ThreadAction[]
 
 ---@class reviewkit.Target
 ---@field base_blob? string

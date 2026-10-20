@@ -136,7 +136,7 @@ T["orchestrator"]["ReviewSubmit resolves E_AMBIGUOUS through vim.ui.select and r
             code = "E_AMBIGUOUS",
             message = "pick one",
             retryable = false,
-            details = { candidates = { { pane_id = "w9:p3", agent = "claude", agent_status = "idle" } } },
+            details = { candidates = { { id = "w9:p3", name = "claude", status = "idle" } } },
           },
         },
         exit = 4,
@@ -148,7 +148,7 @@ T["orchestrator"]["ReviewSubmit resolves E_AMBIGUOUS through vim.ui.select and r
   child.lua("vim.ui.select = function(items, _, on_choice) _G.offered = items; on_choice(items[1]) end")
   child.cmd("ReviewSubmit herdr")
   wait_notice("0 sent, 0 failed")
-  eq(child.lua_get("_G.offered[1].pane_id"), "w9:p3")
+  eq(child.lua_get("_G.offered[1].id"), "w9:p3")
   local calls = helpers.calls(dir)
   local last = calls[#calls]
   eq(vim.json.decode(last.stdin).target, "w9:p3")
@@ -494,17 +494,18 @@ local function github_rules()
     },
     head = { ref = "f", sha = string.rep("c", 40), dirty = false },
   })
+  pr.comments = { { id = "c_1", path = "src/a.rs", side = "head", line = 4, body = "nit: tighter\nmore" } }
   local plan = {
-    mutation = "m",
-    event = "APPROVE",
-    variables = {
-      body = "ship it",
-      threads = { { path = "src/a.rs", line = 4, side = "RIGHT", body = "nit: tighter\nmore" } },
-    },
+    sink = "github",
+    decision = "approve",
+    text = "ship it",
+    comment_ids = { "c_1" },
+    body_comment_ids = {},
     skipped = {},
-    thread_comment_ids = { "c_1" },
-    replies = {},
-    actions = { { alias = "action0", thread_id = "PRRT_1", action = "resolve" } },
+    replies = { { comment_id = "c_gone", thread_id = "PRRT_2" } },
+    thread_actions = { { thread_id = "PRRT_1", action = "resolve" } },
+    mode = "sent",
+    raw = {},
   }
   local result = {
     sink = "github",
@@ -546,6 +547,7 @@ T["orchestrator"]["a GitHub submit is previewed and only sent after y"] = functi
   eq(lines[2], "ship it")
   eq(vim.tbl_contains(lines, "  src/a.rs:4  nit: tighter"), true)
   eq(vim.tbl_contains(lines, "  resolve PRRT_1"), true)
+  eq(vim.tbl_contains(lines, "  c_gone"), true)
   eq(github_submits(), 0)
   child.type_keys("y")
   wait_notice("pullrequestreview-1")

@@ -6,25 +6,17 @@ use crate::core::time;
 use crate::error::{Error, ErrorCode, Result};
 use crate::ext::herdr::{self, Agent, Herdr};
 use crate::model::{
-    AgentType, Comment, DecisionStatus, DeliveryMode, Failed, Sent, Session, Side, SinkResult, SubmitOptions,
+    AgentType, Comment, DecisionStatus, DeliveryMode, Failed, Sent, Session, Side, SinkResult, SinkTarget,
+    SubmitOptions, SubmitPreview,
 };
 
 pub const NAME: &str = "herdr";
 
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct Preview {
-    pub target: String,
-    pub prompt: String,
-    pub stage: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct Candidate {
-    pub pane_id: String,
-    pub agent: String,
-    pub agent_status: Option<String>,
-    pub cwd: Option<String>,
-    pub title: Option<String>,
+#[derive(Debug, Serialize, Deserialize)]
+struct Request {
+    target: String,
+    prompt: String,
+    stage: bool,
 }
 
 /// The pane whose agent works in this session's worktree. Several agents
@@ -59,11 +51,11 @@ pub fn resolve_target(agents: &[Agent], worktree: &Path, match_foreground_cwd: b
 }
 
 fn ambiguous<'a>(message: &str, agents: impl Iterator<Item = &'a Agent>) -> Error {
-    let candidates: Vec<Candidate> = agents
-        .map(|a| Candidate {
-            pane_id: a.pane_id.clone().unwrap_or_default(),
-            agent: a.agent.clone(),
-            agent_status: a.agent_status.clone(),
+    let candidates: Vec<SinkTarget> = agents
+        .map(|a| SinkTarget {
+            id: a.pane_id.clone().unwrap_or_default(),
+            name: Some(a.agent.clone()),
+            status: a.agent_status.clone(),
             cwd: a.cwd.clone(),
             title: a.terminal_title_stripped.clone(),
         })
@@ -217,7 +209,7 @@ fn kind_label(kind: crate::model::CommentKind) -> &'static str {
     }
 }
 
-pub fn preview(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Result<Preview> {
+fn request(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Result<Request> {
     if to_send(session).is_empty() && session.decision.as_ref().is_none_or(|d| d.body.trim().is_empty()) {
         return Err(Error::invalid(
             "nothing to submit: no comment the agent has not received yet, and no decision body",
@@ -231,10 +223,35 @@ pub fn preview(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Re
             opts.match_foreground_cwd.unwrap_or(true),
         )?,
     };
-    Ok(Preview {
+    Ok(Request {
         target,
         prompt: format_prompt(session, opts),
         stage: opts.stage.unwrap_or(false),
+    })
+}
+
+pub fn preview(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Result<SubmitPreview> {
+    let request = request(session, opts, herdr)?;
+    Ok(SubmitPreview {
+        sink: NAME.into(),
+        comment_ids: to_send(session).iter().map(|c| c.id.clone()).collect(),
+        body_comment_ids: vec![],
+        skipped: vec![],
+        replies: vec![],
+        thread_actions: vec![],
+        decision: session
+            .decision
+            .as_ref()
+            .filter(|d| !d.body.trim().is_empty())
+            .map(|d| d.event),
+        text: Some(request.prompt.clone()),
+        target: Some(request.target.clone()),
+        mode: if request.stage {
+            DeliveryMode::Staged
+        } else {
+            DeliveryMode::Sent
+        },
+        raw: serde_json::to_value(&request).unwrap_or_default(),
     })
 }
 
@@ -244,7 +261,7 @@ pub fn preview(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Re
 /// body is empty (a bare `approve`) has nothing to send and stays, reported
 /// as skipped.
 pub fn submit(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Result<SinkResult> {
-    let preview = preview(session, opts, herdr)?;
+    let preview = request(session, opts, herdr)?;
     let outcome = if preview.stage {
         herdr::send_text(herdr, &preview.target, &preview.prompt)
     } else {
@@ -344,7 +361,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|c| c["pane_id"].as_str().unwrap())
+            .map(|c| c["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, vec!["a", "b"], "only the matching agents are offered");
         let mut no_pane = agent("x", "/repo", "/repo");

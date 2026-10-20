@@ -9,7 +9,7 @@ use crate::model::{HeadRef, Repo, RevRef, Session, Source};
 use crate::source::targets;
 use crate::store::Store;
 
-pub use crate::source::targets::{count_lines, is_binary};
+pub use crate::source::targets::count_lines;
 
 pub const WORKTREE: &str = "worktree";
 

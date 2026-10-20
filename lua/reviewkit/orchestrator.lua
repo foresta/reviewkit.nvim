@@ -207,7 +207,10 @@ local function attach()
   local group = vim.api.nvim_create_augroup("reviewkit_orchestrator", { clear = true })
   require("reviewkit.view.queue").attach()
   require("reviewkit.view.annotate").attach()
-  require("reviewkit.view.diff").attach()
+  local diff = require("reviewkit.view.diff")
+  diff.hooks.buffer = M.set_buffer_keymaps
+  diff.hooks.close = M.clear_buffer_keymaps
+  diff.attach()
   require("reviewkit.view.thread").attach()
   core.register_sink("clipboard", require("reviewkit.sink.clipboard") --[[@as reviewkit.LuaSink]])
   core.on("ReviewSessionOpened", function()
@@ -647,12 +650,13 @@ function M.submit(sink, opts)
       local candidates = err.details and err.details.candidates or {}
       return vim.ui.select(candidates, {
         prompt = err.message,
+        ---@param c reviewkit.SinkTarget
         format_item = function(c)
-          return ("%s  [%s %s]  %s"):format(c.pane_id, c.agent, c.agent_status or "?", c.title or c.cwd or "")
+          return ("%s  [%s %s]  %s"):format(c.id, c.name or "-", c.status or "?", c.title or c.cwd or "")
         end,
       }, function(choice)
         if choice then
-          M.submit(sink, vim.tbl_extend("force", opts, { target = choice.pane_id }))
+          M.submit(sink, vim.tbl_extend("force", opts, { target = choice.id }))
         end
       end)
     end

@@ -1,7 +1,11 @@
-local cli = require("reviewkit.cli")
 local core = require("reviewkit.core")
 
 local M = {}
+
+--- Set by the orchestrator, which owns the keymaps: the view only says
+--- which buffers it shows and when it goes away.
+---@type { buffer: fun(buf: integer)?, close: fun()? }
+M.hooks = {}
 
 local api = vim.api
 
@@ -129,10 +133,9 @@ local function decode(raw, encoding)
   return lines
 end
 
----@param session reviewkit.Session
 ---@param target reviewkit.Target
 ---@param cb fun(buf: integer)
-local function base_buffer(session, target, cb)
+local function base_buffer(target, cb)
   local right = state.right
   local encoding = right and api.nvim_win_is_valid(right) and vim.bo[api.nvim_win_get_buf(right)].fileencoding or ""
   local key = base_key(target) .. ":" .. encoding
@@ -141,12 +144,19 @@ local function base_buffer(session, target, cb)
     return cb(cached)
   end
   local name = ("reviewkit://base/%s/%s"):format((target.base_blob or ""):sub(1, 8), target.path)
-  cli.call({ "file", "base", "--session", session.id, "--path", target.path }, {}, function(err, envelope)
-    if err then
+  core.base_file(target.path, function(err, data)
+    if err or not data then
       -- Not cached: a transient CLI failure must not stick for the session.
-      return cb(scratch(name, { "(cannot read the base side: " .. err.message .. ")" }, target.path, "base", true))
+      return cb(
+        scratch(
+          name,
+          { "(cannot read the base side: " .. (err and err.message or "no data") .. ")" },
+          target.path,
+          "base",
+          true
+        )
+      )
     end
-    local data = envelope and envelope.data or {}
     local buf
     if not data.exists then
       buf = scratch(name, { "(not present in base)" }, target.path, "base", true)
@@ -196,7 +206,9 @@ end
 
 ---@param buf integer
 local function keymaps(buf)
-  require("reviewkit.orchestrator").set_buffer_keymaps(buf)
+  if M.hooks.buffer then
+    M.hooks.buffer(buf)
+  end
 end
 
 ---@param session reviewkit.Session
@@ -272,7 +284,7 @@ function M.show(path, on_shown)
   if target.status == "added" or target.status == "untracked" then
     finish(scratch("reviewkit://added/" .. path, { "(new file)" }, path, "base", true))
   else
-    base_buffer(session, target, finish)
+    base_buffer(target, finish)
   end
 end
 
@@ -345,7 +357,9 @@ function M.retarget()
 end
 
 function M.close()
-  require("reviewkit.orchestrator").clear_buffer_keymaps()
+  if M.hooks.close then
+    M.hooks.close()
+  end
   if state.tab and api.nvim_tabpage_is_valid(state.tab) and #api.nvim_list_tabpages() > 1 then
     local nr = api.nvim_tabpage_get_number(state.tab)
     vim.cmd(nr .. "tabclose")
