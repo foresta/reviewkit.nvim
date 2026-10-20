@@ -17,6 +17,7 @@ local state = {
   refresh_again = false,
   locked_rounds = 0,
   retry_pending = false,
+  previewing = false,
   mapped_bufs = {}, ---@type table<integer, true>
 }
 
@@ -598,7 +599,18 @@ end
 ---@param result reviewkit.SinkResult
 local function report(result)
   local level = #result.failed > 0 and vim.log.levels.WARN or vim.log.levels.INFO
-  vim.notify("[reviewkit] " .. result.sink .. ": " .. result.summary, level)
+  local parts = { result.summary }
+  local actions = result.thread_actions or {}
+  if #actions > 0 then
+    local done = #vim.tbl_filter(function(a)
+      return a.status == "sent"
+    end, actions)
+    table.insert(parts, ("%d/%d thread actions"):format(done, #actions))
+  end
+  if result.url then
+    table.insert(parts, result.url)
+  end
+  vim.notify("[reviewkit] " .. result.sink .. ": " .. table.concat(parts, " · "), level)
 end
 
 --- E_AMBIGUOUS carries the candidate panes; the user picks one and the same
@@ -611,7 +623,26 @@ function M.submit(sink, opts)
   if not core.session() then
     return notify("no review session is open")
   end
-  core.submit(sink, opts, function(err, result)
+  -- Posting to GitHub is public and cannot be taken back (an APPROVE
+  -- included), so it is shown before it is sent unless switched off.
+  if sink == "github" and not opts.confirmed and config.get().sinks.github.confirm ~= false then
+    if state.previewing then
+      return
+    end
+    state.previewing = true
+    return core.preview(sink, {}, function(err, plan)
+      state.previewing = false
+      if err then
+        return notify_error(err)
+      end
+      require("reviewkit.view.preview").show(plan, core.session(), function()
+        M.submit(sink, vim.tbl_extend("force", opts, { confirmed = true }))
+      end)
+    end)
+  end
+  local send_opts = vim.deepcopy(opts)
+  send_opts.confirmed = nil
+  core.submit(sink, send_opts, function(err, result)
     if err and err.code == "E_AMBIGUOUS" and not opts.target then
       local candidates = err.details and err.details.candidates or {}
       return vim.ui.select(candidates, {

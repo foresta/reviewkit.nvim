@@ -476,4 +476,99 @@ T["orchestrator"]["q asks before throwing away typed text"] = function()
   eq(child.lua_get("vim.bo.buftype"), "")
 end
 
+local function github_rules()
+  local pr = helpers.session({
+    id = "pr/github.com/o/r/7",
+    source = {
+      kind = "pr",
+      number = 7,
+      url = "u",
+      title = "Add k",
+      author = "alice",
+      state = "OPEN",
+      head_ref = "f",
+      base_ref = "main",
+      base_oid = string.rep("b", 40),
+      node_id = "PR_1",
+      worktree = worktree,
+    },
+    head = { ref = "f", sha = string.rep("c", 40), dirty = false },
+  })
+  local plan = {
+    mutation = "m",
+    event = "APPROVE",
+    variables = {
+      body = "ship it",
+      threads = { { path = "src/a.rs", line = 4, side = "RIGHT", body = "nit: tighter\nmore" } },
+    },
+    skipped = {},
+    thread_comment_ids = { "c_1" },
+    replies = {},
+    actions = { { alias = "action0", thread_id = "PRRT_1", action = "resolve" } },
+  }
+  local result = {
+    sink = "github",
+    at = "t",
+    url = "https://github.com/o/r/pull/7#pullrequestreview-1",
+    sent = { { comment_id = "c_1" } },
+    failed = {},
+    skipped = {},
+    thread_actions = { { thread_id = "PRRT_1", action = "resolve", status = "sent" } },
+    decision = "sent",
+    summary = "1 sent, 0 failed, decision sent",
+  }
+  return {
+    { match = { "session open --pr 7" }, body = { ok = true, data = vim.NIL, session = pr } },
+    { match = { "submit", "--dry-run" }, body = { ok = true, data = { preview = plan } } },
+    { match = { "submit", "--sink github" }, body = { ok = true, data = result, session = pr } },
+  }
+end
+
+local function github_submits()
+  local n = 0
+  for _, call in ipairs(helpers.calls(dir)) do
+    local joined = table.concat(call.args, " ")
+    if joined:find("--sink github", 1, true) and not joined:find("--dry-run", 1, true) then
+      n = n + 1
+    end
+  end
+  return n
+end
+
+T["orchestrator"]["a GitHub submit is previewed and only sent after y"] = function()
+  helpers.respond(dir, github_rules())
+  child.cmd("Review pr 7")
+  wait_notice("#7 Add k")
+  child.cmd("ReviewSubmit github")
+  child.lua("vim.wait(5000, function() return vim.bo.filetype == 'markdown' end, 20)")
+  local lines = child.lua_get("vim.api.nvim_buf_get_lines(0, 0, -1, false)")
+  eq(lines[1], "Review: approve")
+  eq(lines[2], "ship it")
+  eq(vim.tbl_contains(lines, "  src/a.rs:4  nit: tighter"), true)
+  eq(vim.tbl_contains(lines, "  resolve PRRT_1"), true)
+  eq(github_submits(), 0)
+  child.type_keys("y")
+  wait_notice("pullrequestreview-1")
+  eq(github_submits(), 1)
+  local notices = child.lua_get("_G.notices")
+  eq(
+    notices[#notices].msg,
+    "[reviewkit] github: 1 sent, 0 failed, decision sent · 1/1 thread actions · https://github.com/o/r/pull/7#pullrequestreview-1"
+  )
+end
+
+T["orchestrator"]["cancelling the preview sends nothing, and the preview can be switched off"] = function()
+  helpers.respond(dir, github_rules())
+  child.cmd("Review pr 7")
+  wait_notice("#7 Add k")
+  child.cmd("ReviewSubmit github")
+  child.lua("vim.wait(5000, function() return vim.bo.filetype == 'markdown' end, 20)")
+  child.type_keys("q")
+  eq(github_submits(), 0)
+  child.lua("require('reviewkit').setup({ sinks = { github = { confirm = false } } })")
+  child.cmd("ReviewSubmit github")
+  wait_notice("pullrequestreview-1")
+  eq(github_submits(), 1)
+end
+
 return T
