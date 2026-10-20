@@ -166,6 +166,35 @@ T["orchestrator"]["ReviewClose! purges and reports"] = function()
   eq(child.lua_get("require('reviewkit.core').session()"), vim.NIL)
 end
 
+T["orchestrator"]["closing with unsent comments asks first, and keeps the session on no"] = function()
+  local session = helpers.session({
+    source = { worktree = worktree },
+    repo = { root = worktree },
+    comments = { { id = "c_1", path = "src/a.rs", side = "head", line = 3, body = "hm" } },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = session } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = session } },
+    { match = { "session close" }, body = { ok = true, data = { closed = true } } },
+  })
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("_G.asked = nil; vim.fn.confirm = function(msg) _G.asked = msg return 2 end")
+  child.cmd("ReviewClose")
+  eq(child.lua_get("_G.asked"):find("1 comment still in the queue", 1, true) ~= nil, true)
+  local closes = 0
+  for _, call in ipairs(helpers.calls(dir)) do
+    if table.concat(call.args, " "):find("session close", 1, true) then
+      closes = closes + 1
+    end
+  end
+  eq(closes, 0)
+  eq(child.lua_get("require('reviewkit.core').session() ~= nil"), true)
+  child.lua("vim.fn.confirm = function() return 1 end")
+  child.cmd("ReviewClose")
+  wait_notice("review closed")
+end
+
 T["orchestrator"]["commands without a session only notify"] = function()
   child.cmd("ReviewSubmit")
   child.cmd("ReviewClose")
