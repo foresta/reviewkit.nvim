@@ -305,3 +305,22 @@ fn comments_follow_a_worktree_rename() {
     }
     assert_eq!(body["session"]["comments"][0]["commentable"]["github"], true);
 }
+
+#[test]
+fn a_refresh_that_changes_nothing_does_not_write() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.write("keep.txt", "a\nb\nC\nd\n");
+    let id = open_worktree(&state, &repo);
+    add(&state, &repo, &id, "keep.txt", "head", 3, None);
+    let first = refresh(&state, &repo, &id)["session"].clone();
+    let second = refresh(&state, &repo, &id)["session"].clone();
+    assert_eq!(
+        second["rev"], first["rev"],
+        "a watcher-driven refresh would otherwise chain"
+    );
+    assert_eq!(second["updated_at"], first["updated_at"]);
+    repo.write("keep.txt", "a\nb\nC\nd\ne\n");
+    let third = refresh(&state, &repo, &id)["session"].clone();
+    assert_eq!(third["rev"].as_u64(), first["rev"].as_u64().map(|r| r + 1));
+}

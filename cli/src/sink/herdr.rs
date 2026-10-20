@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -23,17 +23,26 @@ struct Request {
 /// may share a name (one claude per repository), so the match is on cwd,
 /// never on the agent name.
 pub fn resolve_target(agents: &[Agent], worktree: &Path, match_foreground_cwd: bool) -> Result<String> {
-    let worktree = worktree.to_string_lossy();
-    let root = normalize(&worktree);
+    let root = real(&worktree.to_string_lossy());
     let agents: Vec<&Agent> = agents.iter().filter(|a| a.pane_id.is_some()).collect();
-    let matched: Vec<&Agent> = agents
-        .iter()
-        .copied()
-        .filter(|a| {
-            a.cwd.as_deref().is_some_and(|c| normalize(c) == root)
-                || (match_foreground_cwd && a.foreground_cwd.as_deref().is_some_and(|c| normalize(c) == root))
-        })
-        .collect();
+    let dirs = |a: &Agent| -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = a.cwd.as_deref().map(real).into_iter().collect();
+        if match_foreground_cwd {
+            dirs.extend(a.foreground_cwd.as_deref().map(real));
+        }
+        dirs
+    };
+    // An agent started at the root wins over one in a subdirectory.
+    let at_root: Vec<&Agent> = agents.iter().copied().filter(|a| dirs(a).contains(&root)).collect();
+    let matched = if at_root.is_empty() {
+        agents
+            .iter()
+            .copied()
+            .filter(|a| dirs(a).iter().any(|d| inside_checkout(d, &root)))
+            .collect()
+    } else {
+        at_root
+    };
     match matched.as_slice() {
         [one] => Ok(one.pane_id.clone().expect("filtered above")),
         [] if agents.is_empty() => Err(Error::tool("herdr", ErrorCode::ETool, "no running agent found")),
@@ -65,13 +74,34 @@ fn ambiguous<'a>(message: &str, agents: impl Iterator<Item = &'a Agent>) -> Erro
         .details(serde_json::json!({ "candidates": candidates }))
 }
 
-fn normalize(path: &str) -> &str {
-    path.trim_end_matches('/')
+/// Under the root and in the same checkout: a directory on the way down
+/// that has its own `.git` is another repository or worktree (a nested
+/// agent worktree, a submodule) whose agent must not get this review.
+fn inside_checkout(dir: &Path, root: &Path) -> bool {
+    if !dir.starts_with(root) {
+        return false;
+    }
+    dir.ancestors()
+        .take_while(|d| *d != root)
+        .all(|d| !d.join(".git").exists())
+}
+
+/// herdr reports the shell's view of the cwd, which may go through a
+/// symlink the worktree path does not.
+fn real(path: &str) -> PathBuf {
+    let trimmed = Path::new(path.trim_end_matches('/'));
+    std::fs::canonicalize(trimmed).unwrap_or_else(|_| trimmed.to_path_buf())
 }
 
 /// `@path#L3-L5` for claude (the `@` keeps the agent from reading a leading
-/// path as a slash command), `path:3-5` for plain CLIs.
+/// path as a slash command), `path:3-5` for plain CLIs. An `@` mention ends
+/// at whitespace, so a path with spaces is written in backticks instead.
 fn reference(comment: &Comment, agent_type: AgentType) -> String {
+    if agent_type == AgentType::Claude && comment.path.contains(char::is_whitespace) {
+        let plain = reference(comment, AgentType::Plain);
+        let range = &plain[comment.path.len()..];
+        return format!("`{}`{range}", comment.path);
+    }
     let range = match comment.start_line {
         Some(start) if start != comment.line => match agent_type {
             AgentType::Claude => format!("#L{}-L{}", start, comment.line),
@@ -397,6 +427,63 @@ mod tests {
             terminal_title_stripped: None,
             workspace_id: None,
         }
+    }
+
+    #[test]
+    fn an_agent_in_a_subdirectory_or_behind_a_symlink_is_in_the_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+        let sub = repo.join("sub").to_string_lossy().to_string();
+        assert_eq!(
+            resolve_target(&[agent("s", &sub, &sub)], &repo, false).unwrap(),
+            "s",
+            "started in a subdirectory"
+        );
+        let linked = link.to_string_lossy().to_string();
+        assert_eq!(
+            resolve_target(&[agent("l", &linked, &linked)], &repo, false).unwrap(),
+            "l"
+        );
+        let root = repo.to_string_lossy().to_string();
+        assert_eq!(
+            resolve_target(&[agent("s", &sub, &sub), agent("r", &root, &root)], &repo, false).unwrap(),
+            "r",
+            "the agent at the root wins over one in a subdirectory"
+        );
+        let nested = repo.join(".claude/worktrees/feat");
+        std::fs::create_dir_all(nested.join("src")).unwrap();
+        std::fs::write(nested.join(".git"), "gitdir: /elsewhere\n").unwrap();
+        for inside in [nested.clone(), nested.join("src")] {
+            let inside = inside.to_string_lossy().to_string();
+            assert_eq!(
+                resolve_target(&[agent("n", &inside, &inside)], &repo, false)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::EAmbiguous,
+                "another checkout nested under the root is not this repository"
+            );
+        }
+        let sibling = dir.path().join("repo-other").to_string_lossy().to_string();
+        assert_eq!(
+            resolve_target(&[agent("o", &sibling, &sibling)], &repo, false)
+                .unwrap_err()
+                .code,
+            ErrorCode::EAmbiguous,
+            "a sibling whose name starts the same is not inside"
+        );
+    }
+
+    #[test]
+    fn claude_references_with_spaces_fall_back_to_a_quoted_path() {
+        let mut c = session().comments[0].clone();
+        c.path = "docs/my notes.md".into();
+        assert_eq!(
+            reference(&c, AgentType::Claude),
+            format!("`docs/my notes.md`:{}", c.line)
+        );
     }
 
     #[test]

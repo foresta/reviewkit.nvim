@@ -146,6 +146,22 @@ fn empty_tool_override_falls_back_to_path() {
 }
 
 #[test]
+fn missing_git_is_a_missing_tool_like_gh_and_herdr() {
+    let state = tempfile::tempdir().unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    let output = reviewkit(&state)
+        .env("REVIEWKIT_GIT", "")
+        .env("PATH", empty.path())
+        .args(["session", "open", "--local"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    let body = json(&output);
+    assert_eq!(body["error"]["code"], "E_TOOL_MISSING");
+    assert_eq!(body["error"]["tool"], "git");
+}
+
+#[test]
 fn state_dir_defaults_follow_the_chain() {
     let state = tempfile::tempdir().unwrap();
     let base = |cmd: &mut Command| {

@@ -189,10 +189,25 @@ pub fn panes(herdr: &dyn Herdr) -> Result<Vec<Pane>> {
 /// Submits the prompt (text + Enter). Text goes as one argv element, so
 /// multi-line prompts need no quoting.
 pub fn prompt(herdr: &dyn Herdr, target: &str, text: &str) -> Result<()> {
-    herdr.run(&["agent", "prompt", target, text]).map(|_| ())
+    herdr
+        .run(&["agent", "prompt", target, text])
+        .map(|_| ())
+        .map_err(sent_maybe)
+}
+
+/// herdr keeps no record to reconcile with, so only the agent's screen can
+/// tell whether a failed send arrived.
+fn sent_maybe(err: Error) -> Error {
+    if err.code == ErrorCode::EToolMissing {
+        return err;
+    }
+    err.outcome_unknown("check the agent's pane before sending again")
 }
 
 /// Places the text in the pane's input without submitting it.
 pub fn send_text(herdr: &dyn Herdr, pane: &str, text: &str) -> Result<()> {
-    herdr.run(&["pane", "send-text", pane, text]).map(|_| ())
+    herdr
+        .run(&["pane", "send-text", pane, text])
+        .map(|_| ())
+        .map_err(sent_maybe)
 }

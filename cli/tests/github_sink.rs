@@ -648,6 +648,8 @@ fn a_recovery_survives_a_follow_up_send_that_fails() {
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(body["error"]["code"], "E_TOOL");
+    assert_eq!(body["error"]["retryable"], false, "the review may have been posted");
+    assert_eq!(body["error"]["details"]["outcome"], "unknown");
     let listed = json(
         &reviewkit(&state, &remote, &gh)
             .args(["comment", "list", "--session", &id])

@@ -101,7 +101,10 @@ fn reopening_resumes_and_refreshes_the_same_session() {
             .output()
             .unwrap(),
     );
-    assert_eq!(resumed["session"]["rev"], 3);
+    assert_eq!(
+        resumed["session"]["rev"], 2,
+        "nothing changed since, so nothing was written"
+    );
 }
 
 #[test]

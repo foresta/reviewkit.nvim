@@ -35,6 +35,8 @@ pub struct HerdrOptions {
     pub agent_type: Option<AgentType>,
     #[serde(default)]
     pub header: Option<String>,
+    /// Puts the text in the agent's input without pressing Enter (not git
+    /// staging); the agent's user submits or discards it.
     #[serde(default)]
     pub stage: Option<bool>,
     #[serde(default)]

@@ -491,7 +491,8 @@
           "E_CONFLICT",
           "E_LOCKED",
           "E_SCHEMA_VERSION",
-          "E_INTERNAL"
+          "E_INTERNAL",
+          "E_IO"
         ],
         "type": "string"
       },
@@ -623,6 +624,7 @@
           },
           "stage": {
             "default": null,
+            "description": "Puts the text in the agent's input without pressing Enter (not git\nstaging); the agent's user submits or discards it.",
             "type": [
               "boolean",
               "null"
