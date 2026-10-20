@@ -103,6 +103,10 @@ T["orchestrator"]["comment() reads the cursor line, parses the kind and queues t
   local marks =
     child.lua_get("#vim.api.nvim_buf_get_extmarks(0, vim.api.nvim_create_namespace('reviewkit_annotate'), 0, -1, {})")
   eq(marks, 1)
+  local text = child.lua_get(
+    "vim.api.nvim_buf_get_extmarks(0, vim.api.nvim_create_namespace('reviewkit_annotate'), 0, -1, { details = true })[1][4].virt_text[1][1]"
+  )
+  eq(text, " ● nit tighten")
 end
 
 T["orchestrator"]["ReviewSubmit resolves E_AMBIGUOUS through vim.ui.select and retries with the target"] = function()
@@ -350,6 +354,126 @@ T["orchestrator"]["only worktree files, HEAD and refs count as changes for the w
   eq(relevant("vendor/lib/.git"), false)
   eq(relevant(".git/reftable/tables.list"), true)
   eq(relevant("Cargo.lock"), true)
+end
+
+local function last_call(sub)
+  local found
+  for _, call in ipairs(helpers.calls(dir)) do
+    if call.args[1] == "comment" and call.args[2] == sub then
+      found = vim.json.decode(call.stdin)
+    end
+  end
+  return found
+end
+
+T["orchestrator"]["a suggestion starts from the selected lines and is sent apart from the body"] = function()
+  helpers.respond(
+    dir,
+    rules({
+      {
+        match = { "comment add" },
+        body = {
+          ok = true,
+          data = { id = "c_1" },
+          session = helpers.session({ source = { worktree = worktree }, rev = 2 }),
+        },
+      },
+    })
+  )
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  child.lua("require('reviewkit.orchestrator').comment({ range = true, line1 = 2, line2 = 3, suggest = true })")
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, -1, false)"), { "", "```suggestion", "l2", "l3", "```" })
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, 1, false, { 'nit: tighter' })")
+  child.cmd("write")
+  wait_notice("queued src/a.rs:2-3")
+  local input = last_call("add")
+  eq({ input.kind, input.body, input.suggestion, input.start_line, input.line }, { "nit", "tighter", "l2\nl3", 2, 3 })
+end
+
+T["orchestrator"]["editing a comment shows and saves its kind and suggestion"] = function()
+  local with = helpers.session({
+    source = { worktree = worktree },
+    rev = 2,
+    comments = {
+      {
+        id = "c_1",
+        path = "src/a.rs",
+        side = "head",
+        line = 4,
+        kind = "nit",
+        body = "tighter",
+        suggestion = "x",
+        stale = false,
+        updated_at = "t",
+      },
+    },
+    etags = { comments = "c1" },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = with } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = with } },
+    { match = { "comment update" }, body = { ok = true, data = vim.NIL, session = with } },
+  })
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 4, 0 })")
+  child.lua("require('reviewkit.orchestrator').edit_comment()")
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, -1, false)"), { "nit: tighter", "```suggestion", "x", "```" })
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'question: why?' })")
+  child.cmd("write")
+  vim.wait(5000, function()
+    return last_call("update") ~= nil
+  end, 50)
+  local patch = last_call("update")
+  eq({ patch.kind, patch.body }, { "question", "why?" })
+  eq(patch.suggestion, vim.NIL)
+end
+
+T["orchestrator"]["a stale comment is moved to the cursor line"] = function()
+  local with = helpers.session({
+    source = { worktree = worktree },
+    rev = 2,
+    comments = {
+      { id = "c_1", path = "src/a.rs", side = "head", line = 4, kind = "issue", body = "a", stale = false },
+      { id = "c_2", path = "src/a.rs", side = "head", line = 5, kind = "issue", body = "b", stale = true },
+    },
+    etags = { comments = "c1" },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = with } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = with } },
+    { match = { "comment update" }, body = { ok = true, data = vim.NIL, session = with } },
+  })
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 2, 0 })")
+  child.lua("vim.ui.select = function(items, _, cb) _G.first_offered = items[1].id; cb(items[1]) end")
+  child.lua("require('reviewkit.orchestrator').move_comment()")
+  wait_notice("moved to src/a.rs:2")
+  eq(child.lua_get("_G.first_offered"), "c_2")
+  local updated
+  for _, call in ipairs(helpers.calls(dir)) do
+    if call.args[1] == "comment" and call.args[2] == "update" then
+      updated = call
+    end
+  end
+  eq(vim.tbl_contains(updated.args, "c_2"), true)
+  eq(vim.json.decode(updated.stdin).line, 2)
+end
+
+T["orchestrator"]["q asks before throwing away typed text"] = function()
+  child.lua("require('reviewkit.view.input').open({ title = 't', on_save = function() end })")
+  child.lua("vim.cmd('stopinsert'); vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'draft' })")
+  child.lua("vim.fn.confirm = function() return 2 end")
+  child.type_keys("q")
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, -1, false)"), { "draft" })
+  child.lua("vim.fn.confirm = function() return 1 end")
+  child.type_keys("q")
+  eq(child.lua_get("vim.bo.buftype"), "")
 end
 
 return T

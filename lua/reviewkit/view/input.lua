@@ -9,6 +9,7 @@ local counter = 0
 ---@field footer? string
 ---@field on_save fun(body: string)
 ---@field on_cancel? fun()
+---@field start_insert? boolean
 
 --- A small floating buffer: `:w` (or <C-s>) saves and closes, `q` discards.
 --- It is `acwrite` so `:w` is caught by BufWriteCmd and nothing touches disk.
@@ -69,9 +70,14 @@ function M.open(opts)
       end
     end,
   })
-  vim.keymap.set("n", "q", close, { buffer = buf, nowait = true })
+  vim.keymap.set("n", "q", function()
+    if vim.bo[buf].modified and vim.fn.confirm("Discard this text?", "&Discard\n&Keep", 2) ~= 1 then
+      return
+    end
+    close()
+  end, { buffer = buf, nowait = true })
   vim.keymap.set({ "n", "i" }, "<C-s>", "<Cmd>write<CR>", { buffer = buf })
-  if #(opts.lines or {}) == 0 then
+  if opts.start_insert or #(opts.lines or {}) == 0 then
     vim.cmd("startinsert")
   end
   return buf, win

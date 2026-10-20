@@ -165,7 +165,9 @@ pub fn format_prompt(session: &Session, opts: &SubmitOptions) -> String {
                 head.push_str(&format!(" [{}]", notes.join("; ")));
             }
             let mut block = vec![head, c.body.trim_end().to_string()];
-            if let Some(suggestion) = c.suggestion.as_deref().filter(|s| !s.trim().is_empty()) {
+            if c.suggestion.as_deref().is_some_and(|s| s.trim().is_empty()) {
+                block.push("Suggested change: delete these lines.".to_string());
+            } else if let Some(suggestion) = c.suggestion.as_deref() {
                 let fence = fence_for(suggestion);
                 block.push(format!(
                     "Suggested replacement:\n{fence}\n{}\n{fence}",

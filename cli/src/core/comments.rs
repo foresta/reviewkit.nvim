@@ -19,7 +19,17 @@ pub struct SideFile {
     pub lines: Vec<String>,
 }
 
+/// GitHub rejects an empty comment and an agent gets nothing to act on; a
+/// suggestion alone is still a comment, even an empty one (delete the lines).
+fn check_text(body: &str, suggestion: Option<&str>) -> Result<()> {
+    if body.trim().is_empty() && suggestion.is_none() {
+        return Err(Error::invalid("the comment is empty").hint("write a body or a suggestion"));
+    }
+    Ok(())
+}
+
 pub fn add(session: &mut Session, input: CommentInput, file: Option<SideFile>) -> Result<String> {
+    check_text(&input.body, input.suggestion.as_deref())?;
     if target_for(session, &input.path).is_none()
         && let Some(renamed) = session
             .targets
@@ -111,6 +121,15 @@ fn push_reply(session: &mut Session, input: CommentInput, file: Option<SideFile>
 /// exists there, which only matters if the line moves.
 pub fn update(session: &mut Session, id: &str, patch: CommentPatch, file: Option<SideFile>) -> Result<()> {
     let index = find(session, id)?;
+    {
+        let comment = &session.comments[index];
+        let body = patch.body.as_deref().unwrap_or(&comment.body);
+        let suggestion = match &patch.suggestion {
+            Some(s) => s.as_deref(),
+            None => comment.suggestion.as_deref(),
+        };
+        check_text(body, suggestion)?;
+    }
     if session.comments[index].reply_to.is_some() && patch_moves_line(&patch) {
         return Err(Error::invalid("a reply belongs to its thread and has no line to move"));
     }
@@ -137,14 +156,14 @@ pub fn update(session: &mut Session, id: &str, patch: CommentPatch, file: Option
         (None, None)
     };
     let comment = &mut session.comments[index];
+    let text_changed = patch.body.as_ref().is_some_and(|b| *b != comment.body)
+        || patch.suggestion.as_ref().is_some_and(|s| *s != comment.suggestion)
+        || patch.kind.is_some_and(|k| k != comment.kind);
     comment.line = line;
     comment.start_line = start_line;
     if let Some(kind) = patch.kind {
         comment.kind = kind;
     }
-    let text_changed = patch.body.as_ref().is_some_and(|b| *b != comment.body)
-        || patch.suggestion.as_ref().is_some_and(|s| *s != comment.suggestion)
-        || patch.kind.is_some_and(|k| k != comment.kind);
     if let Some(body) = patch.body {
         comment.body = body;
     }
