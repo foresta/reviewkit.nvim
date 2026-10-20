@@ -89,6 +89,7 @@ Session {
   viewed: { [path]: { blob: sha, at } }   -- reviewkit 内だけの既読。GitHub には送らない
   last_submit: { sink, at, result: SinkResult } | null
   pending_submit: bool      -- 中断された GitHub 送信が残っている（読むたびに state dir から求める）
+  pending_apply: bool       -- Lua の sink が配送した結果が、ロックを待って記録されていない（同上）
   history: Comment[]        -- キューを出たコメント（deliveries 付き）。宛先に届いて消費されたものと、`comment clear` で
                             -- 移しただけのもの。保存はするが封筒では常に空。
                             -- `history list` で取る。200 件を超えたら、消費済み（宛先に届いた）ものだけを古い順に捨てる。
@@ -259,7 +260,8 @@ reviewkit submit --session ID --sink github|herdr [--dry-run] [--options -]
                                                          -> data: SinkResult（dry-run は data.preview: SubmitPreview）, session
                                                             --options - のときだけ stdin から SubmitOptions を読む
 reviewkit submit apply --session ID [--consume] (stdin: SinkResult の sent / failed / skipped / thread_actions / decision)
-                                                         -> session   Lua 側 sink の結果を core に適用。at / summary は core が補う
+                                                         -> session   Lua 側 sink の結果を core に適用。at は CLI が付ける。ロック待ちは記録待ち（送信箱）
+reviewkit submit apply --session ID --drain              -> session   記録待ちの結果を記録するだけ（stdin を読まない）
 
 reviewkit history list    --session ID                   -> data: Comment[]   キューを出たコメント（新しい順）。200 件を超えて捨てるのは消費済みだけ
 reviewkit history restore --session ID --id CID          -> session   キューの末尾へ戻す。deliveries は残す（同じ sink へは再送しない）。既にキューにあれば何もしない。
@@ -327,7 +329,15 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   | github | pending が残り、次の github submit が照合してから送る。照合が済むまで、pending に載ったコメントの編集・削除と、decision を運んだ pending があるときの decision の変更は E_CONFLICT（照合が送ったときの本文で探すため、変えると送信済みを見失い二重に投稿する）。`comment clear` も pending に載ったコメントはキューに残す（照合はキューの中を探す） | 照合で送信済みと分かったものは送らない。GitHub へ sent 済みは `delivered` で skip | `outcome = unknown`、再試行不可。pending を次回照合 |
   | herdr | 送信後・保存前に落ちると記録が無く再送しうる（エージェント宛てで公開されない） | 自分へ sent 済みのコメントと decision は送らない | 全体失敗、`outcome = unknown`。印は試行分だけ |
   | 選択送信（comment_ids） | github は選んだ分だけの COMMENT review を送り、pending には decision を運ばないと記録する（照合しても decision は消さない） | 送った分は消費されてキューに無く、その id は落とされる。全部落ちれば nothing to submit | 経路ごとの規則と同じ |
-  | Lua sink（submit apply） | 送信後・apply 前に落ちると記録されず再送しうる（sink の責任） | 消費済みはキューに無い。`version` / `decision_version` が違うものは記録しない | sink の責任 |
+  | Lua sink（submit apply） | 送信後・apply の CLI が結果をファイルに書く前に落ちると記録されず再送しうる（sink の責任）。書いた後なら次の書き込みが記録する | 消費済みはキューに無い。`version` / `decision_version` が違うものは記録しない。Lua の sink で送る前に Lua はディスク上の Session（`session get`）を読み、記録待ちがあれば記録を試み、残れば E_CONFLICT で止める（別インスタンスの記録待ちも見える） | sink の責任 |
+- Lua の sink の結果（送信箱）: `submit apply` は受け取った結果に CLI の時刻を `at` として付け、ロックを取る前に
+  `<session>/applies/<ulid>.json`（`{ revision, consume, result }`）へ書く。ロックが取れればその場で記録して `ok`。他の送信が
+  ロックを持っていて取れなければ、記録待ちのまま `ok`（`summary` に記録待ちと書き、`session.pending_apply` が true）を返す。
+  記録待ちは、そのセッションへの次の書き込み（どのコマンドでも）が自分の変更の前に古い順で適用し、保存の後にファイルを消す
+  （保存と削除の間で落ちても、同じ `(sink, at, mode)` の配送は二度記録しない）。Lua は `pending_apply` を見ると
+  `submit apply --drain` で記録を促す（ロックを持つ送信が保存すると監視で気づく。失敗すれば間隔を空けて促し直す）。
+  プレビュー（`--dry-run`）は記録待ちを適用した写しから作る（送信は書き込みの冒頭で適用するので、そうしないと digest が合わない）。新しい版が書いたファイルは読まずに残し、
+  壊れたファイルは `applies/rejected/` に移す（他の書き込みを失敗させない）
 - GitHub Enterprise は `repo.host` を gh の `--hostname` に渡す
 
 ## 6. hunk・コメント可能範囲・行ずれ

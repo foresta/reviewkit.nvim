@@ -39,7 +39,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// would reject what it sends; a CLI does not write a session last written
 /// by a higher revision, since it would drop what it cannot represent.
 /// Recorded outside the contract, in `_writer`.
-pub const SCHEMA_REVISION: u32 = 9;
+pub const SCHEMA_REVISION: u32 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VersionInfo {

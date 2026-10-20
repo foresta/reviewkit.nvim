@@ -14,6 +14,19 @@ end
 ---@param dir string
 ---@param rules table[]
 function M.respond(dir, rules)
+  -- A Lua sink reads the session from the disk before it delivers; unless a
+  -- test says otherwise, the disk holds what was opened.
+  local has_get, opened = false, nil
+  for _, rule in ipairs(rules) do
+    local joined = table.concat(rule.match or {}, " ")
+    has_get = has_get or joined:find("session get", 1, true) ~= nil
+    if not opened and joined:find("session open", 1, true) then
+      opened = rule.body
+    end
+  end
+  if opened and not has_get then
+    rules = vim.list_extend(vim.deepcopy(rules), { { match = { "session get" }, body = opened } })
+  end
   local f = assert(io.open(dir .. "/responses.json", "w"))
   f:write(vim.json.encode(rules))
   f:close()

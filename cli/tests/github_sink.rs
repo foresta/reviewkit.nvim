@@ -1898,3 +1898,60 @@ fn a_preview_of_an_interrupted_submit_that_fully_landed_still_lets_the_send_reco
     assert!(!pending_file(&state).exists());
     assert_eq!(mutation_calls(&gh).len(), 1);
 }
+
+#[test]
+fn a_result_waiting_for_the_session_is_in_the_preview_so_the_confirmed_send_matches() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let elsewhere = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "sent elsewhere"}),
+    );
+    let here = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 11, "body": "for github"}),
+    );
+    let lock_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(state.path().join("sessions/pr/github.com/o/r/7/session.lock"))
+        .unwrap();
+    let mut lock = fd_lock::RwLock::new(lock_file);
+    let held = lock.write().unwrap();
+    let queued = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "apply", "--session", &id, "--consume"])
+            .write_stdin(
+                serde_json::json!({ "sink": "slack", "sent": [ { "comment_id": elsewhere } ], "failed": [], "skipped": [], "decision": "not_applicable" })
+                    .to_string(),
+            )
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(queued["session"]["pending_apply"], true);
+    drop(held);
+
+    let preview = preview_github(&state, &remote, &gh, &id);
+    assert_eq!(preview["comment_ids"], serde_json::json!([here]));
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_8", "url": "u8" } } } }),
+        0,
+    );
+    let sent = submit_confirmed(&state, &remote, &gh, &id, &preview["digest"]);
+    assert_eq!(sent["ok"], true, "{sent}");
+    assert_eq!(sent["session"]["pending_apply"], false);
+    assert_eq!(
+        mutation_calls(&gh)[0]["variables"]["threads"].as_array().unwrap().len(),
+        1
+    );
+}

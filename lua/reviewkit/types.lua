@@ -4,7 +4,7 @@
 local M = {}
 
 M.SCHEMA_VERSION = 1
-M.SCHEMA_REVISION = 9
+M.SCHEMA_REVISION = 10
 
 ---@alias reviewkit.AgentType "claude"|"plain"
 
@@ -230,6 +230,7 @@ M.SCHEMA_REVISION = 9
 ---@field history? reviewkit.Comment[] Comments that left the queue, with their deliveries, so a consumed comment can still be looked up instead of being gone.
 ---@field id string
 ---@field last_submit? reviewkit.LastSubmit
+---@field pending_apply? boolean A client sink's delivery waiting for the session lock to be recorded; derived like `pending_submit`.
 ---@field pending_submit? boolean Derived from the state dir on every read rather than stored: a crash between sending and saving is exactly when the stored value is wrong.
 ---@field repo reviewkit.Repo
 ---@field rev integer

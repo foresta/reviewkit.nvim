@@ -185,6 +185,88 @@ T["core"]["a registered Lua sink is applied through submit apply"] = function()
   eq(vim.json.decode(last.stdin).sink, "clip")
 end
 
+T["core"]["a delivery waiting to be recorded is drained once per change and holds back Lua sinks"] = function()
+  helpers.respond(dir, {
+    {
+      match = { "session open --local" },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ pending_apply = true }) },
+    },
+    {
+      match = { "--drain" },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ pending_apply = true }) },
+    },
+    {
+      match = { "session get" },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ pending_apply = true }) },
+    },
+  })
+  open(child)
+  child.lua("vim.wait(1500, function() return false end, 50)")
+  local drains = 0
+  for _, call in ipairs(helpers.calls(dir)) do
+    if vim.tbl_contains(call.args, "--drain") then
+      drains = drains + 1
+    end
+  end
+  eq(drains, 1)
+  child.lua([[
+    _G.delivered = false
+    require('reviewkit.core').register_sink('clip', {
+      submit = function(_, _, cb)
+        _G.delivered = true
+        cb(nil, { sent = {}, failed = {}, skipped = {}, decision = 'not_applicable' })
+      end,
+    })
+    require('reviewkit.core').submit('clip', {}, _G.finish)
+  ]])
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err.code, "E_CONFLICT")
+  eq(child.lua_get("_G.delivered"), false)
+end
+
+T["core"]["a Lua sink checks the disk for another instance's waiting delivery first"] = function()
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = helpers.session() } },
+    {
+      match = { "session get" },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ rev = 2, pending_apply = true }) },
+    },
+    {
+      match = { "--drain" },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ rev = 3 }) },
+    },
+    {
+      match = { "submit apply" },
+      body = { ok = true, data = { sink = "clip", summary = "1 sent" }, session = helpers.session({ rev = 4 }) },
+    },
+  })
+  open(child)
+  child.lua([[
+    require('reviewkit.core').register_sink('clip', {
+      submit = function(_, _, cb)
+        cb(nil, { sent = { { comment_id = 'c_1' } }, failed = {}, skipped = {}, decision = 'not_applicable' })
+      end,
+    })
+    require('reviewkit.core').submit('clip', {}, _G.finish)
+  ]])
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err, nil)
+  local order = {}
+  for _, call in ipairs(helpers.calls(dir)) do
+    local joined = table.concat(call.args, " ")
+    if joined:find("session get", 1, true) then
+      table.insert(order, "get")
+    elseif joined:find("--drain", 1, true) then
+      table.insert(order, "drain")
+    elseif joined:find("submit apply", 1, true) then
+      table.insert(order, "apply")
+    end
+  end
+  eq(order[1], "get")
+  eq(order[#order], "apply")
+  eq(vim.tbl_contains(order, "drain"), true)
+end
+
 T["core"]["sinks merges the CLI's list with registered Lua sinks, Lua winning"] = function()
   helpers.respond(dir, {
     {

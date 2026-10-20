@@ -48,6 +48,8 @@ local sections = {
   { etag = "viewed", event = "ReviewViewedChanged" },
 }
 
+local drain_if_waiting
+
 --- Threads and thread actions share an event, so it fires at most once per
 --- response.
 --- A response older than the cache (a slow mutation answered after the
@@ -82,7 +84,34 @@ local function accept(session, extra)
   if extra and extra.submitted then
     fire("ReviewSubmitted", { result = extra.submitted })
   end
+  drain_if_waiting(session)
   return true
+end
+
+--- Once per change: a result a newer CLI queued stays waiting, and asking
+--- on every answer would never stop.
+---@param session reviewkit.Session
+function drain_if_waiting(session)
+  local key = session.id .. "@" .. session.rev
+  if not session.pending_apply or state.drained == key or state.draining then
+    return
+  end
+  state.drained = key
+  state.draining = true
+  cli.call({ "submit", "apply", "--session", session.id, "--drain" }, {}, function(err, envelope)
+    state.draining = false
+    if not err and envelope and envelope.session then
+      accept(envelope.session)
+      return
+    end
+    -- A submit that fails writes nothing, so no change would ask again.
+    state.drained = nil
+    vim.defer_fn(function()
+      if state.session and state.session.id == session.id then
+        drain_if_waiting(state.session)
+      end
+    end, 5000)
+  end)
 end
 
 local function stop_watching()
@@ -615,6 +644,41 @@ local function narrowed(session, ids, cb)
   end)
 end
 
+--- The cache only knows this instance's deliveries: another instance's
+--- result waiting in the state dir is read from the disk before a Lua sink
+--- delivers the same comments again.
+---@param session reviewkit.Session
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+local function ensure_recorded(session, cb)
+  local function refuse()
+    cb({
+      code = "E_CONFLICT",
+      message = "an earlier delivery is still waiting to be recorded",
+      hint = "try again when the other submit finishes",
+      retryable = true,
+      details = {},
+    })
+  end
+  cli.run({ "session", "get", "--session", session.id }, {}, function(get_err, got)
+    take_session(get_err, got, function(err, fresh)
+      if err or not fresh then
+        return cb(err)
+      end
+      if not fresh.pending_apply then
+        return cb(nil, fresh)
+      end
+      cli.call({ "submit", "apply", "--session", session.id, "--drain" }, {}, function(drain_err, drained)
+        take_session(drain_err, drained, function(_, after)
+          if after and not after.pending_apply then
+            return cb(nil, after)
+          end
+          refuse()
+        end)
+      end)
+    end)
+  end)
+end
+
 ---@param session reviewkit.Session
 ---@param sink string
 ---@param lua_sink reviewkit.LuaSink
@@ -682,26 +746,33 @@ function M.submit(sink, opts, cb)
   end
   opts = opts or {}
   local lua_sink = state.sinks[sink]
-  if lua_sink and opts.comment_ids then
-    -- The same view the CLI gives its own sinks: the chosen comments only,
-    -- without the decision and thread actions.
-    return narrowed(session, opts.comment_ids, function(narrow_err, view, decision_left)
-      if narrow_err or not view then
-        return cb(narrow_err)
-      end
-      if #view.comments == 0 then
-        return cb({
-          code = "E_INVALID",
-          message = "nothing to submit: the selection was already sent",
-          retryable = false,
-          details = {},
-        })
-      end
-      submit_lua(view, sink, lua_sink, opts, cb, decision_left == true)
-    end)
-  end
   if lua_sink then
-    return submit_lua(session, sink, lua_sink, opts, cb, false)
+    -- Comments still look queued until a delivery is recorded, so sending
+    -- before that would deliver them again.
+    return ensure_recorded(session, function(check_err, fresh)
+      if check_err or not fresh then
+        return cb(check_err)
+      end
+      if not opts.comment_ids then
+        return submit_lua(fresh, sink, lua_sink, opts, cb, false)
+      end
+      -- The same view the CLI gives its own sinks: the chosen comments only,
+      -- without the decision and thread actions.
+      narrowed(fresh, opts.comment_ids, function(narrow_err, view, decision_left)
+        if narrow_err or not view then
+          return cb(narrow_err)
+        end
+        if #view.comments == 0 then
+          return cb({
+            code = "E_INVALID",
+            message = "nothing to submit: the selection was already sent",
+            retryable = false,
+            details = {},
+          })
+        end
+        submit_lua(view, sink, lua_sink, opts, cb, decision_left == true)
+      end)
+    end)
   end
   local args = { "submit", "--session", session.id, "--sink", sink }
   local stdin = nil
