@@ -446,6 +446,14 @@ pub fn reconcile_pending(
         return Ok(None);
     };
     let details = gh::pr_details(gh, repo, *number, time::now())?;
+    if details.incomplete {
+        return Err(Error::new(
+            ErrorCode::EGh,
+            "cannot check what an interrupted submit already posted: GitHub returned only part of the pull request",
+        )
+        .retryable()
+        .hint("retry; nothing is sent until the earlier submit is reconciled"));
+    }
     let viewer = details.viewer.as_str();
     let mine = |author: &str| viewer.is_empty() || author == viewer;
     let unchanged = |id: &str, body: &str| {

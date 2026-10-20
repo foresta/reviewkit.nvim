@@ -334,6 +334,23 @@ pub struct PrDetails {
     /// The authenticated user, so a reconcile only matches what this user
     /// posted.
     pub viewer: String,
+    /// Some optional field could not be read; fine for showing the PR, not
+    /// for deciding what was already posted.
+    pub incomplete: bool,
+}
+
+/// An error without a path is the whole request; under the pull request
+/// itself only its threads are needed to review.
+fn required_path(error: &serde_json::Value) -> bool {
+    let Some(path) = error["path"].as_array() else {
+        return true;
+    };
+    let names: Vec<&str> = path.iter().filter_map(|p| p.as_str()).collect();
+    match names.as_slice() {
+        ["repository", "pullRequest", field, ..] => matches!(*field, "id" | "reviewThreads"),
+        ["viewer", ..] => false,
+        _ => true,
+    }
 }
 
 pub fn pr_details(gh: &dyn Gh, repo: &RepoRef, number: u64, fetched_at: String) -> Result<PrDetails> {
@@ -341,19 +358,39 @@ pub fn pr_details(gh: &dyn Gh, repo: &RepoRef, number: u64, fetched_at: String) 
     let mut threads = Vec::new();
     let mut info: Option<PrInfo> = None;
     let mut viewer = String::new();
+    let mut incomplete = false;
     loop {
         let variables =
             serde_json::json!({ "owner": repo.owner, "name": repo.name, "number": number, "cursor": cursor });
         let response = graphql(gh, &repo.host, QUERY, variables)?;
-        if let Some(message) = response.errors.first().and_then(|e| e["message"].as_str()) {
+        // Checks, reviews and the conversation are shown, not needed: a token
+        // that may not read one of them must still be able to open the PR.
+        let (fatal, optional): (Vec<_>, Vec<_>) = response.errors.iter().partition(|e| required_path(e));
+        if let Some(message) = fatal.first().and_then(|e| e["message"].as_str()) {
             return Err(graphql_error(message));
+        }
+        for e in &optional {
+            log::warn!("gh: ignoring an error in an optional field: {e}");
+            incomplete = true;
         }
         if let Some(login) = response.data["viewer"]["login"].as_str() {
             viewer = login.to_string();
         }
         let pr = &response.data["repository"]["pullRequest"];
         if pr.is_null() {
+            if let Some(message) = optional.first().and_then(|e| e["message"].as_str()) {
+                return Err(graphql_error(message));
+            }
             return Err(Error::new(ErrorCode::EGh, format!("pull request #{number} not found")));
+        }
+        // A nulled field bubbles up to its nearest nullable parent while the
+        // error points at the leaf, so missing threads are checked directly.
+        if !pr["reviewThreads"].is_object() {
+            let message = optional
+                .first()
+                .and_then(|e| e["message"].as_str())
+                .unwrap_or("no review threads");
+            return Err(graphql_error(message));
         }
         if info.is_none() {
             info = Some(pr_info(pr, fetched_at.clone()));
@@ -375,6 +412,7 @@ pub fn pr_details(gh: &dyn Gh, repo: &RepoRef, number: u64, fetched_at: String) 
         info: info.expect("set on the first page"),
         threads,
         viewer,
+        incomplete,
     })
 }
 
