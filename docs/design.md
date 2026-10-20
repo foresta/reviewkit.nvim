@@ -38,7 +38,9 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
 | 70 | 内部 | `E_INTERNAL` |
 
 - `E_NOT_COMMENTABLE` は「行がファイルの範囲外」か「path がリポジトリに無い」ときだけ。diff 外や targets 外の path への
-  コメントは積める（D4）。その場合 `commentable.github = false`
+  コメントは積める（D4）。その場合 `commentable.github = false` で、sink-github は review 本文の「Comments outside the diff」節に
+  `path` と行、`blob/<sha>/path#L..` のリンク、本文を書いて送る（`Plan.body_comment_ids`）。stale だけは `skipped`。
+  issue 以外の kind は本文の先頭に `**nit:**` のように付ける
 - `E_AMBIGUOUS` は `details.candidates` に候補を載せる。cwd に一致する agent が 0 件なら全 agent を候補にする
 - `E_GH_PENDING_REVIEW` は GitHub 側に pending review が残っていて `addPullRequestReview` が通らないとき
 - `E_SCHEMA_VERSION` は CLI が古い session.json を読んだとき。CLI と `types.lua` の版違いは Lua が `version` で検出する
@@ -161,7 +163,7 @@ SinkResult {
   `copied` で、消費しない。herdr は自分へ `sent` 済みのコメントを再送しない。本文・suggestion・kind を変えると `deliveries` は消える。
   `failed` は `last_error` を付けて残す。`skipped` はそのまま。`thread_actions` は `sent` のものだけ消す（PR の refresh でも、
   スレッドが消えたか GitHub 側で既にその状態になったものは消す）。`decision` は `sent` かつ消費のときだけ消す。`last_submit` に結果を記録する
-- sink-github で Decision が無く comments がある場合は `event = comment`、本文空で送る（行コメントは review の一部としてしか送れない）
+- sink-github で Decision が無く comments がある場合は `event = comment` で送る（行コメントは review の一部としてしか送れない）。本文は diff の外のコメントの節だけ（無ければ空）
 - sink-herdr のプロンプトは header、Decision の本文（あれば）、番号付きのコメント（`@path#L1-L2` 形式。`plain` は `path:1-2`）の順。
   Decision の event は送れないので、本文が空の Decision は `skipped` として残る
 
@@ -234,6 +236,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   CAS は定義だけして最初は使わない
 - 二重送信の防止: gh を呼ぶ前に `pending_submit.json` を書く。次の GitHub への submit で残っていれば threads を取り直し、
   「同じファイル・side に、自分が、同じ本文で、試行の開始以後に投稿したもの」を送信済みとみなしてから消す（行は push で動くので見ない）。
+  review 本文に書いたコメントは、自分の review が送った本文のまま投稿されていれば送信済みとみなす。
   残っている間は Session の `pending_submit` が true（ファイルの有無から毎回求める）で、Lua は開いたときに知らせる
 - GitHub Enterprise は `repo.host` を gh の `--hostname` に渡す
 

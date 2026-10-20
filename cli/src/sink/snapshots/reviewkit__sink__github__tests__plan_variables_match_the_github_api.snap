@@ -4,7 +4,7 @@ expression: plan.variables
 ---
 {
   "action0": "PRRT_2",
-  "body": "please",
+  "body": "please\n\n---\n\n### Comments outside the diff\n\n**`src/a.rs` L6**\nhttps://github.com/o/r/blob/cccccccccccccccccccccccccccccccccccccccc/src/a.rs#L6\n\nbody of c_4",
   "commit": "cccccccccccccccccccccccccccccccccccccccc",
   "event": "REQUEST_CHANGES",
   "prId": "PR_node",
