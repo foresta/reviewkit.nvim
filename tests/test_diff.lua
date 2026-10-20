@@ -504,6 +504,31 @@ T["diff"]["commentable lines carry a sign on each side, placeholders none"] = fu
   eq(child.lua_get(rows:format("right")), { 0, 1 })
 end
 
+T["diff"]["a base side in another encoding is decoded like the head file"] = function()
+  local f = assert(io.open(worktree .. "/src/a.rs", "wb"))
+  f:write("caf\233!\n")
+  f:close()
+  local session = helpers.session({ source = { worktree = worktree }, repo = { root = worktree } })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = session } },
+    {
+      match = { "file base" },
+      body = {
+        ok = true,
+        data = { exists = true, binary = false, too_large = false, lines = { "caf\239\191\189" }, raw = "Y2Fm6Qo=" },
+      },
+    },
+  })
+  child.cmd("Review diff HEAD~1")
+  wait("require('reviewkit.view.diff').is_open() and not require('reviewkit.view.diff')._state().showing")
+  wait("vim.b[vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().left)].reviewkit_side == 'base'")
+  eq(
+    child.lua_get("vim.bo[vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().right)].fileencoding"),
+    "latin1"
+  )
+  eq(left_lines(), { "café" })
+end
+
 T["diff"]["closing the review closes the diff tab"] = function()
   open_review(nil, { { match = { "session close" }, body = { ok = true, data = { closed = true } } } })
   eq(child.lua_get("#vim.api.nvim_list_tabpages()"), 2)
