@@ -106,27 +106,26 @@ end
 
 ---@param thread reviewkit.Thread
 function M.reply(thread)
-  require("reviewkit.view.input").open({
+  require("reviewkit.view.input").open_keeping({
     title = "Reply to " .. (thread.comments[1] and thread.comments[1].author or "thread"),
-    on_save = function(text)
-      if vim.trim(text) == "" then
-        return
+  }, function(text, done)
+    if vim.trim(text) == "" then
+      return
+    end
+    core.add_comment({
+      path = thread.path,
+      side = thread.side,
+      line = thread.line or thread.original_line or 1,
+      body = text,
+      reply_to = thread.id,
+    }, function(err)
+      if err then
+        return done(err)
       end
-      core.add_comment({
-        path = thread.path,
-        side = thread.side,
-        line = thread.line or thread.original_line or 1,
-        body = text,
-        reply_to = thread.id,
-      }, function(err)
-        if err then
-          return vim.notify("[reviewkit] " .. err.message, vim.log.levels.ERROR)
-        end
-        vim.notify("[reviewkit] reply queued", vim.log.levels.INFO)
-        redraw()
-      end)
-    end,
-  })
+      vim.notify("[reviewkit] reply queued", vim.log.levels.INFO)
+      redraw()
+    end)
+  end)
 end
 
 --- The direction is read from the cached session, so a second press before
