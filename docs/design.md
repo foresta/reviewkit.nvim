@@ -348,7 +348,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   `submit apply --drain` で記録を促す（ロックを持つ送信が保存すると監視で気づく。失敗すれば間隔を空けて促し直す）。
   プレビュー（`--dry-run`）は記録待ちを適用した写しから作る（送信は書き込みの冒頭で適用するので、そうしないと digest が合わない）。新しい版が書いたファイルは読まずに残し、
   壊れたファイルは `applies/rejected/` に移す（他の書き込みを失敗させない）
-- GitHub Enterprise は `repo.host` を gh の `--hostname` に渡す
+- gh には github.com を含め常に `repo.host` を渡す（`--hostname`、`--repo host/owner/name`）。渡さないと gh は `GH_HOST` に従い、
+  GitHub Enterprise を既定にしている利用者の github.com の PR が別のホストに読み書きされる
 
 ## 6. hunk・コメント可能範囲・行ずれ
 
