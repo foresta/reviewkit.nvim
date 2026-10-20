@@ -117,13 +117,14 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 | `:Review resume [id]` / `:Review refresh` | reopen a saved session / recompute it |
 | `:Review threads [refresh]` | list the pull request's review threads |
 | `:ReviewSubmit herdr\|github\|clipboard` | send the queue; comments leave it only at the session's own destination (GitHub for a PR, the agent for a local diff), so a PR review can go to an agent first and to GitHub later; GitHub submits are previewed first (`sinks.github.confirm = false` skips it) |
-| `:ReviewClose[!]` | close the session (`!` also deletes its state) |
+| `:ReviewClose[!]` | close the session (`!` also deletes its state); asks first while comments are unsent |
 
 Default keys (disable with `setup({ set_keymaps = false })`; `<Plug>(reviewkit-*)` maps stay):
 `<leader>rc` comment, `<leader>re` / `<leader>rx` edit / remove the comment here,
 `<leader>rd` decision, `<leader>rv` toggle viewed, `<leader>rq` queue, `<leader>rt` / `<leader>rT`
 thread here / thread list, `<leader>rs` submit to herdr, `<leader>ro` side-by-side view.
-Inside the side-by-side view: `]f` / `[f` next / previous file, `]h` / `[h` next / previous hunk.
+Inside the side-by-side view: `]f` / `[f` next / previous file, `]h` / `[h` next / previous hunk,
+`]t` / `[t` next / previous thread, `]u` next file not viewed yet.
 
 ## Layout
 

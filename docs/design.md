@@ -347,7 +347,10 @@ require("reviewkit").setup({
 ```
 
 `:Review pr <number|url>`、`:Review diff <base> [<head>]`、`:Review resume`、`:Review refresh`、`:Review threads [refresh]`、
-`:ReviewSubmit herdr|github`、`:ReviewClose`、`:ReviewInstall`、`:ReviewLog`。`setup()` を呼ばなくてもコマンドは使える。
+`:ReviewSubmit herdr|github`、`:ReviewClose`、`:ReviewInstall`、`:ReviewLog`。`:ReviewClose` は未送信の
+コメントがあると確認する（`!` の purge ではコメントも消えると明示する）。diff ビューのバッファだけのキーは
+`]f` `[f`（ファイル）、`]h` `[h`（hunk）、`]t` `[t`（行のあるスレッド。outdated とファイル単位はスレッド一覧から）、
+`]u`（未読の次のファイル）。`setup()` を呼ばなくてもコマンドは使える。
 
 ## 8. 未決事項
 

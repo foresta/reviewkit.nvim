@@ -677,6 +677,15 @@ function M.close(opts)
     return notify("no review session is open")
   end
   opts = opts or {}
+  local unsent = #core.comments()
+  if unsent > 0 then
+    local what = ("%d comment%s still in the queue"):format(unsent, unsent == 1 and "" or "s")
+    local question = opts.purge and (what .. ". Close and delete them?")
+      or (what .. ". Close anyway? (they stay saved and come back with :Review resume)")
+    if vim.fn.confirm(question, "&Close\n&Keep", 2) ~= 1 then
+      return
+    end
+  end
   core.close(opts, function(err)
     if err then
       return notify_error(err)
@@ -784,6 +793,9 @@ local maps = {
   { "n", "[f", "prev_file", "reviewkit: previous target", true },
   { "n", "]h", "next_hunk", "reviewkit: next hunk", true },
   { "n", "[h", "prev_hunk", "reviewkit: previous hunk", true },
+  { "n", "]t", "next_thread", "reviewkit: next thread", true },
+  { "n", "[t", "prev_thread", "reviewkit: previous thread", true },
+  { "n", "]u", "next_unviewed", "reviewkit: next file not viewed yet", true },
 }
 
 local actions = {
@@ -834,6 +846,15 @@ local actions = {
   end,
   next_hunk = function()
     require("reviewkit.view.diff").jump_hunk(1)
+  end,
+  next_thread = function()
+    require("reviewkit.view.diff").jump_thread(1)
+  end,
+  prev_thread = function()
+    require("reviewkit.view.diff").jump_thread(-1)
+  end,
+  next_unviewed = function()
+    require("reviewkit.view.diff").step_unviewed(1)
   end,
   prev_hunk = function()
     require("reviewkit.view.diff").jump_hunk(-1)

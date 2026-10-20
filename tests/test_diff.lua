@@ -136,6 +136,193 @@ T["diff"]["jump_hunk moves to the hunk start of the cursor's side"] = function()
   eq(child.lua_get("vim.api.nvim_win_get_cursor(0)[1]"), 3)
 end
 
+T["diff"]["]t and [t move between threads across files, skipping outdated ones"] = function()
+  local session = with_targets({
+    threads = {
+      {
+        id = "PRRT_b",
+        path = "src/b.rs",
+        side = "head",
+        line = 2,
+        start_line = vim.NIL,
+        start_side = vim.NIL,
+        original_line = 2,
+        resolved = false,
+        outdated = false,
+        subject_type = "line",
+        comments = { { id = "1", author = "alice", body = "hm", created_at = "t", url = "u" } },
+      },
+      {
+        id = "PRRT_a",
+        path = "src/a.rs",
+        side = "head",
+        line = 4,
+        start_line = vim.NIL,
+        start_side = vim.NIL,
+        original_line = 2,
+        resolved = false,
+        outdated = false,
+        subject_type = "line",
+        comments = { { id = "1", author = "alice", body = "hm", created_at = "t", url = "u" } },
+      },
+      {
+        id = "PRRT_old",
+        path = "src/a.rs",
+        side = "head",
+        line = vim.NIL,
+        start_line = vim.NIL,
+        start_side = vim.NIL,
+        original_line = 2,
+        resolved = false,
+        outdated = true,
+        subject_type = "line",
+        comments = { { id = "1", author = "alice", body = "hm", created_at = "t", url = "u" } },
+      },
+    },
+  })
+  open_review(session)
+  child.lua("vim.api.nvim_set_current_win(require('reviewkit.view.diff')._state().right)")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 1, 0 })")
+  child.lua("require('reviewkit.view.diff').jump_thread(1)")
+  wait("vim.api.nvim_win_get_cursor(0)[1] == 4")
+  eq(child.lua_get("require('reviewkit.view.diff')._state().path"), "src/a.rs")
+  child.lua("require('reviewkit.view.diff').jump_thread(1)")
+  wait(
+    "require('reviewkit.view.diff')._state().path == 'src/b.rs' and not require('reviewkit.view.diff')._state().showing"
+  )
+  wait("vim.api.nvim_win_get_cursor(0)[1] == 2")
+  eq(child.lua_get("vim.api.nvim_win_get_cursor(0)[1]"), 2)
+  child.lua("require('reviewkit.view.diff').jump_thread(1)")
+  wait(
+    "require('reviewkit.view.diff')._state().path == 'src/a.rs' and not require('reviewkit.view.diff')._state().showing"
+  )
+  wait("vim.api.nvim_win_get_cursor(0)[1] == 4")
+  eq(child.lua_get("vim.api.nvim_win_get_cursor(0)[1]"), 4)
+  child.lua("require('reviewkit.view.diff').jump_thread(-1)")
+  wait(
+    "require('reviewkit.view.diff')._state().path == 'src/b.rs' and not require('reviewkit.view.diff')._state().showing"
+  )
+  eq(child.lua_get("require('reviewkit.view.diff')._state().path"), "src/b.rs")
+end
+
+T["diff"]["]t reaches both a base and a head thread on the same line number"] = function()
+  local session = with_targets({
+    threads = {
+      {
+        id = "PRRT_head",
+        path = "src/a.rs",
+        side = "head",
+        line = 3,
+        start_line = vim.NIL,
+        start_side = vim.NIL,
+        original_line = 3,
+        resolved = false,
+        outdated = false,
+        subject_type = "line",
+        comments = { { id = "1", author = "alice", body = "hm", created_at = "t", url = "u" } },
+      },
+      {
+        id = "PRRT_base",
+        path = "src/a.rs",
+        side = "base",
+        line = 3,
+        start_line = vim.NIL,
+        start_side = vim.NIL,
+        original_line = 3,
+        resolved = false,
+        outdated = false,
+        subject_type = "line",
+        comments = { { id = "2", author = "bob", body = "old", created_at = "t", url = "u" } },
+      },
+    },
+  })
+  open_review(session)
+  child.lua("vim.api.nvim_set_current_win(require('reviewkit.view.diff')._state().right)")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 1, 0 })")
+  local function where()
+    return child.lua_get(
+      "{ vim.api.nvim_get_current_win() == require('reviewkit.view.diff')._state().left and 'base' or 'head', vim.api.nvim_win_get_cursor(0)[1] }"
+    )
+  end
+  child.lua("require('reviewkit.view.diff').jump_thread(1)")
+  wait("vim.api.nvim_get_current_win() == require('reviewkit.view.diff')._state().left")
+  eq(where(), { "base", 3 })
+  child.lua("require('reviewkit.view.diff').jump_thread(1)")
+  wait("vim.api.nvim_get_current_win() == require('reviewkit.view.diff')._state().right")
+  eq(where(), { "head", 3 })
+  child.lua("require('reviewkit.view.diff').jump_thread(-1)")
+  wait("vim.api.nvim_get_current_win() == require('reviewkit.view.diff')._state().left")
+  eq(where(), { "base", 3 })
+end
+
+T["diff"]["]t lands a range thread on its first line only when the range stays on one side"] = function()
+  local function range(id, start_side, start_line, line)
+    return {
+      id = id,
+      path = "src/a.rs",
+      side = "head",
+      line = line,
+      start_line = start_line,
+      start_side = start_side,
+      original_line = line,
+      resolved = false,
+      outdated = false,
+      subject_type = "line",
+      comments = { { id = id, author = "alice", body = "hm", created_at = "t", url = "u" } },
+    }
+  end
+  open_review(with_targets({ threads = { range("PRRT_cross", "base", 5, 2) } }))
+  child.lua("vim.api.nvim_set_current_win(require('reviewkit.view.diff')._state().right)")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 1, 0 })")
+  child.lua("require('reviewkit.view.diff').jump_thread(1)")
+  wait("vim.api.nvim_win_get_cursor(0)[1] == 2")
+  eq(child.lua_get("vim.api.nvim_win_get_cursor(0)[1]"), 2)
+end
+
+T["diff"]["]t lands a same-side range thread on its first line"] = function()
+  local t = {
+    id = "PRRT_r",
+    path = "src/a.rs",
+    side = "head",
+    line = 5,
+    start_line = 3,
+    start_side = "head",
+    original_line = 5,
+    resolved = false,
+    outdated = false,
+    subject_type = "line",
+    comments = { { id = "r", author = "alice", body = "hm", created_at = "t", url = "u" } },
+  }
+  open_review(with_targets({ threads = { t } }))
+  child.lua("vim.api.nvim_set_current_win(require('reviewkit.view.diff')._state().right)")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 1, 0 })")
+  child.lua("require('reviewkit.view.diff').jump_thread(1)")
+  wait("vim.api.nvim_win_get_cursor(0)[1] == 3")
+  eq(child.lua_get("vim.api.nvim_win_get_cursor(0)[1]"), 3)
+end
+
+T["diff"]["]u starts after the current file and says so when only it is left"] = function()
+  local session = with_targets()
+  session.targets[2].viewed = true
+  open_review(session)
+  child.lua("require('reviewkit.view.diff').step_unviewed(1)")
+  eq(child.lua_get("_G.notices[#_G.notices].msg"), "[reviewkit] every other file is viewed")
+end
+
+T["diff"]["]u moves to the next file not viewed yet, and says when all are"] = function()
+  local session = with_targets()
+  session.targets[1].viewed = true
+  open_review(session)
+  child.lua("require('reviewkit.view.diff').step_unviewed(1)")
+  wait(
+    "require('reviewkit.view.diff')._state().path == 'src/b.rs' and not require('reviewkit.view.diff')._state().showing"
+  )
+  eq(child.lua_get("require('reviewkit.view.diff')._state().path"), "src/b.rs")
+  child.lua("for _, t in ipairs(require('reviewkit.core').targets()) do t.viewed = true end")
+  child.lua("require('reviewkit.view.diff').step_unviewed(1)")
+  eq(child.lua_get("_G.notices[#_G.notices].msg"), "[reviewkit] every file is viewed")
+end
+
 T["diff"]["a comment from the base window is queued on the base side"] = function()
   local after = with_targets({
     rev = 2,

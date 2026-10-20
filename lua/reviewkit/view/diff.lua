@@ -385,6 +385,93 @@ function M.step(delta)
 end
 
 ---@param delta integer
+function M.step_unviewed(delta)
+  local targets = core.targets()
+  if #targets == 0 or not M.is_open() then
+    return
+  end
+  local index
+  for i, t in ipairs(targets) do
+    if t.path == state.path then
+      index = i
+    end
+  end
+  local others = index and #targets - 1 or #targets
+  for n = 1, others do
+    local t = targets[(((index or 0) - 1 + delta * n) % #targets) + 1]
+    if not t.viewed then
+      return M.show(t.path)
+    end
+  end
+  local current = index and targets[index]
+  local message = current and not current.viewed and "every other file is viewed" or "every file is viewed"
+  vim.notify("[reviewkit] " .. message, vim.log.levels.INFO)
+end
+
+--- Threads in target order, then by line, base before head on the same
+--- line number (the two sides number lines independently). Outdated and
+--- file-level threads have no line to land on and are reached through the
+--- thread list. A range thread is landed on at its first line when the
+--- range stays on one side.
+---@param delta integer
+function M.jump_thread(delta)
+  local order = {}
+  for i, t in ipairs(core.targets()) do
+    order[t.path] = i
+  end
+  local SIDE = { base = 0, head = 1 }
+  local function key(rank, line, side)
+    return { rank, line, SIDE[side] or 1 }
+  end
+  local function less(a, b)
+    for k = 1, 3 do
+      if a[k] ~= b[k] then
+        return a[k] < b[k]
+      end
+    end
+    return false
+  end
+  local spots = {}
+  for _, t in ipairs(core.threads()) do
+    if t.line ~= nil and t.line ~= vim.NIL and order[t.path] then
+      -- A range may start on the other side, where start_line counts the
+      -- other file's lines.
+      local start_side = (t.start_side ~= nil and t.start_side ~= vim.NIL) and t.start_side or t.side
+      local has_start = t.start_line ~= nil and t.start_line ~= vim.NIL
+      local line = (has_start and start_side == t.side) and t.start_line or t.line
+      table.insert(spots, { path = t.path, side = t.side, line = line, key = key(order[t.path], line, t.side) })
+    end
+  end
+  if #spots == 0 then
+    return vim.notify("[reviewkit] no thread to move to", vim.log.levels.INFO)
+  end
+  table.sort(spots, function(a, b)
+    return less(a.key, b.key)
+  end)
+  local win = api.nvim_get_current_win()
+  local here = key(order[state.path or ""] or 0, api.nvim_win_get_cursor(0)[1], win == state.left and "base" or "head")
+  local pick
+  if delta > 0 then
+    for _, s in ipairs(spots) do
+      if less(here, s.key) then
+        pick = s
+        break
+      end
+    end
+    pick = pick or spots[1]
+  else
+    for i = #spots, 1, -1 do
+      if less(spots[i].key, here) then
+        pick = spots[i]
+        break
+      end
+    end
+    pick = pick or spots[#spots]
+  end
+  M.reveal(pick.path, pick.side, pick.line)
+end
+
+---@param delta integer
 function M.jump_hunk(delta)
   local buf = api.nvim_get_current_buf()
   local path, side = M.location(buf)
