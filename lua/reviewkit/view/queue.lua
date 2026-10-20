@@ -180,6 +180,26 @@ function M.open_entry()
   require("reviewkit.view.diff").reveal(data.path, data.side, data.line)
 end
 
+--- The comments on lines `first`..`last` of the queue list; nil when the
+--- current window is not that list.
+---@param first integer
+---@param last integer
+---@return string[]?
+function M.selected_ids(first, last)
+  if not in_our_list("queue") then
+    return nil
+  end
+  local items = vim.fn.getqflist()
+  local ids = {}
+  for lnum = first, last do
+    local data = items[lnum] and items[lnum].user_data
+    if type(data) == "table" and data.comment_id then
+      table.insert(ids, data.comment_id)
+    end
+  end
+  return ids
+end
+
 --- `r` in the history list.
 function M.restore_entry()
   if not in_our_list("history") then

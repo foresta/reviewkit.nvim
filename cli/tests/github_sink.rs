@@ -1131,3 +1131,72 @@ fn an_interrupted_submit_is_not_reconciled_from_a_partial_answer() {
         "nothing is sent while the earlier submit is unknown"
     );
 }
+
+#[test]
+fn a_selection_posts_only_those_comments_and_keeps_the_decision() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let picked = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "this one"}),
+    );
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "not yet"}),
+    );
+    decide(&state, &remote, &gh, &id, "request_changes", "please");
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_1", "url": "u" } } } }),
+        0,
+    );
+    let options = serde_json::json!({ "comment_ids": [picked] }).to_string();
+    let preview = json(
+        &reviewkit(&state, &remote, &gh)
+            .args([
+                "submit",
+                "--session",
+                &id,
+                "--sink",
+                "github",
+                "--dry-run",
+                "--options",
+                "-",
+            ])
+            .write_stdin(options.clone())
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(preview["data"]["preview"]["comment_ids"], serde_json::json!([picked]));
+    assert_eq!(
+        preview["data"]["preview"]["decision"], "comment",
+        "a comments-only review"
+    );
+    let sent = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github", "--options", "-"])
+            .write_stdin(options)
+            .output()
+            .unwrap(),
+    );
+    let calls = mutation_calls(&gh);
+    let vars = &calls.last().unwrap()["variables"];
+    assert_eq!(vars["event"], "COMMENT");
+    assert_eq!(vars["threads"].as_array().unwrap().len(), 1);
+    assert_eq!(sent["data"]["decision"], "skipped");
+    let left = sent["session"]["comments"].as_array().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0]["body"], "not yet");
+    assert_eq!(
+        sent["session"]["decision"]["event"], "request_changes",
+        "still to be sent"
+    );
+}

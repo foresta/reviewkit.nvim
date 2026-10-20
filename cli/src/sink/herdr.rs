@@ -396,7 +396,8 @@ impl super::Sink for HerdrSink {
     fn preview(&self, ctx: &crate::context::Context, session: &Session, opts: &SubmitOptions) -> Result<SubmitPreview> {
         let options: HerdrOptions = opts.sink_options()?;
         let herdr = herdr::SystemHerdr::new(ctx.tools.herdr.as_deref())?;
-        preview(session, &options, &herdr)
+        let view = crate::core::comments::narrowed(session, opts.comment_ids.as_deref())?;
+        preview(view.as_ref().unwrap_or(session), &options, &herdr)
     }
 
     /// The lock is held across the send so a concurrent edit cannot slip
@@ -411,7 +412,11 @@ impl super::Sink for HerdrSink {
         let options: HerdrOptions = opts.sink_options()?;
         let herdr = herdr::SystemHerdr::new(ctx.tools.herdr.as_deref())?;
         store.update(id, |s| {
-            let result = submit(s, &options, &herdr)?;
+            let view = crate::core::comments::narrowed(s, opts.comment_ids.as_deref())?;
+            let mut result = submit(view.as_ref().unwrap_or(s), &options, &herdr)?;
+            if view.is_some() && s.decision.is_some() {
+                result.decision = DecisionStatus::Skipped;
+            }
             let consume = self.consumes(&s.source, opts.consume);
             crate::core::apply::apply(s, result, consume)
         })

@@ -251,6 +251,67 @@ T["core"]["a Lua sink decides consumption and its result names the decision it s
   eq(calls[#calls].args, { "submit", "apply", "--session", "local/abc/HEAD..worktree" })
 end
 
+T["core"]["a Lua sink given a selection sees only those comments and no decision"] = function()
+  local session = helpers.session({
+    comments = {
+      { id = "c_1", path = "src/a.rs", side = "head", line = 3, body = "one" },
+      { id = "c_2", path = "src/a.rs", side = "head", line = 4, body = "two" },
+    },
+    decision = { event = "comment", body = "lgtm", updated_at = "t" },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = session } },
+    { match = { "submit apply" }, body = { ok = true, data = { sink = "clip" }, session = session } },
+  })
+  open(child)
+  child.lua([[
+    require('reviewkit.core').register_sink('clip', {
+      submit = function(s, _, cb)
+        _G.saw = { ids = vim.tbl_map(function(c) return c.id end, s.comments), decision = s.decision }
+        cb(nil, { sent = { { comment_id = 'c_2' } }, failed = {}, skipped = {}, decision = 'not_applicable' })
+      end,
+    })
+    require('reviewkit.core').submit('clip', { comment_ids = { 'c_2' } }, _G.finish)
+  ]])
+  child.lua_get("_G.wait_done()")
+  eq(child.lua_get("_G.saw.ids"), { "c_2" })
+  eq(child.lua_get("_G.saw.decision == nil"), true)
+  local calls = helpers.calls(dir)
+  eq(vim.json.decode(calls[#calls].stdin).attempted, { "c_2" })
+end
+
+T["core"]["a Lua sink's selection carries no thread actions, and an unknown id is refused"] = function()
+  local session = helpers.session({
+    comments = { { id = "c_1", path = "src/a.rs", side = "head", line = 3, body = "one" } },
+    thread_actions = { { thread_id = "PRRT_1", action = "resolve" } },
+    decision = { event = "comment", body = "lgtm", updated_at = "t" },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = session } },
+    {
+      match = { "history list" },
+      body = { ok = true, data = { { id = "c_old", path = "src/a.rs", side = "head", line = 1, body = "sent" } } },
+    },
+    { match = { "submit apply" }, body = { ok = true, data = { sink = "clip" }, session = session } },
+  })
+  open(child)
+  child.lua([[
+    require('reviewkit.core').register_sink('clip', {
+      submit = function(s, _, cb)
+        _G.saw = { actions = #(s.thread_actions or {}), history = #(s.history or {}) }
+        cb(nil, { sent = {}, failed = {}, skipped = {}, decision = 'not_applicable' })
+      end,
+    })
+    require('reviewkit.core').submit('clip', { comment_ids = { 'c_1', 'c_old' } }, _G.finish)
+  ]])
+  child.lua_get("_G.wait_done()")
+  eq(child.lua_get("_G.saw"), { actions = 0, history = 0 })
+  local calls = helpers.calls(dir)
+  eq(vim.json.decode(calls[#calls].stdin).decision, "skipped")
+  child.lua("require('reviewkit.core').submit('clip', { comment_ids = { 'c_nope' } }, _G.finish)")
+  eq(child.lua_get("_G.wait_done().err.code"), "E_NO_COMMENT")
+end
+
 T["core"]["the clipboard sink trusts an OSC 52 provider it cannot read back"] = function()
   child.lua([[
     vim.g.clipboard = {

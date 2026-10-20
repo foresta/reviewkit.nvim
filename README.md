@@ -123,6 +123,11 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 | `:ReviewInstall` | install or update the CLI (release download, else `cargo build`) |
 | `:ReviewLog` | show recent CLI calls and errors |
 
+To send only some comments, select their lines in the queue list (`<leader>rq`) and press
+`<leader>rs`, or run `:'<,'>ReviewSubmit <sink>` there. A selection never carries the decision
+or thread actions, so you can ask the agent to fix a few things and post the rest, decision
+included, to GitHub later.
+
 A comment leaves the queue only when it reaches the session's own destination: GitHub for a
 pull request, the agent (herdr) for a local diff. Sending a PR review to the agent first keeps the
 comments queued and marked as delivered (`→ herdr` in the queue list); `D` in the queue list moves

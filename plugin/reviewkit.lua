@@ -39,9 +39,13 @@ end, {
 })
 
 vim.api.nvim_create_user_command("ReviewSubmit", function(cmd)
+  if cmd.range > 0 then
+    return orchestrator().submit_range(cmd.fargs[1], cmd.line1, cmd.line2)
+  end
   orchestrator().submit(cmd.fargs[1])
 end, {
   nargs = "?",
+  range = true,
   desc = "reviewkit: send the queue through a sink (default: herdr)",
   complete = function()
     return require("reviewkit.core").sink_names()

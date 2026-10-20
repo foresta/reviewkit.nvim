@@ -1382,8 +1382,18 @@
       },
       "SubmitOptions": {
         "additionalProperties": true,
-        "description": "`consume` is the only key every sink shares; the rest of the object is\nthe chosen sink's own options (`HerdrOptions`, `GithubOptions`), kept\nflat so a client can pass one table per sink as it is.",
+        "description": "`consume` and `comment_ids` are the keys every sink shares; the rest of\nthe object is the chosen sink's own options (`HerdrOptions`,\n`GithubOptions`), kept flat so a client can pass one table per sink as it is.",
         "properties": {
+          "comment_ids": {
+            "description": "Sends only these queued comments, without the decision and thread\nactions. An id already in the history counts as sent and is dropped.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "consume": {
             "default": null,
             "description": "Whether delivered comments leave the queue. By default only the\nsession kind's own destination consumes them; github always does,\nsince keeping posted comments would post them again.",

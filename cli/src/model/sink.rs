@@ -5,9 +5,9 @@ use super::Reason;
 use super::session::ThreadActionKind;
 use crate::error::Error;
 
-/// `consume` is the only key every sink shares; the rest of the object is
-/// the chosen sink's own options (`HerdrOptions`, `GithubOptions`), kept
-/// flat so a client can pass one table per sink as it is.
+/// `consume` and `comment_ids` are the keys every sink shares; the rest of
+/// the object is the chosen sink's own options (`HerdrOptions`,
+/// `GithubOptions`), kept flat so a client can pass one table per sink as it is.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SubmitOptions {
     /// Whether delivered comments leave the queue. By default only the
@@ -15,6 +15,10 @@ pub struct SubmitOptions {
     /// since keeping posted comments would post them again.
     #[serde(default)]
     pub consume: Option<bool>,
+    /// Sends only these queued comments, without the decision and thread
+    /// actions. An id already in the history counts as sent and is dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_ids: Option<Vec<String>>,
     #[serde(flatten)]
     pub sink: serde_json::Map<String, serde_json::Value>,
 }

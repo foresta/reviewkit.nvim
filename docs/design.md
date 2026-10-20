@@ -150,7 +150,10 @@ PrInfo {                    -- 表示しないが保持する PR の付帯情報
 }
 
 SubmitOptions {             -- submit の stdin（省略可）。sink 固有の項目を同じ階層に並べる
-  consume?: bool            -- 送れたコメントをキューから消すか。既定は sink が決める（Sink::consumes）。共通の予約語はこれだけ
+  consume?: bool            -- 送れたコメントをキューから消すか。既定は sink が決める（Sink::consumes）
+  comment_ids?: string[]    -- 送るコメントを選ぶ。省略はキュー全体。選んだときは decision とスレッド操作を送らない
+                            -- （decision は skipped）。キューに無く history にある id は送信済みとして落とす。
+                            -- どちらにも無い id は E_NO_COMMENT、`[]` は E_INVALID。共通の予約語は consume とこれの 2 つ
   ...HerdrOptions | GithubOptions
 }
 HerdrOptions {
@@ -276,6 +279,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   （コメント単位の last-writer-wins）。他インスタンスの変更は `state_path` の `vim.uv.new_fs_event`
   （150 ms デバウンス）→ `session get` → etags 差分でイベント発火。`--expect-rev N` で `E_CONFLICT` を返す
   CAS は定義だけして最初は使わない
+- 選択送信: sink には選んだコメントだけを持ち decision とスレッド操作を持たないセッションの写しを渡し、結果は本物のセッションに
+  適用する。Lua の sink にも同じ写しを渡し、`attempted` は選んだ id にする。apply は `attempted` 外の `sent` を無視する
 - 二重送信の防止: gh を呼ぶ前に `pending_submit.json` を書く。次の GitHub への submit で残っていれば threads を取り直し、
   「同じファイル・side に、自分が、同じ本文で、試行の開始以後に投稿したもの」を送信済みとみなしてから消す（行は push で動くので見ない）。
   review 本文に書いたコメントは、自分の review が送った本文のまま投稿されていれば送信済みとみなす。
@@ -287,6 +292,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   |---|---|---|---|
   | github | pending が残り、次の github submit が照合してから送る | 照合で送信済みと分かったものは送らない。GitHub へ sent 済みは `delivered` で skip | `outcome = unknown`、再試行不可。pending を次回照合 |
   | herdr | 送信後・保存前に落ちると記録が無く再送しうる（エージェント宛てで公開されない） | 自分へ sent 済みのコメントと decision は送らない | 全体失敗、`outcome = unknown`。印は試行分だけ |
+  | 選択送信（comment_ids） | github は選んだ分だけの COMMENT review を送り、pending には decision を運ばないと記録する（照合しても decision は消さない） | 送った分は消費されてキューに無く、その id は落とされる。全部落ちれば nothing to submit | 経路ごとの規則と同じ |
   | Lua sink（submit apply） | 送信後・apply 前に落ちると記録されず再送しうる（sink の責任） | 消費済みはキューに無い。`version` / `decision_version` が違うものは記録しない | sink の責任 |
 - GitHub Enterprise は `repo.host` を gh の `--hostname` に渡す
 
@@ -382,7 +388,8 @@ require("reviewkit").setup({
 
 `:Review pr <number|url>`、`:Review diff <base> [<head>]`、`:Review resume`、`:Review refresh`、`:Review threads [refresh]`、
 `:ReviewSubmit herdr|github|clipboard`、`:ReviewClose`、`:ReviewHistory`、`:ReviewInstall`、`:ReviewLog`。
-quickfix の一覧では、履歴の `r` でキューへ戻し、キューの `D` で配送済みを履歴へ移す（確認あり）。`:ReviewClose` は未送信の
+quickfix の一覧では、履歴の `r` でキューへ戻し、キューの `D` で配送済みを履歴へ移す（確認あり）。キューの一覧で行を選んで
+`<leader>rs`（visual）か `:'<,'>ReviewSubmit {sink}` を使うと、その行のコメントだけを送る（`comment_ids`）。`:ReviewClose` は未送信の
 コメントがあると確認する（`!` の purge ではコメントも消えると明示する）。diff ビューのバッファだけのキーは
 `]f` `[f`（ファイル）、`]h` `[h`（hunk）、`]t` `[t`（行のあるスレッド。outdated とファイル単位はスレッド一覧から）、
 `]u`（未読の次のファイル）。`setup()` を呼ばなくてもコマンドは使える。

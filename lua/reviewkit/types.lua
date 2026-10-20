@@ -323,10 +323,11 @@ M.SCHEMA_VERSION = 1
 
 ---@alias reviewkit.SubjectType "line"|"file"
 
---- `consume` is the only key every sink shares; the rest of the object is
---- the chosen sink's own options (`HerdrOptions`, `GithubOptions`), kept
---- flat so a client can pass one table per sink as it is.
+--- `consume` and `comment_ids` are the keys every sink shares; the rest of
+--- the object is the chosen sink's own options (`HerdrOptions`,
+--- `GithubOptions`), kept flat so a client can pass one table per sink as it is.
 ---@class reviewkit.SubmitOptions
+---@field comment_ids? string[] Sends only these queued comments, without the decision and thread actions. An id already in the history counts as sent and is dropped.
 ---@field consume? boolean Whether delivered comments leave the queue. By default only the session kind's own destination consumes them; github always does, since keeping posted comments would post them again.
 
 --- What a submit would do, in the same shape for every sink. Comments are
