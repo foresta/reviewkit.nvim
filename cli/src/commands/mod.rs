@@ -40,6 +40,24 @@ pub fn dispatch(ctx: &Context, command: Command) -> Result<Response> {
 /// Bodies travel on stdin so shells never have to quote them. Empty stdin
 /// is rejected as invalid input rather than read as an empty document.
 pub fn stdin_json<T: serde::de::DeserializeOwned>() -> Result<T> {
+    crate::model::strict(stdin_value()?, "input")
+}
+
+/// For a report of something already done (a client sink's delivery):
+/// refusing it would leave the delivery unrecorded, so extra keys are only
+/// logged. Version skew is stopped earlier, by the contract revision check.
+pub fn stdin_json_lenient<T: serde::de::DeserializeOwned>() -> Result<T> {
+    let mut unknown = Vec::new();
+    let parsed: std::result::Result<T, _> =
+        serde_ignored::deserialize(stdin_value()?, |path| unknown.push(path.to_string()));
+    let parsed = parsed.map_err(|err| Error::invalid(format!("invalid input: {err}")))?;
+    if !unknown.is_empty() {
+        log::warn!("ignored unknown fields: {}", unknown.join(", "));
+    }
+    Ok(parsed)
+}
+
+fn stdin_value() -> Result<serde_json::Value> {
     let raw = read_stdin()?;
     if raw.trim().is_empty() {
         return Err(

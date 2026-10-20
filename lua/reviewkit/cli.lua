@@ -181,6 +181,28 @@ function M.run_sync(args, opts)
   return decode(res)
 end
 
+--- Why the CLI cannot serve this plugin, or nil. The revision must be at
+--- least ours: an older CLI rejects (or once ignored) inputs we send.
+---@param info? { schema_version?: integer, schema_revision?: integer }
+---@return string?
+function M.contract_mismatch(info)
+  local found = info and info.schema_version
+  if found ~= types.SCHEMA_VERSION then
+    return ("reviewkit speaks schema_version %s, this plugin expects %s"):format(
+      tostring(found),
+      tostring(types.SCHEMA_VERSION)
+    )
+  end
+  local revision = (info and info.schema_revision) or 0
+  if revision < types.SCHEMA_REVISION then
+    return ("reviewkit is at contract revision %d, this plugin needs %d or later"):format(
+      revision,
+      types.SCHEMA_REVISION
+    )
+  end
+  return nil
+end
+
 --- The contract version is checked once per session; a mismatch stops every
 --- later call instead of failing on some field halfway through a review.
 ---@param cb fun(err: reviewkit.CliError?)
@@ -194,17 +216,10 @@ function M.ensure_compatible(cb)
     if err then
       return cb(err)
     end
-    local found = envelope and envelope.data and envelope.data.schema_version
-    if found ~= types.SCHEMA_VERSION then
+    local reason = M.contract_mismatch(envelope and envelope.data)
+    if reason then
       return cb(
-        make_error(
-          "E_SCHEMA_VERSION",
-          ("reviewkit speaks schema_version %s, this plugin expects %s"):format(
-            tostring(found),
-            tostring(types.SCHEMA_VERSION)
-          ),
-          "update the binary or the plugin so they match (:checkhealth reviewkit)"
-        )
+        make_error("E_SCHEMA_VERSION", reason, "update the binary with :ReviewInstall (see :checkhealth reviewkit)")
       )
     end
     M._compatible = true

@@ -530,6 +530,20 @@ function M.sink_names()
   return names
 end
 
+--- Settings only the plugin reads; the CLI rejects keys it does not know.
+local LUA_ONLY = { confirm = true }
+
+---@param sink string
+---@param opts table
+---@return table
+local function cli_options(sink, opts)
+  local merged = vim.tbl_extend("force", config.get().sinks[sink] or {}, opts)
+  for key in pairs(LUA_ONLY) do
+    merged[key] = nil
+  end
+  return merged
+end
+
 ---@param session reviewkit.Session
 ---@param ids string[]
 ---@param cb fun(err: reviewkit.Error?, view: reviewkit.Session?, decision_left: boolean?)
@@ -684,9 +698,7 @@ function M.submit(sink, opts, cb)
   end
   local args = { "submit", "--session", session.id, "--sink", sink }
   local stdin = nil
-  local sink_defaults = config.get().sinks[sink]
-  local merged = vim.tbl_extend("force", sink_defaults or {}, opts)
-  merged.confirm = nil
+  local merged = cli_options(sink, opts)
   if next(merged) ~= nil then
     vim.list_extend(args, { "--options", "-" })
     stdin = merged
@@ -709,8 +721,7 @@ function M.preview(sink, opts, cb)
     end)
   end
   local args = { "submit", "--session", session.id, "--sink", sink, "--dry-run" }
-  local merged = vim.tbl_extend("force", config.get().sinks[sink] or {}, opts or {})
-  merged.confirm = nil
+  local merged = cli_options(sink, opts or {})
   local stdin = nil
   if next(merged) ~= nil then
     vim.list_extend(args, { "--options", "-" })

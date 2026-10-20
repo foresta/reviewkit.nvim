@@ -34,15 +34,20 @@ use serde::{Deserialize, Serialize};
 /// values are only ever added.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// Bumped for every field or enum value added to a persisted type. A CLI
-/// does not write a session last written by a higher revision: it would drop
-/// what it cannot represent. Recorded outside the contract, in `_writer`.
-pub const SCHEMA_REVISION: u32 = 7;
+/// Bumped whenever the contract schema changes, inputs included (enforced by
+/// tests/schema.rs). A client needs at least its own revision, or the CLI
+/// would reject what it sends; a CLI does not write a session last written
+/// by a higher revision, since it would drop what it cannot represent.
+/// Recorded outside the contract, in `_writer`.
+pub const SCHEMA_REVISION: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VersionInfo {
     pub version: String,
     pub schema_version: u32,
+    /// The contract revision; a client needs at least its own.
+    #[serde(default)]
+    pub schema_revision: u32,
 }
 
 /// Root of the JSON Schema. It only exists so that one `schema_for!` call
@@ -65,4 +70,20 @@ pub struct Contract {
     pub sink_info: crate::sink::SinkInfo,
     pub submit_preview: SubmitPreview,
     pub sink_target: SinkTarget,
+}
+
+/// Inputs are strict where stored files are lenient: an unknown key means
+/// the client speaks a newer contract (or has a typo), and acting without
+/// it could send something other than what was asked. Types stay lenient
+/// because the same types read session files an older or newer CLI wrote.
+pub fn strict<T: serde::de::DeserializeOwned>(value: serde_json::Value, what: &str) -> crate::error::Result<T> {
+    let mut unknown = Vec::new();
+    let parsed: std::result::Result<T, _> = serde_ignored::deserialize(value, |path| unknown.push(path.to_string()));
+    let parsed = parsed.map_err(|err| crate::error::Error::invalid(format!("invalid {what}: {err}")))?;
+    if !unknown.is_empty() {
+        return Err(crate::error::Error::invalid(format!("unknown {what} field: {}", unknown.join(", ")))
+            .hint("this reviewkit does not know it: check the options or config, or update the CLI with :ReviewInstall")
+            .details(serde_json::json!({ "unknown_fields": unknown })));
+    }
+    Ok(parsed)
 }

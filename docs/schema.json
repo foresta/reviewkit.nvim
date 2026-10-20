@@ -1822,6 +1822,13 @@
       },
       "VersionInfo": {
         "properties": {
+          "schema_revision": {
+            "default": 0,
+            "description": "The contract revision; a client needs at least its own.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "schema_version": {
             "format": "uint32",
             "minimum": 0,
@@ -1926,5 +1933,6 @@
     "title": "Contract",
     "type": "object"
   },
+  "schema_revision": 8,
   "schema_version": 1
 }

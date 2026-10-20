@@ -15,7 +15,11 @@ end
 local function binary(version, schema)
   return {
     "#!/bin/sh",
-    ('echo \'{"ok":true,"data":{"version":"%s","schema_version":%d}}\''):format(version, schema or 1),
+    ('echo \'{"ok":true,"data":{"version":"%s","schema_version":%d,"schema_revision":%d}}\''):format(
+      version,
+      schema or 1,
+      require("reviewkit.types").SCHEMA_REVISION
+    ),
   }
 end
 

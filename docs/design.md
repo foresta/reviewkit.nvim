@@ -13,6 +13,11 @@ Rust CLI `reviewkit` と Lua の間で受け渡すデータ、CLI のサブコ�
   Lua が `vim.ui.select` で選んで `--target` 付きで再実行する
 - **呼び出しは常に非同期**（`vim.system` + callback）
 - **enum は追加のみ**。Lua は未知の値を落とさず通す。同じ `schema_version` 内ではフィールドの追加しかしない
+- **入力は厳格、保存は寛容**。stdin の JSON と sink のオプションに知らないキーや enum 値があれば `E_INVALID`
+  （`details.unknown_fields` にパス）。古い CLI が新しいオプションを黙って捨て、頼んだのと違うものを送らないため。
+  session.json などの保存ファイルの読み込みは寛容なまま（新しい CLI が書いたものを古い CLI が読めるように）。
+  `submit apply` も寛容に読み、知らないキーはログに出す（Lua の sink が配送した後の報告なので、拒否すると記録が残らず再送で二重に届く。
+  版のずれは先に契約の revision の照合で止まる）
 - Lua の core が同時に持つ Session は 1 つ。イベントの `data.session_id` は将来複数にするための印
 
 ## 2. 応答の封筒と終了コード
@@ -211,7 +216,7 @@ SinkResult {
 本文を含む入力は stdin JSON、スカラーはフラグ。変更系は封筒の `session` を返す。
 
 ```
-reviewkit version                                        -> { version, schema_version }
+reviewkit version                                        -> { version, schema_version, schema_revision }
 reviewkit health [--cwd]                                 -> { tools: { git, gh, herdr }, gh_auth, state_dir }
 reviewkit schema                                         -> JSON Schema（全型）
 

@@ -107,9 +107,11 @@ reviewkit.nvim/
   - lazy.nvim: `build = function() require("reviewkit.install").ensure() end`
   - dein: `build = "nvim --headless -l scripts/install.lua"`、`hook_add` で `setup()`
   - vim.pack: `PackChanged` autocmd で `kind ~= "delete"` のとき `ensure()`
-- `:ReviewInstall` と `:checkhealth reviewkit`（解決したパス、`version`、`schema_version` の一致、git / gh / herdr の有無、state dir の書き込み可否）
-- **契約バージョン**: CLI の `version` が `schema_version` を返す。Lua は最初の呼び出しで `types.lua` の
-  `SCHEMA_VERSION` と照合し、不一致なら止めて checkhealth に誘導する。同じ `schema_version` 内の変更は追加のみ
+- `:ReviewInstall` と `:checkhealth reviewkit`（解決したパス、`version`、`schema_version` の一致と `schema_revision`、git / gh / herdr の有無、state dir の書き込み可否）
+- **契約バージョン**: CLI の `version` が `schema_version` と `schema_revision` を返す。Lua は最初の呼び出しで
+  `types.lua` の `SCHEMA_VERSION` と一致し、`SCHEMA_REVISION` 以上であることを確かめ、満たさなければ止めて
+  `:ReviewInstall` / checkhealth に誘導する（新しいプラグインが古い CLI に、知らない入力を送らないため）。
+  同じ `schema_version` 内の変更は追加のみ
 - **契約の互換検査**: 契約の JSON Schema を `docs/schema.json` にコミットし、`cargo test`（`cli/tests/schema.rs`）が
   現在の Schema と比べる。契約には入力と出力の両方があるので、既存のフィールドは型・必須かどうか・制約
   （format、上限下限、`additionalProperties`）を変えられない。同じ `schema_version` のまま、型・フィールド・enum 値・
@@ -117,12 +119,12 @@ reviewkit.nvim/
   `#[serde(default)]` か `Option` にする（古いクライアントは送らず、古い session.json には無い）。任意のフィールド・
   enum 値・variant の追加は通り、
   `make gen-schema` で `docs/schema.json` を更新する。比較の基準はブランチ上の `docs/schema.json` なので、その差分は
-  PR のレビューで見る
+  PR のレビューで見る。Schema が変わったのに `schema_revision` が増えていなければ落ちる
 - **セッションの移行**: `SCHEMA_VERSION` を上げるときは、`store::MIGRATIONS` に「旧版の session.json（JSON の値）を
   1 版進める」関数を 1 つ足す。読むときに古い版から順に適用するので、版を上げても未送信のコメントは残る。
   足し忘れはテスト（`every_schema_version_has_a_migration`）が落とす
 - **書いた版の記録**: session.json のトップレベルに契約外のキー `_writer`（`revision`、`version`、`exe`）を書く。`SCHEMA_REVISION` は
-  永続化する型にフィールドや enum 値を足すたびに +1 する（Session の Schema のハッシュをテストで固定し、上げ忘れを落とす）。
+  契約の Schema（入力も保存も含む）が変わるたびに +1 する（上の互換検査が上げ忘れを落とす）。
   自分より新しい revision が書いたセッションは、読めれば `session get` / `list` で返すが書き戻さない（`E_SCHEMA_VERSION`、
   `details.direction = "newer"`）。再開（`session open --session`）は refresh を書くので拒否される。`close --purge` は読めなくても消せる。
   pending_submit.json と pr.json は対象外（前者は送信の途中にだけ存在し、後者は refresh で作り直す）。

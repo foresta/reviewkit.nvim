@@ -91,6 +91,34 @@ T["cli"]["a schema_version mismatch blocks every call"] = function()
   eq(#calls, 1)
 end
 
+T["cli"]["a CLI older than the plugin's contract revision blocks every call"] = function()
+  local revision = require("reviewkit.types").SCHEMA_REVISION
+  helpers.respond(dir, {
+    {
+      match = { "version" },
+      body = { ok = true, data = { version = "0.0.9", schema_version = 1, schema_revision = revision - 1 } },
+    },
+  })
+  child.lua("require('reviewkit.cli').call({ 'session', 'list' }, {}, _G.finish)")
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err.code, "E_SCHEMA_VERSION")
+  eq(d.err.message:find("revision", 1, true) ~= nil, true)
+  eq(#helpers.calls(dir), 1)
+end
+
+T["cli"]["a newer contract revision of the same version is accepted"] = function()
+  local revision = require("reviewkit.types").SCHEMA_REVISION
+  helpers.respond(dir, {
+    {
+      match = { "version" },
+      body = { ok = true, data = { version = "9.9.9", schema_version = 1, schema_revision = revision + 5 } },
+    },
+    { match = { "session list" }, body = { ok = true, data = {} } },
+  })
+  child.lua("require('reviewkit.cli').call({ 'session', 'list' }, {}, _G.finish)")
+  eq(child.lua_get("_G.wait_done().err"), vim.NIL)
+end
+
 T["cli"]["passes configured tool paths as REVIEWKIT_* and the state dir as a flag"] = function()
   helpers.respond(dir, {
     { match = { "health" }, body = { ok = true, data = { env = "seen" } } },

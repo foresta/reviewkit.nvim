@@ -215,6 +215,7 @@ local out = {
   "local M = {}",
   "",
   "M.SCHEMA_VERSION = " .. tostring(schema_version),
+  "M.SCHEMA_REVISION = " .. tostring(envelope.data.schema_revision or 0),
   "",
 }
 

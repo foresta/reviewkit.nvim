@@ -24,8 +24,15 @@ function M.check()
   local found = version.data.schema_version
   local install = require("reviewkit.install")
   local wanted = install.wanted_version(install.root())
-  if found == types.SCHEMA_VERSION then
-    health.ok(("version %s (schema_version %d)"):format(version.data.version, found))
+  local contract = cli.contract_mismatch(version.data)
+  if not contract then
+    health.ok(
+      ("version %s (schema_version %d, revision %d)"):format(
+        version.data.version,
+        found,
+        version.data.schema_revision or 0
+      )
+    )
     if wanted and not install.is_dev(wanted) and version.data.version ~= wanted then
       health.warn(
         ("the plugin checkout is %s but the binary is %s"):format(wanted, version.data.version),
@@ -33,10 +40,7 @@ function M.check()
       )
     end
   else
-    health.error(
-      ("schema_version mismatch: binary %s, plugin %s"):format(tostring(found), tostring(types.SCHEMA_VERSION)),
-      { "update the binary (:ReviewInstall) or the plugin so they match" }
-    )
+    health.error(contract, { "update the binary (:ReviewInstall) or the plugin so they match" })
   end
 
   local info, health_err = cli.run_sync({ "health" })
