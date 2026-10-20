@@ -511,6 +511,7 @@ mod tests {
                     event: DecisionEvent::Approve,
                     body: "lgtm".into(),
                     updated_at: time::now(),
+                    deliveries: vec![],
                 });
                 Ok(())
             })
@@ -719,7 +720,7 @@ mod tests {
             .collect();
         assert_eq!(
             (SCHEMA_REVISION, hash.as_str()),
-            (5, "d3d5b062baa7a1b2"),
+            (6, "56ff64d3d7564278"),
             "the persisted shape of Session changed (doc comments do not count): bump SCHEMA_REVISION and update this hash"
         );
     }

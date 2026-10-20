@@ -221,6 +221,52 @@ T["core"]["sinks merges the CLI's list with registered Lua sinks, Lua winning"] 
   eq(child.lua_get("require('reviewkit.core').sink_names()"), { "clip", "github", "herdr" })
 end
 
+T["core"]["a Lua sink decides consumption and its result names the decision it saw"] = function()
+  local with_decision = helpers.session({
+    decision = { event = "comment", body = "lgtm", updated_at = "2026-01-01T00:00:00Z" },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = with_decision } },
+    { match = { "submit apply" }, body = { ok = true, data = { sink = "clip" }, session = with_decision } },
+  })
+  open(child)
+  child.lua([[
+    local core = require('reviewkit.core')
+    core.register_sink('clip', {
+      submit = function(_, _, cb)
+        cb(nil, { sent = {}, failed = {}, skipped = {}, decision = 'sent' })
+      end,
+      consumes = function(_, requested) return requested ~= false end,
+    })
+    core.submit('clip', {}, _G.finish)
+  ]])
+  child.lua_get("_G.wait_done()")
+  local calls = helpers.calls(dir)
+  local last = calls[#calls]
+  eq(last.args, { "submit", "apply", "--session", "local/abc/HEAD..worktree", "--consume" })
+  eq(vim.json.decode(last.stdin).decision_version, "2026-01-01T00:00:00Z")
+  child.lua("require('reviewkit.core').submit('clip', { consume = false }, _G.finish)")
+  child.lua_get("_G.wait_done()")
+  calls = helpers.calls(dir)
+  eq(calls[#calls].args, { "submit", "apply", "--session", "local/abc/HEAD..worktree" })
+end
+
+T["core"]["the clipboard sink trusts an OSC 52 provider it cannot read back"] = function()
+  child.lua([[
+    vim.g.clipboard = {
+      name = "OSC 52",
+      copy = { ["+"] = function() end, ["*"] = function() end },
+      paste = { ["+"] = function() return {} end, ["*"] = function() return {} end },
+    }
+    local session = { comments = { { id = "c_1", path = "a", side = "head", line = 1, body = "x" } } }
+    require("reviewkit.sink.clipboard").submit(session, { register = "+" }, function(_, result)
+      _G.result = result
+    end)
+  ]])
+  eq(child.lua_get("#_G.result.failed"), 0)
+  eq(child.lua_get("_G.result.mode"), "copied")
+end
+
 T["core"]["a session file rewritten by another process is picked up"] = function()
   local state_dir = helpers.fake_dir()
   local session_dir = state_dir .. "/sessions/local/abc/HEAD..worktree"

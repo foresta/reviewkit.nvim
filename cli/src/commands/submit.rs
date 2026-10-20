@@ -38,16 +38,17 @@ pub enum SubmitSubcommand {
     Apply {
         #[arg(long, value_name = "ID")]
         session: String,
+        /// Delivered comments leave the queue (the client sink decides).
+        #[arg(long)]
+        consume: bool,
     },
 }
 
 pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
     let store = Store::new(ctx.state_dir.clone());
-    if let Some(SubmitSubcommand::Apply { session }) = args.command {
+    if let Some(SubmitSubcommand::Apply { session, consume }) = args.command {
         let result: SinkResult = super::stdin_json()?;
-        // A client-side sink only copies or hands text over; nothing leaves
-        // the queue unless the client says so.
-        let (session, result) = store.update(&session, |s| apply::apply(s, result, false))?;
+        let (session, result) = store.update(&session, |s| apply::apply(s, result, consume))?;
         return Response::with_session(result, &session);
     }
     let (Some(session_id), Some(sink_name)) = (args.session, args.sink) else {

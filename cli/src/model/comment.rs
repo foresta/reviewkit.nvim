@@ -90,6 +90,7 @@ pub enum Reason {
     Stale,
     Binary,
     NotSupported,
+    Delivered,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

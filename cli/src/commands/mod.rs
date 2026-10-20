@@ -2,6 +2,7 @@ pub mod comment;
 pub mod decision;
 pub mod file;
 pub mod health;
+pub mod history;
 pub mod pr;
 pub mod schema;
 pub mod session;
@@ -32,6 +33,7 @@ pub fn dispatch(ctx: &Context, command: Command) -> Result<Response> {
         Command::Sink(command) => sink::run(ctx, command),
         Command::Submit(args) => submit::run(ctx, args),
         Command::Thread(command) => thread::run(ctx, command),
+        Command::History(command) => history::run(ctx, command),
     }
 }
 

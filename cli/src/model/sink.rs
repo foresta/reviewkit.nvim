@@ -69,6 +69,10 @@ pub struct SinkResult {
     #[serde(default)]
     pub thread_actions: Vec<ThreadActionResult>,
     pub decision: DecisionStatus,
+    /// `Decision.updated_at` as the sink read it; a decision set again
+    /// while the sink ran is neither recorded as delivered nor cleared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_version: Option<String>,
     #[serde(default)]
     pub summary: String,
     #[serde(default)]

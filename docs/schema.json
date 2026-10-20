@@ -354,6 +354,14 @@
           "body": {
             "type": "string"
           },
+          "deliveries": {
+            "default": [],
+            "description": "Where this decision went, like `Comment.deliveries`; a new decision\nstarts with none.",
+            "items": {
+              "$ref": "#/$defs/Delivery"
+            },
+            "type": "array"
+          },
           "event": {
             "$ref": "#/$defs/DecisionEvent"
           },
@@ -813,7 +821,8 @@
           "outside_diff",
           "stale",
           "binary",
-          "not_supported"
+          "not_supported",
+          "delivered"
         ],
         "type": "string"
       },
@@ -1121,6 +1130,13 @@
           },
           "decision": {
             "$ref": "#/$defs/DecisionStatus"
+          },
+          "decision_version": {
+            "description": "`Decision.updated_at` as the sink read it; a decision set again\nwhile the sink ran is neither recorded as delivered nor cleared.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "failed": {
             "items": {

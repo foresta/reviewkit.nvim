@@ -55,7 +55,7 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
             .into_iter()
             .partition(|c| delivered.contains(&c.id));
         session.comments = kept;
-        session.history.extend(gone);
+        retire(&mut session.history, gone);
     }
     for failed in &result.failed {
         let Some(comment_id) = &failed.comment_id else { continue };
@@ -100,8 +100,22 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
             .iter()
             .any(|r| r.thread_id == action.thread_id && r.status == SendStatus::Sent)
     });
-    if result.decision == DecisionStatus::Sent && consume {
-        session.decision = None;
+    let same_decision = result
+        .decision_version
+        .as_deref()
+        .is_none_or(|v| session.decision.as_ref().is_some_and(|d| d.updated_at == v));
+    if result.decision == DecisionStatus::Sent && same_decision {
+        if let Some(decision) = session.decision.as_mut() {
+            decision.deliveries.push(Delivery {
+                sink: result.sink.clone(),
+                at: result.at.clone(),
+                mode: result.mode,
+                url: result.url.clone(),
+            });
+        }
+        if consume {
+            session.decision = None;
+        }
     }
     session.last_submit = Some(LastSubmit {
         sink: result.sink.clone(),
@@ -109,6 +123,17 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
         result: result.clone(),
     });
     Ok(result)
+}
+
+/// A local session is reused for every `:Review diff` of the same specs,
+/// so without a limit the history only grows.
+pub const HISTORY_LIMIT: usize = 200;
+
+/// Oldest first; what falls off the front only loses its delivery record.
+pub fn retire(history: &mut Vec<crate::model::Comment>, gone: Vec<crate::model::Comment>) {
+    history.extend(gone);
+    let excess = history.len().saturating_sub(HISTORY_LIMIT);
+    history.drain(..excess);
 }
 
 /// "3 sent, 1 skipped (outside diff), 0 failed"
@@ -136,6 +161,7 @@ fn reason_label(reason: Reason) -> &'static str {
         Reason::Stale => "stale",
         Reason::Binary => "binary",
         Reason::NotSupported => "not supported",
+        Reason::Delivered => "already delivered",
     }
 }
 
@@ -176,9 +202,29 @@ mod tests {
             thread_actions: vec![],
             decision,
             mode: DeliveryMode::Sent,
+            decision_version: None,
             attempted: None,
             summary: String::new(),
         }
+    }
+
+    #[test]
+    fn the_history_keeps_only_the_newest() {
+        let comment = |n: usize| {
+            serde_json::from_value::<crate::model::Comment>(serde_json::json!({
+                "id": format!("c_{n}"), "path": "a", "side": "head", "line": 1, "kind": "issue",
+                "body": "b", "anchor": { "base_sha": "a", "head_sha": null, "blob": null,
+                    "context": { "before": [], "lines": [], "after": [] } },
+                "stale": false, "commentable": { "github": true, "reason": null },
+                "created_at": "t", "updated_at": "t"
+            }))
+            .unwrap()
+        };
+        let mut history: Vec<_> = (0..HISTORY_LIMIT).map(comment).collect();
+        retire(&mut history, vec![comment(HISTORY_LIMIT), comment(HISTORY_LIMIT + 1)]);
+        assert_eq!(history.len(), HISTORY_LIMIT);
+        assert_eq!(history[0].id, "c_2", "the oldest go first");
+        assert_eq!(history.last().unwrap().id, format!("c_{}", HISTORY_LIMIT + 1));
     }
 
     #[test]

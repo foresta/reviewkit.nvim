@@ -6,6 +6,10 @@ pub struct Decision {
     pub event: DecisionEvent,
     pub body: String,
     pub updated_at: String,
+    /// Where this decision went, like `Comment.deliveries`; a new decision
+    /// starts with none.
+    #[serde(default)]
+    pub deliveries: Vec<super::Delivery>,
 }
 
 /// stdin of `decision set`; core adds `updated_at`.
