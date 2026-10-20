@@ -1270,3 +1270,44 @@ fn a_selection_after_an_interrupted_submit_records_both_and_keeps_the_decision()
     assert_eq!(body["data"]["decision"], "skipped");
     assert_eq!(body["session"]["pending_submit"], false);
 }
+
+#[test]
+fn a_comment_posted_by_an_older_version_cannot_be_restored_and_reposted() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let posted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "posted long ago"}),
+    );
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_1", "url": "u" } } } }),
+        0,
+    );
+    json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github"])
+            .output()
+            .unwrap(),
+    );
+    // As an older CLI wrote it: no `consumed` on the delivery.
+    let path = state.path().join("sessions/pr/github.com/o/r/7/session.json");
+    let mut raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    raw["history"][0]["deliveries"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("consumed");
+    raw["_writer"]["revision"] = serde_json::json!(6);
+    std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+    let out = reviewkit(&state, &remote, &gh)
+        .args(["history", "restore", "--session", &id, "--id", &posted])
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(body["error"]["code"], "E_INVALID", "{body}");
+}

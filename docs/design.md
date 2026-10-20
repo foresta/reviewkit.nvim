@@ -252,7 +252,8 @@ reviewkit submit apply --session ID [--consume] (stdin: SinkResult の sent / fa
 
 reviewkit history list    --session ID                   -> data: Comment[]   キューを出たコメント（新しい順）。200 件を超えて捨てるのは消費済みだけ
 reviewkit history restore --session ID --id CID          -> session   キューの末尾へ戻す。deliveries は残す（同じ sink へは再送しない）。既にキューにあれば何もしない。
-                                                            宛先に届いて消費されたもの（Delivery.consumed）は E_INVALID（編集すると二重に届くため）
+                                                            宛先に届いて消費されたもの（Delivery.consumed）は E_INVALID（編集すると二重に届くため）。
+                                                            consumed を記録する前の版（revision 7 未満）が書いた history は、送信済みの配送をすべて消費済みとして読む
 reviewkit history clear   --session ID                   -> session   data: { removed }
 reviewkit comment clear   --session ID --delivered [--sink NAME] -> session   data: { moved: CID[] }
                                                             mode = sent の配送があるコメントを history へ移す。--delivered は必須（全消しの事故を防ぐ）

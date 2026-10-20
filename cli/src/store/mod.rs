@@ -319,6 +319,28 @@ fn newer_writer(path: &Path, writer: &Writer) -> Error {
     }))
 }
 
+/// The revision that added `Delivery.consumed`.
+const CONSUMED_RECORDED: u32 = 7;
+
+/// Before that revision only a consuming delivery could move a comment to
+/// the history, so every `sent` delivery there consumed it. Read as such,
+/// restoring and editing one cannot post it again.
+fn mark_legacy_history_consumed(raw: &mut serde_json::Value) {
+    let Some(history) = raw.get_mut("history").and_then(|h| h.as_array_mut()) else {
+        return;
+    };
+    for comment in history {
+        let Some(deliveries) = comment.get_mut("deliveries").and_then(|d| d.as_array_mut()) else {
+            continue;
+        };
+        for delivery in deliveries {
+            if delivery.get("mode").and_then(|m| m.as_str()) == Some("sent") {
+                delivery["consumed"] = serde_json::json!(true);
+            }
+        }
+    }
+}
+
 type Migration = fn(&mut serde_json::Value) -> Result<()>;
 
 /// `MIGRATIONS[n - 1]` turns a version-n session into version n+1 as it is
@@ -363,6 +385,12 @@ fn read_session(path: &Path, id: &str) -> Result<(Session, Option<Writer>)> {
     let mut raw: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|err| corrupt(path, format!("not JSON: {err}")))?;
     let found = raw.get("schema_version").and_then(|v| v.as_u64()).unwrap_or(0);
+    // Read before migrating, which drops the old writer record.
+    let written_at = raw
+        .get(WRITER_KEY)
+        .and_then(|w| serde_json::from_value::<Writer>(w.clone()).ok())
+        .unwrap_or_default()
+        .revision;
     if !migrate(&mut raw, found, MIGRATIONS)? {
         let newer = found > u64::from(SCHEMA_VERSION);
         // Purging is only advice for a file this CLI has outgrown; for a newer
@@ -390,7 +418,10 @@ fn read_session(path: &Path, id: &str) -> Result<(Session, Option<Writer>)> {
         .get(WRITER_KEY)
         .and_then(|w| serde_json::from_value(w.clone()).ok())
         .unwrap_or_default();
-    let newer = (writer.revision > SCHEMA_REVISION).then_some(writer);
+    let newer = (writer.revision > SCHEMA_REVISION).then_some(writer.clone());
+    if written_at < CONSUMED_RECORDED {
+        mark_legacy_history_consumed(&mut raw);
+    }
     match (serde_json::from_value::<Session>(raw), newer) {
         (Ok(session), newer) => Ok((session, newer)),
         (Err(_), Some(writer)) => Err(newer_writer(path, &writer)),
@@ -624,6 +655,35 @@ mod tests {
         let err = store.load("local/abc/x").unwrap_err();
         assert_eq!(err.code, ErrorCode::ESchemaVersion);
         assert_eq!(err.details["direction"], "newer");
+    }
+
+    #[test]
+    fn a_history_written_before_consumption_was_recorded_reads_as_consumed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(&dir);
+        let created = store.create(session("local/abc/legacy")).unwrap();
+        let comment = serde_json::json!({
+            "id": "c_1", "path": "a", "side": "head", "line": 1, "kind": "issue", "body": "b",
+            "anchor": { "base_sha": "a", "head_sha": null, "blob": null,
+                "context": { "before": [], "lines": [], "after": [] } },
+            "stale": false, "commentable": { "github": true, "reason": null },
+            "deliveries": [
+                { "sink": "github", "at": "t", "mode": "sent" },
+                { "sink": "clipboard", "at": "t", "mode": "copied" }
+            ],
+            "created_at": "t", "updated_at": "t"
+        });
+        for (revision, consumed) in [(6, true), (SCHEMA_REVISION, false)] {
+            let mut raw: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&created.state_path).unwrap()).unwrap();
+            raw["history"] = serde_json::json!([comment.clone()]);
+            raw["_writer"]["revision"] = serde_json::json!(revision);
+            std::fs::write(&created.state_path, serde_json::to_vec(&raw).unwrap()).unwrap();
+            let loaded = store.load("local/abc/legacy").unwrap();
+            let deliveries = &loaded.history[0].deliveries;
+            assert_eq!(deliveries[0].consumed, consumed, "revision {revision}");
+            assert!(!deliveries[1].consumed, "a copy never consumed anything");
+        }
     }
 
     #[test]
