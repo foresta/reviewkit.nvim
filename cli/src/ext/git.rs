@@ -494,6 +494,20 @@ impl<'a> Repository<'a> {
             .unwrap_or(false)
     }
 
+    pub fn is_shallow(&self) -> bool {
+        self.run(&["rev-parse", "--is-shallow-repository"])
+            .is_ok_and(|out| text(&out).trim_end() == "true")
+    }
+
+    /// A partial clone lacks blobs it fetches on demand from its promisor;
+    /// a bare clone of it would miss them with no remote to ask.
+    pub fn is_partial(&self) -> bool {
+        self.run(&["config", "--get", "extensions.partialclone"]).is_ok()
+            || self
+                .run(&["config", "--type=bool", "--get-regexp", r"^remote\..*\.promisor$"])
+                .is_ok_and(|out| text(&out).lines().any(|l| l.ends_with(" true")))
+    }
+
     pub fn has_commit(&self, sha: &str) -> bool {
         self.run(&["cat-file", "-e", &format!("{sha}^{{commit}}")]).is_ok()
     }

@@ -313,6 +313,11 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   timeout で打ち切るときはセッションのプロセスグループごと止める
 - PR の実体化は `<state-dir>/repos/<key>/mirror.git`（bare。ローカルからの clone でオブジェクトはハードリンク）と
   `<state-dir>/repos/<key>/pr/<n>/`（worktree）。2 回目以降は同じ worktree を使い回し、head が同じなら fetch しない。
+  利用者の checkout から mirror を作るのは、同じリポジトリで、浅い clone でも部分 clone でもないときだけ（欠けた履歴や blob を
+  mirror に持ち込むと merge-base や読み出しが失敗する）。作るのに失敗したら空の mirror から fetch する。
+  浅い・部分 clone から作られた既存の mirror（`shallow` や `*.promisor` がある）は作り直す。
+  base は open な PR ならブランチ、閉じた PR なら GitHub が記録した base の commit を id で取る（マージ後に base ブランチが
+  消されていることが多い）。その commit が取れなければ（force-push で消えた）ブランチで取り直す。
   ユーザーのリポジトリには何も書かない
 - 複数 Neovim で同じ Session を開いたとき、Lua は常に返ってきた Session でキャッシュを置き換える
   （コメント単位の last-writer-wins）。他インスタンスの変更は `state_path` の `vim.uv.new_fs_event`
