@@ -47,7 +47,7 @@ pub enum SubmitSubcommand {
 pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
     let store = Store::new(ctx.state_dir.clone());
     if let Some(SubmitSubcommand::Apply { session, consume }) = args.command {
-        let result: SinkResult = super::stdin_json()?;
+        let result: SinkResult = super::stdin_json_lenient()?;
         let (session, result) = store.update(&session, |s| apply::apply(s, result, consume))?;
         return Response::with_session(result, &session);
     }

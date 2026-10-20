@@ -25,8 +25,7 @@ pub struct SubmitOptions {
 
 impl SubmitOptions {
     pub fn sink_options<T: serde::de::DeserializeOwned>(&self) -> crate::error::Result<T> {
-        serde_json::from_value(serde_json::Value::Object(self.sink.clone()))
-            .map_err(|e| crate::error::Error::invalid(format!("invalid sink options: {e}")))
+        super::strict(serde_json::Value::Object(self.sink.clone()), "sink option")
     }
 }
 

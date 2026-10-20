@@ -887,6 +887,7 @@ impl super::Sink for GithubSink {
         session: &Session,
         opts: &crate::model::SubmitOptions,
     ) -> Result<SubmitPreview> {
+        let _: crate::model::GithubOptions = opts.sink_options()?;
         let view = crate::core::comments::narrowed(session, opts.comment_ids.as_deref())?;
         preview(view.as_ref().unwrap_or(session))
     }

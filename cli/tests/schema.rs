@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use reviewkit::model::{Contract, SCHEMA_VERSION};
+use reviewkit::model::{Contract, SCHEMA_REVISION, SCHEMA_VERSION};
 use serde_json::Value;
 
 fn committed_path() -> PathBuf {
@@ -10,8 +10,23 @@ fn committed_path() -> PathBuf {
 fn current() -> Value {
     serde_json::json!({
         "schema_version": SCHEMA_VERSION,
+        "schema_revision": SCHEMA_REVISION,
         "schema": schemars::schema_for!(Contract),
     })
+}
+
+/// Descriptions and titles are documentation, not contract.
+fn shape(schema: &Value) -> Value {
+    match schema {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(k, _)| k.as_str() != "description" && k.as_str() != "title")
+                .map(|(k, v)| (k.clone(), shape(v)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(shape).collect()),
+        other => other.clone(),
+    }
 }
 
 fn types(schema: &Value) -> Vec<String> {
@@ -174,6 +189,21 @@ fn the_contract_only_grows_within_a_schema_version() {
             "the contract lost something without a SCHEMA_VERSION bump:\n  {}",
             found.join("\n  ")
         );
+    }
+    if let Some(committed) = &committed {
+        let changed = shape(&committed["schema"]) != shape(&current["schema"]);
+        let (before, now) = (
+            committed["schema_revision"].as_u64().unwrap_or(0),
+            current["schema_revision"].as_u64().unwrap_or(0),
+        );
+        if changed {
+            assert!(
+                now > before,
+                "the contract changed but SCHEMA_REVISION is still {now}: bump it"
+            );
+        } else {
+            assert_eq!(now, before, "SCHEMA_REVISION changed without a contract change");
+        }
     }
     if committed.as_ref() != Some(&current) {
         assert!(update, "docs/schema.json is out of date; run `make gen-schema`");

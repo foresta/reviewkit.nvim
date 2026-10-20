@@ -4,6 +4,7 @@
 local M = {}
 
 M.SCHEMA_VERSION = 1
+M.SCHEMA_REVISION = 8
 
 ---@alias reviewkit.AgentType "claude"|"plain"
 
@@ -422,6 +423,7 @@ M.SCHEMA_VERSION = 1
 ---@field herdr reviewkit.ToolStatus
 
 ---@class reviewkit.VersionInfo
+---@field schema_revision? integer The contract revision; a client needs at least its own.
 ---@field schema_version integer
 ---@field version string
 

@@ -49,7 +49,16 @@ for _, rule in ipairs(rules) do
 end
 
 if joined:find("version", 1, true) then
-  io.stdout:write(vim.json.encode({ ok = true, data = { version = "0.0.0-stub", schema_version = 1 } }), "\n")
+  -- The stub always speaks the contract of the checkout it lives in.
+  local here = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h")
+  local types = dofile(here .. "/../../../lua/reviewkit/types.lua")
+  io.stdout:write(
+    vim.json.encode({
+      ok = true,
+      data = { version = "0.0.0-stub", schema_version = types.SCHEMA_VERSION, schema_revision = types.SCHEMA_REVISION },
+    }),
+    "\n"
+  )
   os.exit(0)
 end
 

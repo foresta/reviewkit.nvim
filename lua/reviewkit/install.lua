@@ -129,16 +129,16 @@ local function probe(exec, path, cb)
   end)
 end
 
----@param info? { version: string, schema_version: integer }
+---@param info? { version: string, schema_version: integer, schema_revision?: integer }
 ---@param wanted string
 ---@return string? reason nil when the binary fits this checkout
 local function mismatch(info, wanted)
-  local schema = require("reviewkit.types").SCHEMA_VERSION
   if not info then
     return "the binary does not run"
   end
-  if info.schema_version ~= schema then
-    return ("schema_version %s, the plugin needs %s"):format(tostring(info.schema_version), tostring(schema))
+  local contract = require("reviewkit.cli").contract_mismatch(info)
+  if contract then
+    return contract
   end
   if not M.is_dev(wanted) and info.version ~= wanted then
     return ("version %s, the plugin needs %s"):format(tostring(info.version), wanted)

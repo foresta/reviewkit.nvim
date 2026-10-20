@@ -755,36 +755,6 @@ mod tests {
         assert!(!migrate(&mut newer, u64::from(SCHEMA_VERSION) + 1, &steps).unwrap());
     }
 
-    /// Changing what a session persists needs SCHEMA_REVISION + 1 and a new
-    /// hash here; otherwise an older CLI would silently drop the new field.
-    #[test]
-    fn persisted_session_shape_matches_the_schema_revision() {
-        use sha2::{Digest, Sha256};
-        fn shape(value: &mut serde_json::Value) {
-            match value {
-                serde_json::Value::Object(map) => {
-                    map.remove("description");
-                    map.remove("title");
-                    map.values_mut().for_each(shape);
-                }
-                serde_json::Value::Array(items) => items.iter_mut().for_each(shape),
-                _ => {}
-            }
-        }
-        let mut schema = serde_json::to_value(schemars::schema_for!(Session)).unwrap();
-        shape(&mut schema);
-        let schema = schema.to_string();
-        let hash: String = Sha256::digest(schema.as_bytes())[..8]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        assert_eq!(
-            (SCHEMA_REVISION, hash.as_str()),
-            (7, "51cf4fe489f6d47f"),
-            "the persisted shape of Session changed (doc comments do not count): bump SCHEMA_REVISION and update this hash"
-        );
-    }
-
     #[test]
     fn held_lock_is_e_locked_and_retryable() {
         let dir = tempfile::tempdir().unwrap();
