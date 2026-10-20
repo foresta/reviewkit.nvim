@@ -84,7 +84,8 @@ Session {
   viewed: { [path]: { blob: sha, at } }   -- reviewkit 内だけの既読。GitHub には送らない
   last_submit: { sink, at, result: SinkResult } | null
   pending_submit: bool      -- 中断された GitHub 送信が残っている（読むたびに state dir から求める）
-  history: Comment[]        -- 消費されてキューを出たコメント（deliveries 付き）
+  history: Comment[]        -- 消費されてキューを出たコメント（deliveries 付き）。保存はするが封筒では常に空。
+                            -- `history list` で取る。新しい順に 200 件まで残し、古いものは捨てる
   etags: { targets, comments, decision, threads, thread_actions, viewed }   -- 節ごとの内容ハッシュ
   created_at, updated_at: RFC 3339
 }
@@ -127,14 +128,15 @@ Comment {
   deliveries: { sink, at, mode: "sent" | "staged" | "copied", url? }[]
   created_at, updated_at
 }
-Reason = "outside_diff" | "stale" | "binary" | "not_supported"
+Reason = "outside_diff" | "stale" | "binary" | "not_supported" | "delivered"
 
 CommentInput { path, side, line, start_line?, kind?, body, suggestion?, reply_to? }
                             -- core が anchor / commentable / id を埋める
 CommentPatch { line?, start_line?, kind?, body?, suggestion? }
                             -- 省略は変更なし。start_line / suggestion は null で解除。line を変えると stale が消える
 
-Decision { event: "approve|request_changes|comment", body, updated_at }
+Decision { event: "approve|request_changes|comment", body, updated_at, deliveries?: Delivery[] }
+                            -- deliveries は Comment と同じ。decision set で作り直すと消える
                             -- event は GitHub の PullRequestReviewEvent と 1:1
 DecisionInput { event, body? }                        -- decision set の stdin。updated_at は core が付ける
 
@@ -165,6 +167,7 @@ SinkResult {
   skipped: { comment_id, reason: Reason }[]
   thread_actions: { thread_id, action, status: "sent" | "failed", error?: Error }[]
   decision: "sent|failed|skipped|not_applicable"
+  decision_version?: string                             -- 渡したときの Decision.updated_at
   summary: string                                       -- "3 sent, 1 skipped (outside diff), 0 failed"
   mode: "sent" | "staged" | "copied"                    -- 既定 sent。staged / copied は消費しない
   attempted?: comment_id[]                              -- 試行に含めたコメント。省略は全件
@@ -176,13 +179,17 @@ SinkResult {
 - SinkResult の適用（D4）: `sent` のコメントには `deliveries` に `{ sink, at, mode, url? }` を足す。キューから消して
   `Session.history` へ移す（消費する）のは、`SinkResult.mode = sent` かつ sink がセッション種類の主な送り先
   （PR = github、local = herdr。`SubmitOptions.consume` で上書き。github は二重投稿を避けるため常に消費）のときだけ。
-  判断は各 sink の `Sink::consumes` が持ち、core は sink の名前を知らない。`submit apply`（Lua の sink）は消費しない。
-  Lua の sink が外部へ投稿して `mode = sent` を返しても消費しないので、再送すると同じ内容が再び送られる。
+  判断は各 sink の `Sink::consumes` が持ち、core は sink の名前を知らない。`submit apply`（Lua の sink）は `--consume` を
+  付けたときだけ消費する。Lua は `opts.consume` → `LuaSink.consumes(session, requested)` → false の順で決める。
   送れたコメントの `last_error` は消し、全体失敗の印はその sink へ送り済みのコメントと `attempted` 外のコメントには付けない。
   `sent[].version` がコメントの今の `updated_at` と違う（送信中に編集された）ものは送れなかった扱いでキューに残し、結果からも外す。herdr の stage は `staged`、clipboard は
   `copied` で、消費しない。herdr は自分へ `sent` 済みのコメントを再送しない。本文・suggestion・kind を変えると `deliveries` は消える。
   `failed` は `last_error` を付けて残す。`skipped` はそのまま。`thread_actions` は `sent` のものだけ消す（PR の refresh でも、
-  スレッドが消えたか GitHub 側で既にその状態になったものは消す）。`decision` は `sent` かつ消費のときだけ消す。`last_submit` に結果を記録する
+  スレッドが消えたか GitHub 側で既にその状態になったものは消す）。`decision` は `sent` なら `Decision.deliveries` に記録し、消費のときだけ消す。`SinkResult.decision_version`
+  （渡した時点の `Decision.updated_at`）が今と違えば、記録も消去もしない。herdr は自分へ `sent` 済みの decision を再送しない。
+  `last_submit` に結果を記録する
+- sink-github は GitHub へ `sent` 済みのコメントを送らない（`skipped`、reason = `delivered`）。履歴から戻したコメントが
+  再投稿されないため
 - sink-github で Decision が無く comments がある場合は `event = comment` で送る（行コメントは review の一部としてしか送れない）。本文は diff の外のコメントの節だけ（無ければ空）
 - sink-herdr のプロンプトは header、Decision の本文（あれば）、番号付きのコメント（`@path#L1-L2` 形式。`plain` は `path:1-2`）の順。
   Decision の event は送れないので、本文が空の Decision は `skipped` として残る
@@ -228,8 +235,10 @@ reviewkit sink targets --sink herdr [--cwd]              -> data: SinkTarget[]  
 reviewkit submit --session ID --sink github|herdr [--dry-run] [--options -]
                                                          -> data: SinkResult（dry-run は data.preview: SubmitPreview）, session
                                                             --options - のときだけ stdin から SubmitOptions を読む
-reviewkit submit apply --session ID (stdin: SinkResult の sent / failed / skipped / thread_actions / decision)
+reviewkit submit apply --session ID [--consume] (stdin: SinkResult の sent / failed / skipped / thread_actions / decision)
                                                          -> session   Lua 側 sink の結果を core に適用。at / summary は core が補う
+
+reviewkit history list   --session ID                    -> data: Comment[]   消費されたコメント（新しい順、200 件まで）
 
 reviewkit thread list    --session ID [--refresh]        -> data: Thread[]   --refresh は session 全体を取り直し、session も返す
 reviewkit thread resolve --session ID --thread TID [--undo] -> session       GitHub 上の状態と同じになる操作は積まずに消す
@@ -263,7 +272,15 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
 - 二重送信の防止: gh を呼ぶ前に `pending_submit.json` を書く。次の GitHub への submit で残っていれば threads を取り直し、
   「同じファイル・side に、自分が、同じ本文で、試行の開始以後に投稿したもの」を送信済みとみなしてから消す（行は push で動くので見ない）。
   review 本文に書いたコメントは、自分の review が送った本文のまま投稿されていれば送信済みとみなす。
-  残っている間は Session の `pending_submit` が true（ファイルの有無から毎回求める）で、Lua は開いたときに知らせる
+  残っている間は Session の `pending_submit` が true（ファイルの有無から毎回求める）で、Lua は開いたときに知らせる。
+  記録には review が decision を運んだかも残し、運んでいない review（comment だけの送信）を照合しても decision は消さない
+- 送信の故障時の挙動（送信の経路を変えるときはここを先に直す）:
+
+  | 経路 | 途中で落ちる | 2 回実行 | 相手が応答しない |
+  |---|---|---|---|
+  | github | pending が残り、次の github submit が照合してから送る | 照合で送信済みと分かったものは送らない。GitHub へ sent 済みは `delivered` で skip | `outcome = unknown`、再試行不可。pending を次回照合 |
+  | herdr | 送信後・保存前に落ちると記録が無く再送しうる（エージェント宛てで公開されない） | 自分へ sent 済みのコメントと decision は送らない | 全体失敗、`outcome = unknown`。印は試行分だけ |
+  | Lua sink（submit apply） | 送信後・apply 前に落ちると記録されず再送しうる（sink の責任） | 消費済みはキューに無い。`version` / `decision_version` が違うものは記録しない | sink の責任 |
 - GitHub Enterprise は `repo.host` を gh の `--hostname` に渡す
 
 ## 6. hunk・コメント可能範囲・行ずれ
@@ -326,7 +343,8 @@ core.set_viewed(path, on, cb)
 core.resolve_thread(id, resolved, cb) / core.refresh_threads(cb) / core.pending_thread_action(id)
 core.pr_info(cb)               -- PrInfo。表示は持たないが取り出せる
 core.submit(sink, opts, cb)  -- Rust 側 sink は submit。Lua 登録 sink は impl.submit(session, opts, cb) の結果を submit apply に渡す
-core.register_sink(name, impl)  -- impl = { submit, available? }。available() は boolean, reason? を返す
+core.register_sink(name, impl)  -- impl = { submit, available?, consumes? }。available() は boolean, reason? を返す。
+                             -- consumes(session, requested) は送れたコメントをキューから消すか（既定 false）
 core.sinks(cb)               -- sink list と登録済みの Lua sink（runtime = "lua"）をマージ。同名は Lua を優先
 core.sink_names()            -- 最後の sinks() と登録済みの名前。:ReviewSubmit の補完用（同期）
 core.on(event, fn)           -- User autocmd の薄い包み

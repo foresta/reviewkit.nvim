@@ -365,6 +365,7 @@ mod tests {
             event: DecisionEvent::RequestChanges,
             body: "please".into(),
             updated_at: at.clone(),
+            deliveries: vec![],
         });
         session.threads = vec![Thread {
             id: "PRRT_1".into(),
@@ -425,6 +426,7 @@ mod tests {
                 }],
                 decision: DecisionStatus::NotApplicable,
                 mode: DeliveryMode::Sent,
+                decision_version: None,
                 attempted: None,
                 summary: "1 sent, 1 skipped, 1 failed".into(),
             },

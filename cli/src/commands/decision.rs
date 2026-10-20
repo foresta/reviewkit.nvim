@@ -32,6 +32,7 @@ pub fn run(ctx: &Context, command: DecisionCommand) -> Result<Response> {
                     event: input.event,
                     body: input.body,
                     updated_at: time::now(),
+                    deliveries: vec![],
                 });
                 Ok(())
             })?

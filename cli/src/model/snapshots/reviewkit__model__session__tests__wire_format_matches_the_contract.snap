@@ -161,7 +161,8 @@ expression: full_session()
   "decision": {
     "event": "request_changes",
     "body": "please",
-    "updated_at": "2026-01-02T03:04:05.000000Z"
+    "updated_at": "2026-01-02T03:04:05.000000Z",
+    "deliveries": []
   },
   "threads": [
     {

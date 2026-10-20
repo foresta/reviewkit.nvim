@@ -22,11 +22,14 @@ impl Response {
         })
     }
 
+    /// The history is saved but sent empty: it only grows, and every
+    /// response carries the session. `history list` returns it.
     pub fn with_session(data: impl Serialize, session: &Session) -> Result<Self> {
         let mut response = Self::new(data)?;
-        response.session = Some(
-            serde_json::to_value(session).map_err(|err| Error::internal(format!("cannot serialize session: {err}")))?,
-        );
+        let mut value =
+            serde_json::to_value(session).map_err(|err| Error::internal(format!("cannot serialize session: {err}")))?;
+        value["history"] = serde_json::json!([]);
+        response.session = Some(value);
         Ok(response)
     }
 }

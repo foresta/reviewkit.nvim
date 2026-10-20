@@ -121,6 +121,18 @@ fn reference(comment: &Comment, agent_type: AgentType) -> String {
 /// A wide base range would otherwise flood the agent's prompt.
 const MAX_QUOTED_LINES: usize = 40;
 
+/// Text only, and only once: a bare event has nothing for an agent to read,
+/// and a decision the agent already received would just repeat.
+fn decision_to_send(session: &Session) -> Option<&crate::model::Decision> {
+    session.decision.as_ref().filter(|d| {
+        !d.body.trim().is_empty()
+            && !d
+                .deliveries
+                .iter()
+                .any(|x| x.sink == NAME && x.mode == DeliveryMode::Sent)
+    })
+}
+
 /// A comment the agent already received is not sent again; text that was
 /// only staged in its input may have been discarded there, so it is.
 fn to_send(session: &Session) -> Vec<&Comment> {
@@ -162,9 +174,7 @@ pub fn format_prompt(session: &Session, opts: &HerdrOptions) -> String {
     if let Some(header) = opts.header.as_deref().filter(|h| !h.trim().is_empty()) {
         sections.push(header.trim_end().to_string());
     }
-    if let Some(decision) = &session.decision
-        && !decision.body.trim().is_empty()
-    {
+    if let Some(decision) = decision_to_send(session) {
         sections.push(decision.body.trim_end().to_string());
     }
     let blocks: Vec<String> = to_send(session)
@@ -240,9 +250,9 @@ fn kind_label(kind: crate::model::CommentKind) -> &'static str {
 }
 
 fn request(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Result<Request> {
-    if to_send(session).is_empty() && session.decision.as_ref().is_none_or(|d| d.body.trim().is_empty()) {
+    if to_send(session).is_empty() && decision_to_send(session).is_none() {
         return Err(Error::invalid(
-            "nothing to submit: no comment the agent has not received yet, and no decision body",
+            "nothing to submit: the agent already has every comment and the decision, or the decision has no body",
         ));
     }
     let target = match &opts.target {
@@ -269,11 +279,7 @@ pub fn preview(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Res
         skipped: vec![],
         replies: vec![],
         thread_actions: vec![],
-        decision: session
-            .decision
-            .as_ref()
-            .filter(|d| !d.body.trim().is_empty())
-            .map(|d| d.event),
+        decision: decision_to_send(session).map(|d| d.event),
         text: Some(request.prompt.clone()),
         target: Some(request.target.clone()),
         mode: if request.stage {
@@ -297,11 +303,12 @@ pub fn submit(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Resu
     } else {
         herdr::prompt(herdr, &preview.target, &preview.prompt)
     };
-    let decision = match &session.decision {
-        None => DecisionStatus::NotApplicable,
-        Some(d) if d.body.trim().is_empty() => DecisionStatus::Skipped,
-        Some(_) => DecisionStatus::Sent,
+    let decision = match (&session.decision, decision_to_send(session)) {
+        (None, _) => DecisionStatus::NotApplicable,
+        (Some(_), None) => DecisionStatus::Skipped,
+        (Some(_), Some(_)) => DecisionStatus::Sent,
     };
+    let decision_version = session.decision.as_ref().map(|d| d.updated_at.clone());
     let result = match outcome {
         Ok(()) => SinkResult {
             sink: NAME.into(),
@@ -326,6 +333,7 @@ pub fn submit(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Resu
             } else {
                 DeliveryMode::Sent
             },
+            decision_version: decision_version.clone(),
             attempted: Some(to_send(session).iter().map(|c| c.id.clone()).collect()),
         },
         Err(error) if error.code == ErrorCode::EToolMissing => return Err(error),
@@ -347,6 +355,7 @@ pub fn submit(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Resu
             },
             summary: String::new(),
             mode: DeliveryMode::Sent,
+            decision_version: decision_version.clone(),
             attempted: Some(to_send(session).iter().map(|c| c.id.clone()).collect()),
         },
     };
@@ -591,6 +600,7 @@ mod tests {
             event: DecisionEvent::RequestChanges,
             body: "Two things before merge.".into(),
             updated_at: at,
+            deliveries: vec![],
         });
         s
     }

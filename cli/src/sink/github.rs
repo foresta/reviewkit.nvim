@@ -206,6 +206,19 @@ pub fn plan(session: &Session) -> Result<Plan> {
     let mut outside: Vec<&Comment> = Vec::new();
     let mut replies = Vec::new();
     for comment in &session.comments {
+        // GitHub keeps what it was sent; a comment brought back from the
+        // history would otherwise be posted a second time.
+        if comment
+            .deliveries
+            .iter()
+            .any(|d| d.sink == NAME && d.mode == DeliveryMode::Sent)
+        {
+            skipped.push(Skipped {
+                comment_id: comment.id.clone(),
+                reason: Reason::Delivered,
+            });
+            continue;
+        }
         // A reply is posted into its thread, not at a line, so a moved or
         // outdated line is no reason to hold it back.
         if let Some(reason) = skip_reason(comment).filter(|_| comment.reply_to.is_none()) {
@@ -385,6 +398,16 @@ pub fn preview(session: &Session) -> Result<SubmitPreview> {
     })
 }
 
+/// The decision counts as posted only when the found review carried it and
+/// it is still the decision that was sent.
+fn decision_posted(session: &Session, pending: &PendingSubmit, review_posted: bool) -> bool {
+    review_posted
+        && pending.carries_decision
+        && session.decision.as_ref().is_some_and(|d| {
+            Some(event_name(d.event)) == pending.event.as_deref() && same_text(&d.body, &pending.decision_body)
+        })
+}
+
 /// Written before gh is called and removed only after the answer was
 /// applied and saved, so a crash anywhere in between leaves a record of
 /// what may already be on GitHub. An earlier record is always reconciled
@@ -406,6 +429,14 @@ pub struct PendingSubmit {
     pub review_body: Option<String>,
     #[serde(default)]
     pub body_comments: Vec<PendingBodyComment>,
+    /// A review of selected comments leaves the decision out; finding that
+    /// review must not clear a decision it never sent.
+    #[serde(default = "carried")]
+    pub carries_decision: bool,
+}
+
+fn carried() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -547,9 +578,6 @@ pub fn reconcile_pending(
             });
         }
     }
-    let decision_unchanged = session.decision.as_ref().is_some_and(|d| {
-        Some(event_name(d.event)) == pending.event.as_deref() && same_text(&d.body, &pending.decision_body)
-    });
     let posted_body = pending.review_body.as_deref().unwrap_or(&pending.decision_body);
     let review_posted = pending.event.as_deref().is_some_and(|event| {
         details.info.timeline.iter().any(|item| {
@@ -560,7 +588,7 @@ pub fn reconcile_pending(
                 && after(&item.created_at, &pending.at)
         })
     });
-    let decision_posted = decision_unchanged && review_posted;
+    let decision_posted = decision_posted(session, &pending, review_posted);
     if review_posted {
         for b in &pending.body_comments {
             let unchanged = session
@@ -597,6 +625,7 @@ pub fn reconcile_pending(
         },
         summary: String::new(),
         mode: DeliveryMode::Sent,
+        decision_version: None,
         attempted: None,
     }))
 }
@@ -641,6 +670,7 @@ fn write_pending(session: &Session, plan: &Plan, session_dir: &Path) -> Result<(
         review_body: (!body_comments.is_empty())
             .then(|| plan.variables["body"].as_str().unwrap_or_default().to_string()),
         body_comments,
+        carries_decision: session.decision.is_some() && plan.event.is_some(),
     };
     let bytes = serde_json::to_vec_pretty(&pending)
         .map_err(|err| Error::internal(format!("cannot serialize pending_submit.json: {err}")))?;
@@ -766,6 +796,7 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
         decision,
         summary: String::new(),
         mode: DeliveryMode::Sent,
+        decision_version: None,
         attempted: Some(
             plan.thread_comment_ids
                 .iter()
@@ -852,7 +883,9 @@ impl super::Sink for GithubSink {
             let mut result = submit(s, &gh, &repo, &session_dir)?;
             if let Some(recovered) = &recovered {
                 result.sent.splice(0..0, recovered.sent.clone());
-                if recovered.decision == DecisionStatus::Sent {
+                // The recovered decision was cleared in phase 1; one set since
+                // is another decision, which only this send can post.
+                if recovered.decision == DecisionStatus::Sent && s.decision.is_none() {
                     result.decision = DecisionStatus::Sent;
                 }
             }
@@ -963,6 +996,7 @@ mod tests {
             event: DecisionEvent::RequestChanges,
             body: "please".into(),
             updated_at: "t".into(),
+            deliveries: vec![],
         });
         s.thread_actions = vec![ThreadAction {
             thread_id: "PRRT_2".into(),
@@ -985,6 +1019,68 @@ mod tests {
             (plan.replies[0].alias.as_str(), plan.replies[0].comment_id.as_str()),
             ("reply0", "c_5")
         );
+    }
+
+    #[test]
+    fn a_review_that_did_not_carry_the_decision_never_counts_as_posting_it() {
+        let mut s = pr_session();
+        s.decision = Some(crate::model::Decision {
+            event: DecisionEvent::Comment,
+            body: String::new(),
+            updated_at: "t".into(),
+            deliveries: vec![],
+        });
+        let pending = |carries: bool| PendingSubmit {
+            at: "t".into(),
+            comments: vec![],
+            replies: vec![],
+            event: Some("COMMENT".into()),
+            decision_body: String::new(),
+            review_body: None,
+            body_comments: vec![],
+            carries_decision: carries,
+        };
+        assert!(decision_posted(&s, &pending(true), true));
+        assert!(!decision_posted(&s, &pending(false), true), "a comments-only review");
+        assert!(!decision_posted(&s, &pending(true), false));
+        let old: PendingSubmit = serde_json::from_str(r#"{"at": "t", "comments": []}"#).unwrap();
+        assert!(old.carries_decision, "records written before the field carried it");
+    }
+
+    #[test]
+    fn comments_already_posted_to_github_are_not_posted_again() {
+        let mut s = pr_session();
+        for id in ["c_1", "c_4", "c_5"] {
+            let c = s.comments.iter_mut().find(|c| c.id == id).unwrap();
+            c.deliveries.push(crate::model::Delivery {
+                sink: NAME.into(),
+                at: "t".into(),
+                mode: DeliveryMode::Sent,
+                url: None,
+            });
+        }
+        let c2 = s.comments.iter_mut().find(|c| c.id == "c_2").unwrap();
+        c2.deliveries.push(crate::model::Delivery {
+            sink: "herdr".into(),
+            at: "t".into(),
+            mode: DeliveryMode::Sent,
+            url: None,
+        });
+        let plan = plan(&s).unwrap();
+        assert_eq!(
+            plan.thread_comment_ids,
+            vec!["c_2"],
+            "an agent delivery is no GitHub post"
+        );
+        assert!(plan.body_comment_ids.is_empty());
+        assert!(plan.replies.is_empty());
+        let delivered: Vec<&str> = plan
+            .skipped
+            .iter()
+            .filter(|s| s.reason == Reason::Delivered)
+            .map(|s| s.comment_id.as_str())
+            .collect();
+        assert_eq!(delivered, vec!["c_1", "c_4", "c_5"]);
     }
 
     #[test]

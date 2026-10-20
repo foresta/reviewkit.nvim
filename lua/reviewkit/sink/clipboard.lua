@@ -23,6 +23,36 @@ local function block(c, i)
   return lines
 end
 
+---@param session reviewkit.Session
+---@return reviewkit.SinkResult
+local function copied(session)
+  local sent = {}
+  for _, c in ipairs(session.comments) do
+    table.insert(sent, { comment_id = c.id })
+  end
+  return {
+    sink = "clipboard",
+    mode = "copied",
+    sent = sent,
+    failed = {},
+    skipped = {},
+    decision = session.decision and (session.decision.body ~= "" and "sent" or "skipped") or "not_applicable",
+  }
+end
+
+--- Reading an OSC 52 clipboard asks the terminal and waits, and many
+--- terminals never answer; such a provider is trusted instead.
+---@return boolean
+local function osc52()
+  local configured = vim.g.clipboard
+  local name = type(configured) == "table" and configured.name or configured
+  if type(name) ~= "string" then
+    local ok, detected = pcall(vim.fn["provider#clipboard#Executable"])
+    name = ok and detected or ""
+  end
+  return name:lower():gsub("%s", ""):find("osc52", 1, true) ~= nil
+end
+
 --- `setreg` does not fail when there is no clipboard provider, so the
 --- register is read back before anything is reported as copied. `copied`
 --- rather than a delivery: a copy must not consume the queue.
@@ -40,7 +70,10 @@ function M.submit(session, opts, cb)
   end
   local text = table.concat(lines, "\n")
   local register = opts.register or "+"
-  pcall(vim.fn.setreg, register, text)
+  local written = pcall(vim.fn.setreg, register, text)
+  if written and (register == "+" or register == "*") and osc52() then
+    return cb(nil, copied(session))
+  end
   local ok, back = pcall(vim.fn.getreg, register)
   if not ok or back ~= text then
     return cb(nil, {
@@ -62,18 +95,7 @@ function M.submit(session, opts, cb)
       decision = session.decision and "failed" or "not_applicable",
     })
   end
-  local sent = {}
-  for _, c in ipairs(session.comments) do
-    table.insert(sent, { comment_id = c.id })
-  end
-  cb(nil, {
-    sink = "clipboard",
-    mode = "copied",
-    sent = sent,
-    failed = {},
-    skipped = {},
-    decision = session.decision and (session.decision.body ~= "" and "sent" or "skipped") or "not_applicable",
-  })
+  cb(nil, copied(session))
 end
 
 return M

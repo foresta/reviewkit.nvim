@@ -16,6 +16,7 @@ local M = {}
 ---@class reviewkit.LuaSink
 ---@field submit fun(session: reviewkit.Session, opts: table, cb: fun(err: reviewkit.Error?, result: reviewkit.SinkResult?))
 ---@field available? fun(): boolean, string?
+---@field consumes? fun(session: reviewkit.Session, requested: boolean?): boolean
 
 local state = {
   session = nil, ---@type reviewkit.Session?
@@ -533,7 +534,18 @@ function M.submit(sink, opts, cb)
         s.version = s.version or version[s.comment_id]
       end
       result.attempted = result.attempted or attempted
-      cli.call({ "submit", "apply", "--session", session.id }, { stdin = result }, function(run_err, envelope)
+      -- "" matches no decision: one set while a sink that saw none was
+      -- running must not be recorded as delivered.
+      result.decision_version = result.decision_version or (session.decision and session.decision.updated_at or "")
+      local consume = merged.consume
+      if consume == nil and lua_sink.consumes then
+        consume = lua_sink.consumes(session, nil)
+      end
+      local args = { "submit", "apply", "--session", session.id }
+      if consume then
+        table.insert(args, "--consume")
+      end
+      cli.call(args, { stdin = result }, function(run_err, envelope)
         take_session(run_err, envelope, function(take_err, taken)
           cb(take_err, envelope and envelope.data or nil, taken)
         end, { submitted = envelope and envelope.data or nil })

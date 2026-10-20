@@ -1008,11 +1008,10 @@ fn sending_a_pull_request_review_to_an_agent_keeps_it_for_github() {
     assert_eq!(sent["session"]["comments"].as_array().unwrap().len(), 2);
     assert!(sent["session"]["decision"].is_object());
 
-    let again = json(&to_agent());
+    let again: serde_json::Value = serde_json::from_slice(&to_agent().stdout).unwrap();
     assert_eq!(
-        again["data"]["sent"],
-        serde_json::json!([]),
-        "comments the agent already has are not sent again"
+        again["error"]["code"], "E_INVALID",
+        "the agent already has the comments and the decision: {again}"
     );
 
     answer_mutation(
@@ -1027,7 +1026,13 @@ fn sending_a_pull_request_review_to_an_agent_keeps_it_for_github() {
             .unwrap(),
     );
     assert!(posted["session"]["comments"].as_array().unwrap().is_empty());
-    let history = posted["session"]["history"].as_array().unwrap();
+    let listed = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["history", "list", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    let history = listed["data"].as_array().unwrap();
     assert!(history.iter().any(|c| c["id"] == inline.as_str()));
 }
 

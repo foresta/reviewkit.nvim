@@ -113,4 +113,7 @@ pub enum Command {
     /// List pull request review threads and queue resolving them.
     #[command(subcommand)]
     Thread(crate::commands::thread::ThreadCommand),
+    /// The comments that left the queue.
+    #[command(subcommand)]
+    History(crate::commands::history::HistoryCommand),
 }

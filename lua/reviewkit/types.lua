@@ -78,6 +78,7 @@ M.SCHEMA_VERSION = 1
 
 ---@class reviewkit.Decision
 ---@field body string
+---@field deliveries? reviewkit.Delivery[] Where this decision went, like `Comment.deliveries`; a new decision starts with none.
 ---@field event reviewkit.DecisionEvent
 ---@field updated_at string
 
@@ -192,7 +193,7 @@ M.SCHEMA_VERSION = 1
 ---@field end integer
 ---@field start integer
 
----@alias reviewkit.Reason "outside_diff"|"stale"|"binary"|"not_supported"
+---@alias reviewkit.Reason "outside_diff"|"stale"|"binary"|"not_supported"|"delivered"
 
 ---@class reviewkit.Repo
 ---@field host? string
@@ -261,6 +262,7 @@ M.SCHEMA_VERSION = 1
 ---@field at? string
 ---@field attempted? string[] `None` means every queued comment; given, a whole failure marks only these, so comments added while the sink was sending stay unmarked.
 ---@field decision reviewkit.DecisionStatus
+---@field decision_version? string `Decision.updated_at` as the sink read it; a decision set again while the sink ran is neither recorded as delivered nor cleared.
 ---@field failed reviewkit.Failed[]
 ---@field mode? reviewkit.DeliveryMode
 ---@field sent reviewkit.Sent[]

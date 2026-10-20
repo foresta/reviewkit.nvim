@@ -165,8 +165,14 @@ fn stage_uses_send_text_and_explicit_target_skips_resolution() {
         "staged ones are sent for real"
     );
     assert!(sent["session"]["comments"].as_array().unwrap().is_empty());
-    assert_eq!(sent["session"]["history"].as_array().unwrap().len(), 2);
-    assert_eq!(sent["session"]["history"][0]["deliveries"][1]["mode"], "sent");
+    let history = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["history", "list", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(history["data"].as_array().unwrap().len(), 2);
+    assert_eq!(history["data"][0]["deliveries"][1]["mode"], "sent");
 }
 
 #[test]
@@ -193,6 +199,115 @@ fn a_staged_dry_run_previews_staged_delivery() {
     );
     assert_eq!(body["data"]["preview"]["mode"], "staged");
     assert_eq!(body["data"]["preview"]["target"], "w9:p3");
+}
+
+#[test]
+fn a_decision_the_agent_already_received_is_not_sent_again() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let root = repo.path().canonicalize().unwrap();
+    let herdr = FakeHerdr::new(serde_json::json!([agent("w1:p1", root.to_str().unwrap())]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let keep = |c: &mut assert_cmd::Command| {
+        c.args(["submit", "--session", &id, "--sink", "herdr", "--options", "-"])
+            .write_stdin(r#"{"consume": false}"#);
+    };
+    let mut first = cmd(&state, &repo, &herdr);
+    keep(&mut first);
+    let sent = json(&first.output().unwrap());
+    assert_eq!(sent["data"]["decision"], "sent");
+    assert_eq!(sent["session"]["decision"]["deliveries"][0]["sink"], "herdr");
+    let mut second = cmd(&state, &repo, &herdr);
+    keep(&mut second);
+    let out = second.output().unwrap();
+    let again: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        again["error"]["code"], "E_INVALID",
+        "comments and decision were all delivered: {again}"
+    );
+}
+
+#[test]
+fn a_decision_changed_while_a_lua_sink_ran_is_neither_recorded_nor_cleared() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let applied = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "apply", "--session", &id, "--consume"])
+            .write_stdin(
+                r#"{"sink": "slack", "sent": [], "failed": [], "skipped": [], "decision": "sent", "decision_version": "an older one"}"#,
+            )
+            .output()
+            .unwrap(),
+    );
+    assert!(applied["session"]["decision"].is_object());
+    assert_eq!(applied["session"]["decision"]["deliveries"], serde_json::json!([]));
+}
+
+#[test]
+fn the_history_stays_out_of_the_envelope_and_is_listed_on_request() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let root = repo.path().canonicalize().unwrap();
+    let herdr = FakeHerdr::new(serde_json::json!([agent("w1:p1", root.to_str().unwrap())]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let sent = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "--session", &id, "--sink", "herdr"])
+            .output()
+            .unwrap(),
+    );
+    assert!(sent["session"]["comments"].as_array().unwrap().is_empty());
+    assert_eq!(
+        sent["session"]["history"],
+        serde_json::json!([]),
+        "every response would carry it"
+    );
+    let listed = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["history", "list", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    let history = listed["data"].as_array().unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0]["deliveries"][0]["sink"], "herdr");
+}
+
+#[test]
+fn a_lua_sink_consumes_only_when_asked() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let listed = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["comment", "list", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    let cid = listed["data"][0]["id"].as_str().unwrap().to_string();
+    let result = format!(
+        r#"{{"sink": "slack", "sent": [{{"comment_id": "{cid}"}}], "failed": [], "skipped": [], "decision": "not_applicable"}}"#
+    );
+    let kept = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "apply", "--session", &id])
+            .write_stdin(result.clone())
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(kept["session"]["comments"].as_array().unwrap().len(), 2);
+    let consumed = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "apply", "--session", &id, "--consume"])
+            .write_stdin(result)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(consumed["session"]["comments"].as_array().unwrap().len(), 1);
 }
 
 #[test]
