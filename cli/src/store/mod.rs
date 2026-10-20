@@ -4,12 +4,14 @@ pub use state_dir::{StateDir, env_non_empty};
 
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
 
 use crate::core::{etags, time};
 use crate::error::{Error, ErrorCode, Result};
-use crate::model::{SCHEMA_REVISION, SCHEMA_VERSION, Session};
+use crate::model::{SCHEMA_REVISION, SCHEMA_VERSION, Session, SinkResult};
 
 pub struct Store {
     dir: StateDir,
@@ -44,12 +46,72 @@ impl Store {
         Ok(session)
     }
 
+    /// For previews: the next write applies queued results first, so a plan
+    /// made without them would never match the send.
+    pub fn load_with_queued(&self, id: &str) -> Result<Session> {
+        let mut session = self.load(id)?;
+        self.drain_applies(&mut session, false);
+        Ok(session)
+    }
+
     fn mark_pending(&self, session: &mut Session) {
         session.pending_submit = self
             .dir
             .session_dir(&session.id)
             .map(|dir| dir.join(PENDING_SUBMIT_FILE).exists())
             .unwrap_or(false);
+        session.pending_apply = !self.queued_applies(&session.id).is_empty();
+    }
+
+    /// A client sink's result is on disk before the lock is waited for: the
+    /// delivery already happened, and a result lost to a busy lock would be
+    /// delivered again.
+    pub fn queue_apply(&self, id: &str, queued: &QueuedApply) -> Result<()> {
+        if !self.exists(id) {
+            return Err(no_session(id));
+        }
+        let dir = self.dir.session_dir(id)?.join(APPLIES_DIR);
+        std::fs::create_dir_all(&dir)?;
+        let bytes = serde_json::to_vec_pretty(queued).map_err(serialize_error)?;
+        write_atomically(&dir.join(format!("{}.json", ulid::Ulid::generate())), &bytes)
+    }
+
+    fn queued_applies(&self, id: &str) -> Vec<PathBuf> {
+        let Ok(dir) = self.dir.session_dir(id) else {
+            return Vec::new();
+        };
+        let Ok(entries) = std::fs::read_dir(dir.join(APPLIES_DIR)) else {
+            return Vec::new();
+        };
+        let mut files: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "json"))
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// A file that cannot be read is set aside rather than failing a write
+    /// that may be recording a GitHub post.
+    fn drain_applies(&self, session: &mut Session, set_aside_bad: bool) -> Vec<PathBuf> {
+        let mut applied = Vec::new();
+        for path in self.queued_applies(&session.id) {
+            let queued = std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<QueuedApply>(&bytes).ok());
+            match queued {
+                // Fields a newer CLI added would be dropped by applying it here.
+                Some(queued) if queued.revision > SCHEMA_REVISION => {}
+                Some(queued) => match crate::core::apply::apply(session, queued.result, queued.consume) {
+                    Ok(_) => applied.push(path),
+                    Err(err) if set_aside_bad => set_aside(&path, &err.to_string()),
+                    Err(_) => {}
+                },
+                None if set_aside_bad => set_aside(&path, "unreadable"),
+                None => {}
+            }
+        }
+        applied
     }
 
     fn load_for_write(&self, id: &str) -> Result<Session> {
@@ -88,8 +150,10 @@ impl Store {
     pub fn update<T>(&self, id: &str, apply: impl FnOnce(&mut Session) -> Result<T>) -> Result<(Session, T)> {
         self.with_lock(id, || {
             let mut session = self.load_for_write(id)?;
+            let drained = self.drain_applies(&mut session, true);
             let value = apply(&mut session)?;
             self.commit(&mut session)?;
+            remove_applied(&drained);
             self.mark_pending(&mut session);
             Ok((session, value))
         })
@@ -106,9 +170,11 @@ impl Store {
         self.with_lock(id, || {
             let mut session = self.load_for_write(id)?;
             let before = serde_json::to_value(&session).map_err(serialize_error)?;
+            let drained = self.drain_applies(&mut session, true);
             let value = apply(&mut session)?;
             if serde_json::to_value(&session).map_err(serialize_error)? != before {
                 self.commit(&mut session)?;
+                remove_applied(&drained);
             } else {
                 // commit sets it on writes; a moved state dir must still
                 // hand the client the file it can watch.
@@ -248,6 +314,34 @@ impl Store {
 /// Written by the GitHub sink before it sends; the store only reports
 /// whether it is there.
 pub const PENDING_SUBMIT_FILE: &str = "pending_submit.json";
+
+pub const APPLIES_DIR: &str = "applies";
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct QueuedApply {
+    pub revision: u32,
+    pub consume: bool,
+    pub result: SinkResult,
+}
+
+fn set_aside(path: &Path, why: &str) {
+    log::warn!("setting aside the queued result {}: {why}", path.display());
+    if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+        let rejected = dir.join("rejected");
+        if std::fs::create_dir_all(&rejected).is_ok() && std::fs::rename(path, rejected.join(name)).is_ok() {
+            return;
+        }
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+/// After the save: a crash before this replays them, which records nothing
+/// twice (`apply` skips a delivery it already has).
+fn remove_applied(paths: &[PathBuf]) {
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+}
 
 pub const FETCH_LOCK_TIMEOUT: Duration = Duration::from_secs(180);
 

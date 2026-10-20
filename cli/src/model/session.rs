@@ -29,6 +29,10 @@ pub struct Session {
     /// between sending and saving is exactly when the stored value is wrong.
     #[serde(default)]
     pub pending_submit: bool,
+    /// A client sink's delivery waiting for the session lock to be recorded;
+    /// derived like `pending_submit`.
+    #[serde(default)]
+    pub pending_apply: bool,
     /// Comments that left the queue, with their deliveries, so a consumed
     /// comment can still be looked up instead of being gone.
     #[serde(default)]
@@ -196,6 +200,7 @@ impl Session {
             viewed: BTreeMap::new(),
             last_submit: None,
             pending_submit: false,
+            pending_apply: false,
             history: Vec::new(),
             etags: Etags::default(),
             created_at: now.clone(),

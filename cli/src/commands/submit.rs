@@ -2,11 +2,12 @@ use clap::{Args, Subcommand};
 
 use crate::context::Context;
 use crate::core::apply;
+use crate::core::time;
 use crate::envelope::Response;
-use crate::error::{Error, Result};
-use crate::model::{SinkResult, SubmitOptions};
+use crate::error::{Error, ErrorCode, Result};
+use crate::model::{SCHEMA_REVISION, SinkResult, SubmitOptions};
 use crate::sink;
-use crate::store::Store;
+use crate::store::{QueuedApply, Store};
 
 /// `submit --sink X` sends; `submit apply` records a result produced by a
 /// client-side sink through the same bookkeeping.
@@ -41,15 +42,59 @@ pub enum SubmitSubcommand {
         /// Delivered comments leave the queue (the client sink decides).
         #[arg(long)]
         consume: bool,
+        /// Only record results still waiting for the session; stdin is not read.
+        #[arg(long, conflicts_with = "consume")]
+        drain: bool,
     },
 }
 
 pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
     let store = Store::new(ctx.state_dir.clone());
-    if let Some(SubmitSubcommand::Apply { session, consume }) = args.command {
-        let result: SinkResult = super::stdin_json_lenient()?;
-        let (session, result) = store.update(&session, |s| apply::apply(s, result, consume))?;
-        return Response::with_session(result, &session);
+    if let Some(SubmitSubcommand::Apply {
+        session,
+        consume,
+        drain,
+    }) = args.command
+    {
+        if drain {
+            let (session, ()) = store.update_if_changed(&session, |_| Ok(()))?;
+            return Response::with_session(serde_json::Value::Null, &session);
+        }
+        let mut result: SinkResult = super::stdin_json_lenient()?;
+        // Also the key that keeps a replayed result from being recorded twice,
+        // so a sink's own (possibly coarse) time is not trusted for it.
+        result.at = time::now();
+        store.queue_apply(
+            &session,
+            &QueuedApply {
+                revision: SCHEMA_REVISION,
+                consume,
+                result: result.clone(),
+            },
+        )?;
+        return match store.update(&session, |_| Ok(())) {
+            Ok((session, ())) => {
+                let applied = session
+                    .last_submit
+                    .as_ref()
+                    .filter(|last| last.at == result.at)
+                    .map(|last| last.result.clone())
+                    .unwrap_or_else(|| SinkResult {
+                        summary: apply::summary(&result),
+                        ..result
+                    });
+                Response::with_session(applied, &session)
+            }
+            Err(err) if err.code == ErrorCode::ELocked => {
+                let session = store.load(&session)?;
+                result.summary = format!(
+                    "{}; recorded once the session is free (another submit is running)",
+                    apply::summary(&result)
+                );
+                Response::with_session(result, &session)
+            }
+            Err(err) => Err(err),
+        };
     }
     let (Some(session_id), Some(sink_name)) = (args.session, args.sink) else {
         return Err(Error::usage("--session and --sink are required"));
@@ -65,7 +110,7 @@ pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
     };
     let sink = sink::find(&sink_name)?;
     if args.dry_run {
-        let session = store.load(&session_id)?;
+        let session = store.load_with_queued(&session_id)?;
         let preview = sink.preview(ctx, &session, &opts)?;
         return Response::new(serde_json::json!({ "preview": preview }));
     }

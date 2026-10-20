@@ -959,3 +959,112 @@ fn herdr_refuses_a_preview_digest_it_never_gave() {
     assert_eq!(body["error"]["code"], "E_INVALID");
     assert!(herdr.last_text().is_empty());
 }
+
+fn session_dir(state: &tempfile::TempDir, id: &str) -> std::path::PathBuf {
+    state.path().join("sessions").join(id)
+}
+
+fn comment_ids(state: &tempfile::TempDir, repo: &Repo, herdr: &FakeHerdr, id: &str) -> Vec<String> {
+    json(
+        &cmd(state, repo, herdr)
+            .args(["comment", "list", "--session", id])
+            .output()
+            .unwrap(),
+    )["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn apply_sent(state: &tempfile::TempDir, repo: &Repo, herdr: &FakeHerdr, id: &str, comment: &str) -> serde_json::Value {
+    json(
+        &cmd(state, repo, herdr)
+            .args(["submit", "apply", "--session", id, "--consume"])
+            .write_stdin(
+                serde_json::json!({ "sink": "slack", "sent": [ { "comment_id": comment } ], "failed": [], "skipped": [], "decision": "not_applicable" })
+                    .to_string(),
+            )
+            .output()
+            .unwrap(),
+    )
+}
+
+#[test]
+fn a_lua_sink_result_waits_out_a_held_session_and_is_recorded_by_the_next_write() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let ids = comment_ids(&state, &repo, &herdr, &id);
+    let lock_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(session_dir(&state, &id).join("session.lock"))
+        .unwrap();
+    let mut lock = fd_lock::RwLock::new(lock_file);
+    let held = lock.write().unwrap();
+
+    let queued = apply_sent(&state, &repo, &herdr, &id, &ids[0]);
+    assert_eq!(queued["ok"], true, "{queued}");
+    assert_eq!(queued["session"]["pending_apply"], true);
+    assert_eq!(queued["session"]["comments"].as_array().unwrap().len(), 2);
+
+    drop(held);
+    let listed = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["session", "get", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(listed["session"]["pending_apply"], true, "a read records nothing");
+    let decided = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["decision", "set", "--session", &id])
+            .write_stdin(r#"{"event": "approve", "body": ""}"#)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(decided["session"]["pending_apply"], false);
+    assert_eq!(comment_ids(&state, &repo, &herdr, &id), vec![ids[1].clone()]);
+    let history = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["history", "list", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(history["data"][0]["deliveries"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_waiting_result_is_recorded_on_request_and_a_broken_one_is_set_aside() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let ids = comment_ids(&state, &repo, &herdr, &id);
+    let lock_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(session_dir(&state, &id).join("session.lock"))
+        .unwrap();
+    let mut lock = fd_lock::RwLock::new(lock_file);
+    let held = lock.write().unwrap();
+    apply_sent(&state, &repo, &herdr, &id, &ids[1]);
+    std::fs::write(session_dir(&state, &id).join("applies/0-broken.json"), "{").unwrap();
+    drop(held);
+
+    let drained = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "apply", "--session", &id, "--drain"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(drained["ok"], true, "{drained}");
+    assert_eq!(drained["session"]["pending_apply"], false);
+    assert_eq!(comment_ids(&state, &repo, &herdr, &id), vec![ids[0].clone()]);
+    assert!(session_dir(&state, &id).join("applies/rejected/0-broken.json").exists());
+}

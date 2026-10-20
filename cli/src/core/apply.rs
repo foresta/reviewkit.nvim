@@ -50,13 +50,15 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
     for sent in &result.sent {
         if let Some(comment) = session.comments.iter_mut().find(|c| c.id == sent.comment_id) {
             comment.last_error = None;
-            comment.deliveries.push(Delivery {
-                sink: result.sink.clone(),
-                at: result.at.clone(),
-                mode: result.mode,
-                url: sent.url.clone(),
-                consumed: consume,
-            });
+            if !recorded(&comment.deliveries, &result) {
+                comment.deliveries.push(Delivery {
+                    sink: result.sink.clone(),
+                    at: result.at.clone(),
+                    mode: result.mode,
+                    url: sent.url.clone(),
+                    consumed: consume,
+                });
+            }
         }
     }
     if consume {
@@ -114,7 +116,7 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
         .as_deref()
         .is_none_or(|v| session.decision.as_ref().is_some_and(|d| d.updated_at == v));
     if result.decision == DecisionStatus::Sent && same_decision {
-        if let Some(decision) = session.decision.as_mut() {
+        if let Some(decision) = session.decision.as_mut().filter(|d| !recorded(&d.deliveries, &result)) {
             decision.deliveries.push(Delivery {
                 sink: result.sink.clone(),
                 at: result.at.clone(),
@@ -133,6 +135,13 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
         result: result.clone(),
     });
     Ok(result)
+}
+
+/// A queued result replayed after a crash between saving and removing it.
+fn recorded(deliveries: &[Delivery], result: &SinkResult) -> bool {
+    deliveries
+        .iter()
+        .any(|d| d.sink == result.sink && d.at == result.at && d.mode == result.mode)
 }
 
 /// A local session is reused for every `:Review diff` of the same specs,
@@ -254,6 +263,57 @@ mod tests {
         let mut cleared: Vec<_> = (0..HISTORY_LIMIT + 5).map(|n| comment(n, false)).collect();
         retire(&mut cleared, vec![]);
         assert_eq!(cleared.len(), HISTORY_LIMIT + 5, "nothing unconsumed is ever dropped");
+    }
+
+    #[test]
+    fn a_replayed_result_records_no_second_delivery() {
+        use crate::model::{HeadRef, Repo, RevRef, Source};
+        use std::path::PathBuf;
+        let mut session = Session::new(
+            "local/x/HEAD..worktree".into(),
+            Repo {
+                root: PathBuf::from("/repo"),
+                host: None,
+                owner: None,
+                name: None,
+                remote_url: None,
+            },
+            Source::Local {
+                base_spec: "HEAD".into(),
+                head_spec: "worktree".into(),
+                worktree: PathBuf::from("/repo"),
+            },
+            RevRef {
+                r#ref: Some("HEAD".into()),
+                sha: "a".repeat(40),
+            },
+            HeadRef {
+                r#ref: None,
+                sha: None,
+                dirty: false,
+            },
+            "t".into(),
+        );
+        session.comments.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "c_1", "path": "a", "side": "head", "line": 1, "kind": "issue",
+                "body": "b", "anchor": { "base_sha": "a", "head_sha": null, "blob": null,
+                    "context": { "before": [], "lines": [], "after": [] } },
+                "stale": false, "commentable": { "github": true, "reason": null },
+                "created_at": "t", "updated_at": "t"
+            }))
+            .unwrap(),
+        );
+        session.decision = Some(
+            serde_json::from_value(serde_json::json!({ "event": "comment", "body": "b", "updated_at": "t" })).unwrap(),
+        );
+        let mut once = result(&["c_1"], &[], &[], DecisionStatus::Sent);
+        once.at = "2026-01-01T00:00:00.000001Z".into();
+        once.mode = DeliveryMode::Copied;
+        apply(&mut session, once.clone(), false).unwrap();
+        apply(&mut session, once, false).unwrap();
+        assert_eq!(session.comments[0].deliveries.len(), 1);
+        assert_eq!(session.decision.as_ref().unwrap().deliveries.len(), 1);
     }
 
     #[test]

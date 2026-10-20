@@ -971,6 +971,11 @@
               }
             ]
           },
+          "pending_apply": {
+            "default": false,
+            "description": "A client sink's delivery waiting for the session lock to be recorded;\nderived like `pending_submit`.",
+            "type": "boolean"
+          },
           "pending_submit": {
             "default": false,
             "description": "Derived from the state dir on every read rather than stored: a crash\nbetween sending and saving is exactly when the stored value is wrong.",
@@ -1947,6 +1952,6 @@
     "title": "Contract",
     "type": "object"
   },
-  "schema_revision": 9,
+  "schema_revision": 10,
   "schema_version": 1
 }

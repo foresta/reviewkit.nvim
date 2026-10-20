@@ -243,6 +243,7 @@ expression: full_session()
     }
   },
   "pending_submit": false,
+  "pending_apply": false,
   "history": [],
   "etags": {
     "targets": "",
