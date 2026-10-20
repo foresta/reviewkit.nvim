@@ -235,9 +235,10 @@ fn with_mirror_lock<T>(mirror_dir: &Path, f: impl FnOnce() -> Result<T>) -> Resu
 
 /// Mirror + worktree under the state directory (architecture D2): the
 /// user's checkout is only read. It seeds the mirror (hard-linked objects,
-/// no network) only when it is a checkout of the same repository; anything
-/// else would put another project's objects and remote behind this PR's
-/// id. The PR head is fetched only when it or the base moved.
+/// no network) only from a complete checkout of the same repository; any
+/// other would put another project's objects and remote behind this PR's
+/// id, or history and blobs the mirror cannot fetch on its own. The PR
+/// head is fetched only when it or the base moved.
 fn materialize(src: &PrSource<'_>, repo_ref: &RepoRef, meta: &PrMeta) -> Result<Checkout> {
     let mirror_dir = src.state.mirror_dir(&repo_ref.host, &repo_ref.owner, &repo_ref.name);
     with_mirror_lock(&mirror_dir, || {
@@ -253,14 +254,27 @@ fn materialize_locked(
 ) -> Result<Checkout> {
     let local = src.local_repo.filter(|r| same_repository(r, repo_ref));
     let remote = remote_url_of(local, repo_ref);
-    if !mirror_dir.join("HEAD").exists() {
-        // Left by an interrupted older build; rename cannot replace it.
+    // Left by an interrupted older build (rename cannot replace it), or
+    // seeded by an older build from a shallow or partial checkout, which
+    // fails merge-base or reads for good.
+    if !mirror_dir.join("HEAD").exists() || incomplete_mirror(&mirror_dir) {
         let _ = std::fs::remove_dir_all(&mirror_dir);
     }
+    let seed = || local.filter(|r| !r.is_shallow() && !r.is_partial());
     let mirror = if mirror_dir.join("HEAD").exists() {
         Repository::at(src.git, mirror_dir)
-    } else if let Some(local) = local {
-        Repository::clone_bare(src.git, local.root(), &mirror_dir, &remote)?
+    } else if let Some(seed) = seed() {
+        match Repository::clone_bare(src.git, seed.root(), &mirror_dir, &remote) {
+            Ok(mirror) => mirror,
+            Err(err) => {
+                log::warn!(
+                    "seeding the mirror from {} failed, fetching instead: {}",
+                    seed.root().display(),
+                    err.message
+                );
+                Repository::init_bare(src.git, &mirror_dir, &remote)?
+            }
+        }
     } else {
         Repository::init_bare(src.git, &mirror_dir, &remote)?
     };
@@ -286,24 +300,44 @@ fn materialize_locked(
             }
             _ => vec![],
         };
-        mirror
-            .fetch_with(
+        let fetch = |base_source: &str| {
+            mirror.fetch_with(
                 &config,
                 "origin",
                 &[
                     format!("+refs/pull/{}/head:{pr_ref}", meta.number),
-                    format!("+refs/heads/{}:{base_ref}", meta.base_ref),
+                    format!("+{base_source}:{base_ref}"),
                 ],
             )
-            .map_err(|err| {
-                let message = format!("cannot fetch pull request #{}: {}", meta.number, err.message);
-                if err.code == ErrorCode::EAuth {
-                    Error::tool("git", ErrorCode::EAuth, message)
-                        .hint(format!("run `gh auth login --hostname {}`", repo_ref.host))
-                } else {
-                    Error::tool("git", ErrorCode::EGit, message)
+        };
+        let branch = format!("refs/heads/{}", meta.base_ref);
+        // A closed PR's base branch is often deleted (stacked PRs) and only
+        // its recorded commit is needed; that commit may in turn be gone
+        // after a force-push, and the branch is the fallback.
+        let fetched = if meta.state == PrState::Open {
+            fetch(&branch)
+        } else {
+            match fetch(&meta.base_oid) {
+                Err(err) if err.code != ErrorCode::EAuth => {
+                    log::warn!(
+                        "fetching base {} failed, using {branch}: {}",
+                        meta.base_oid,
+                        err.message
+                    );
+                    fetch(&branch)
                 }
-            })?;
+                other => other,
+            }
+        };
+        fetched.map_err(|err| {
+            let message = format!("cannot fetch pull request #{}: {}", meta.number, err.message);
+            if err.code == ErrorCode::EAuth {
+                Error::tool("git", ErrorCode::EAuth, message)
+                    .hint(format!("run `gh auth login --hostname {}`", repo_ref.host))
+            } else {
+                Error::tool("git", ErrorCode::EGit, message)
+            }
+        })?;
     }
     let head = mirror
         .rev_parse(&pr_ref)
@@ -322,6 +356,15 @@ fn materialize_locked(
         .pr_worktree(&repo_ref.host, &repo_ref.owner, &repo_ref.name, meta.number);
     mirror.worktree_checkout(&worktree, &head)?;
     Ok(Checkout { worktree, head, base })
+}
+
+fn incomplete_mirror(dir: &std::path::Path) -> bool {
+    dir.join("shallow").exists()
+        || std::fs::read_dir(dir.join("objects/pack")).is_ok_and(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().is_some_and(|x| x == "promisor"))
+        })
 }
 
 /// A thread on a file outside the diff still needs a Target, so the view

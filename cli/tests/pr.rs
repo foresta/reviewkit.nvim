@@ -657,3 +657,102 @@ fn an_error_on_the_review_threads_still_fails_the_open() {
         .unwrap();
     assert!(!out.status.success());
 }
+
+#[test]
+fn a_shallow_or_partial_checkout_does_not_seed_the_mirror() {
+    for flags in [&["--depth", "1"][..], &["--filter=blob:none"][..]] {
+        let state = tempfile::tempdir().unwrap();
+        let remote = Remote::new();
+        let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+        let place = tempfile::tempdir().unwrap();
+        let checkout = place.path().join("checkout");
+        let mut args = vec!["clone", "-q", "--no-local"];
+        args.extend(flags);
+        let url = format!("file://{}", remote.bare.path().display());
+        args.extend([url.as_str(), checkout.to_str().unwrap()]);
+        git_in(place.path(), &args);
+        git_in(
+            &checkout,
+            &["remote", "set-url", "origin", "https://github.com/o/r.git"],
+        );
+        let body = json(
+            &reviewkit_at(&state, &remote, &gh)
+                .arg("--cwd")
+                .arg(&checkout)
+                .args(["session", "open", "--pr", "7"])
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(body["session"]["base"]["sha"], remote.base_sha, "{flags:?}: {body}");
+        assert!(!body["session"]["targets"].as_array().unwrap().is_empty(), "{flags:?}");
+        let mirror = state.path().join("repos/github.com/o/r/mirror.git");
+        assert!(!mirror.join("shallow").exists(), "{flags:?}");
+    }
+}
+
+#[test]
+fn a_merged_pull_request_opens_after_its_base_branch_is_deleted() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "MERGED", serde_json::json!([]));
+    git_in(remote.bare.path(), &["update-ref", "-d", "refs/heads/main"]);
+    let elsewhere = tempfile::tempdir().unwrap();
+    let body = json(
+        &reviewkit_at(&state, &remote, &gh)
+            .arg("--cwd")
+            .arg(elsewhere.path())
+            .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(body["session"]["base"]["sha"], remote.base_sha, "{body}");
+    assert!(!body["session"]["targets"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn a_shallow_mirror_left_by_an_older_build_is_rebuilt() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let mirror = state.path().join("repos/github.com/o/r/mirror.git");
+    std::fs::create_dir_all(mirror.parent().unwrap()).unwrap();
+    let url = format!("file://{}", remote.bare.path().display());
+    git_in(
+        mirror.parent().unwrap(),
+        &["clone", "-q", "--bare", "--depth", "1", &url, mirror.to_str().unwrap()],
+    );
+    git_in(&mirror, &["remote", "set-url", "origin", "https://github.com/o/r.git"]);
+    assert!(mirror.join("shallow").exists());
+    let elsewhere = tempfile::tempdir().unwrap();
+    let body = json(
+        &reviewkit_at(&state, &remote, &gh)
+            .arg("--cwd")
+            .arg(elsewhere.path())
+            .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(body["session"]["base"]["sha"], remote.base_sha, "{body}");
+    assert!(!mirror.join("shallow").exists());
+}
+
+#[test]
+fn a_closed_pull_request_whose_base_commit_is_gone_falls_back_to_the_branch() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "CLOSED", serde_json::json!([]));
+    let path = gh.dir.path().join("responses.json");
+    let mut rules: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    rules[0]["body"]["baseRefOid"] = serde_json::json!("1".repeat(40));
+    std::fs::write(&path, serde_json::Value::Array(rules).to_string()).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let body = json(
+        &reviewkit_at(&state, &remote, &gh)
+            .arg("--cwd")
+            .arg(elsewhere.path())
+            .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(body["session"]["base"]["sha"], remote.base_sha, "{body}");
+}
