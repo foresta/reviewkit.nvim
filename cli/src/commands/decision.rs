@@ -27,7 +27,9 @@ pub fn run(ctx: &Context, command: DecisionCommand) -> Result<Response> {
     let (session, ()) = match command {
         DecisionCommand::Set { session } => {
             let input: DecisionInput = stdin_json()?;
+            let dir = store.state_dir().session_dir(&session)?;
             store.update(&session, |s| {
+                crate::sink::github::guard_pending(&dir, None, true)?;
                 s.decision = Some(Decision {
                     event: input.event,
                     body: input.body,
@@ -37,10 +39,14 @@ pub fn run(ctx: &Context, command: DecisionCommand) -> Result<Response> {
                 Ok(())
             })?
         }
-        DecisionCommand::Clear { session } => store.update(&session, |s| {
-            s.decision = None;
-            Ok(())
-        })?,
+        DecisionCommand::Clear { session } => {
+            let dir = store.state_dir().session_dir(&session)?;
+            store.update(&session, |s| {
+                crate::sink::github::guard_pending(&dir, None, true)?;
+                s.decision = None;
+                Ok(())
+            })?
+        }
     };
     Response::with_session(serde_json::Value::Null, &session)
 }

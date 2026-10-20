@@ -196,11 +196,12 @@ pub fn remove(session: &mut Session, id: &str) -> Result<Comment> {
 
 /// Moves comments delivered (for real, not staged or copied) out of the
 /// queue, optionally only those delivered through one sink.
-pub fn clear_delivered(session: &mut Session, sink: Option<&str>) -> Vec<String> {
+pub fn clear_delivered(session: &mut Session, sink: Option<&str>, keep: &[String]) -> Vec<String> {
     let delivered = |c: &Comment| {
-        c.deliveries
-            .iter()
-            .any(|d| d.mode == crate::model::DeliveryMode::Sent && sink.is_none_or(|s| d.sink == s))
+        !keep.contains(&c.id)
+            && c.deliveries
+                .iter()
+                .any(|d| d.mode == crate::model::DeliveryMode::Sent && sink.is_none_or(|s| d.sink == s))
     };
     let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut session.comments).into_iter().partition(delivered);
     session.comments = kept;

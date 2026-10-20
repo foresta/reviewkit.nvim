@@ -461,6 +461,49 @@ pub struct PendingReply {
     pub body: String,
 }
 
+/// What an interrupted submit attempted must keep the text it was sent
+/// with: reconciling looks for that text on GitHub, and a change made
+/// first would hide a posted comment or decision and post it again.
+/// `comment_id` is a comment about to change; `decision` a decision change.
+pub fn guard_pending(session_dir: &Path, comment_id: Option<&str>, decision: bool) -> Result<()> {
+    let Some(pending) = read_pending(session_dir) else {
+        return Ok(());
+    };
+    let listed = comment_id.is_some_and(|id| pending_ids(&pending).any(|p| p == id));
+    let carried = decision && pending.event.is_some() && pending.carries_decision;
+    if listed || carried {
+        let what = if listed { "this comment" } else { "the decision" };
+        return Err(Error::new(
+            ErrorCode::EConflict,
+            format!("{what} was part of a GitHub submit that was cut off; it may already be posted"),
+        )
+        .hint("submit to github again first: it checks what was posted before sending anything"));
+    }
+    Ok(())
+}
+
+fn read_pending(session_dir: &Path) -> Option<PendingSubmit> {
+    let bytes = std::fs::read(pending_path(session_dir)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn pending_ids(pending: &PendingSubmit) -> impl Iterator<Item = &str> {
+    pending
+        .comments
+        .iter()
+        .map(|c| c.id.as_str())
+        .chain(pending.replies.iter().map(|r| r.id.as_str()))
+        .chain(pending.body_comments.iter().map(|b| b.id.as_str()))
+}
+
+/// Comments an interrupted submit carried; reconciling looks for them in
+/// the queue, so they must stay there until it has run.
+pub fn pending_comment_ids(session_dir: &Path) -> Vec<String> {
+    read_pending(session_dir)
+        .map(|p| pending_ids(&p).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 pub fn pending_path(session_dir: &Path) -> std::path::PathBuf {
     session_dir.join(crate::store::PENDING_SUBMIT_FILE)
 }

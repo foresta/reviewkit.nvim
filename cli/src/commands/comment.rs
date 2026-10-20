@@ -66,7 +66,9 @@ pub fn run(ctx: &Context, command: CommentCommand) -> Result<Response> {
         CommentCommand::Update { session, id } => {
             let patch: CommentPatch = stdin_json()?;
             let git = SystemGit::new(ctx.tools.git.as_deref())?;
+            let dir = store.state_dir().session_dir(&session)?;
             let (session, ()) = store.update(&session, |s| {
+                crate::sink::github::guard_pending(&dir, Some(&id), false)?;
                 let file = if comments::patch_moves_line(&patch) {
                     let index = comments::find(s, &id)?;
                     let (side, path) = (s.comments[index].side, s.comments[index].path.clone());
@@ -80,11 +82,19 @@ pub fn run(ctx: &Context, command: CommentCommand) -> Result<Response> {
             Response::with_session(serde_json::Value::Null, &session)
         }
         CommentCommand::Remove { session, id } => {
-            let (session, _) = store.update(&session, |s| comments::remove(s, &id))?;
+            let dir = store.state_dir().session_dir(&session)?;
+            let (session, _) = store.update(&session, |s| {
+                crate::sink::github::guard_pending(&dir, Some(&id), false)?;
+                comments::remove(s, &id)
+            })?;
             Response::with_session(serde_json::Value::Null, &session)
         }
         CommentCommand::Clear { session, sink, .. } => {
-            let (session, moved) = store.update(&session, |s| Ok(comments::clear_delivered(s, sink.as_deref())))?;
+            let dir = store.state_dir().session_dir(&session)?;
+            let (session, moved) = store.update(&session, |s| {
+                let keep = crate::sink::github::pending_comment_ids(&dir);
+                Ok(comments::clear_delivered(s, sink.as_deref(), &keep))
+            })?;
             Response::with_session(serde_json::json!({ "moved": moved }), &session)
         }
         CommentCommand::List { session, path } => {

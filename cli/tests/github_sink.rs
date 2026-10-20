@@ -1311,3 +1311,95 @@ fn a_comment_posted_by_an_older_version_cannot_be_restored_and_reposted() {
     let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(body["error"]["code"], "E_INVALID", "{body}");
 }
+
+#[test]
+fn comments_and_the_decision_of_an_interrupted_submit_stay_as_sent_until_reconciled() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let attempted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "maybe posted"}),
+    );
+    let other = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 11, "body": "not in it"}),
+    );
+    let run = |args: &[&str], stdin: &str| {
+        let out = reviewkit(&state, &remote, &gh)
+            .args(args)
+            .write_stdin(stdin.to_string())
+            .output()
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    pending(
+        &state,
+        serde_json::json!({ "at": "2000-01-01T00:00:00Z", "event": "COMMENT", "decision_body": "",
+            "comments": [ { "id": attempted, "path": "keep.txt", "side": "head", "line": 3, "body": "maybe posted" } ] }),
+    );
+    let edit = run(
+        &["comment", "update", "--session", &id, "--id", &attempted],
+        r#"{"body": "edited"}"#,
+    );
+    assert_eq!(edit["error"]["code"], "E_CONFLICT", "{edit}");
+    let remove = run(&["comment", "remove", "--session", &id, "--id", &attempted], "");
+    assert_eq!(remove["error"]["code"], "E_CONFLICT");
+    let fine = run(
+        &["comment", "update", "--session", &id, "--id", &other],
+        r#"{"body": "edited"}"#,
+    );
+    assert_eq!(fine["ok"], true, "a comment the submit did not carry: {fine}");
+    let decision = run(
+        &["decision", "set", "--session", &id],
+        r#"{"event": "approve", "body": ""}"#,
+    );
+    assert_eq!(
+        decision["error"]["code"], "E_CONFLICT",
+        "the interrupted review carried an event"
+    );
+}
+
+#[test]
+fn clearing_delivered_comments_keeps_those_an_interrupted_submit_carried() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let attempted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "to the agent, then maybe posted"}),
+    );
+    // Delivered to the agent (a PR session keeps it queued for GitHub).
+    let path = state.path().join("sessions/pr/github.com/o/r/7/session.json");
+    let mut raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    raw["comments"][0]["deliveries"] = serde_json::json!([{ "sink": "herdr", "at": "t", "mode": "sent" }]);
+    std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+    pending(
+        &state,
+        serde_json::json!({ "at": "2000-01-01T00:00:00Z",
+            "comments": [ { "id": attempted, "path": "keep.txt", "side": "head", "line": 3, "body": "to the agent, then maybe posted" } ] }),
+    );
+    let cleared = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["comment", "clear", "--session", &id, "--delivered"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        cleared["data"]["moved"],
+        serde_json::json!([]),
+        "reconcile must still find it in the queue"
+    );
+    assert_eq!(cleared["session"]["comments"].as_array().unwrap().len(), 1);
+}
