@@ -224,6 +224,22 @@ local function attach()
     end
   end, group)
   core.on("ReviewSessionClosed", stop_watching, group)
+  -- A PR refresh checks the new head out under open buffers; Vim only
+  -- notices on focus, so the reviewer would comment on stale text.
+  core.on("ReviewTargetsChanged", function()
+    local session = core.session()
+    if not session or session.source.kind ~= "pr" then
+      return
+    end
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buftype == "" then
+        local name = vim.api.nvim_buf_get_name(buf)
+        if name ~= "" and core.relpath(name) then
+          vim.cmd("checktime " .. buf)
+        end
+      end
+    end
+  end, group)
   vim.api.nvim_create_autocmd({ "BufWritePost", "FocusGained" }, {
     group = group,
     callback = function(args)
@@ -312,11 +328,12 @@ function M.resume(id)
     vim.ui.select(summaries, {
       prompt = "Resume review session",
       format_item = function(s)
-        return ("%s  (%d comment%s, %s)"):format(
-          s.id,
-          s.comments,
+        return ("%s  %s  (%d comment%s, %s)"):format(
+          vim.fs.basename(s.repo_root or ""),
+          s.title or s.id,
+          s.comments or 0,
           s.comments == 1 and "" or "s",
-          s.updated_at:sub(1, 16)
+          (s.updated_at or ""):sub(1, 16)
         )
       end,
     }, function(choice)
@@ -773,30 +790,7 @@ function M.command(args)
   end
 end
 
-local maps = {
-  { "n", "<leader>rc", "comment", "reviewkit: comment on this line" },
-  { "x", "<leader>rc", "comment_range", "reviewkit: comment on the selection" },
-  { "n", "<leader>rS", "suggest", "reviewkit: suggest a replacement for this line" },
-  { "x", "<leader>rS", "suggest_range", "reviewkit: suggest a replacement for the selection" },
-  { "n", "<leader>rm", "move_comment", "reviewkit: move a comment of this file here" },
-  { "x", "<leader>rm", "move_comment_range", "reviewkit: move a comment of this file to the selection" },
-  { "n", "<leader>re", "edit_comment", "reviewkit: edit the comment here" },
-  { "n", "<leader>rx", "remove_comment", "reviewkit: remove the comment here" },
-  { "n", "<leader>rd", "decision", "reviewkit: set the decision" },
-  { "n", "<leader>rt", "thread", "reviewkit: show the thread on this line" },
-  { "n", "<leader>rT", "threads", "reviewkit: list the pull request's threads" },
-  { "n", "<leader>rq", "toggle_queue", "reviewkit: toggle the queue list" },
-  { "n", "<leader>rv", "toggle_viewed", "reviewkit: toggle viewed for this file" },
-  { "n", "<leader>rs", "submit_default", "reviewkit: submit to herdr" },
-  { "n", "<leader>ro", "open_diff", "reviewkit: open the side-by-side view" },
-  { "n", "]f", "next_file", "reviewkit: next target", true },
-  { "n", "[f", "prev_file", "reviewkit: previous target", true },
-  { "n", "]h", "next_hunk", "reviewkit: next hunk", true },
-  { "n", "[h", "prev_hunk", "reviewkit: previous hunk", true },
-  { "n", "]t", "next_thread", "reviewkit: next thread", true },
-  { "n", "[t", "prev_thread", "reviewkit: previous thread", true },
-  { "n", "]u", "next_unviewed", "reviewkit: next file not viewed yet", true },
-}
+local maps = require("reviewkit.maps")
 
 local actions = {
   comment = function()
@@ -861,13 +855,10 @@ local actions = {
   end,
 }
 
---- <Plug> mappings exist from plugin load, so a user's own `nmap` works
---- before any session is open.
-function M.set_plug_maps()
-  for _, map in ipairs(maps) do
-    local mode, action, desc = map[1], map[3], map[4]
-    vim.keymap.set(mode, "<Plug>(reviewkit-" .. action:gsub("_", "-") .. ")", actions[action], { desc = desc })
-  end
+--- Called by the <Plug> maps that `plugin/` defines.
+---@param action string
+function M.run_action(action)
+  actions[action]()
 end
 
 --- Default keys are global, so they work in any buffer of the worktree. An
@@ -942,7 +933,5 @@ function M._reset()
   state.refreshing = false
   state.refresh_again = false
 end
-
-M.set_plug_maps()
 
 return M

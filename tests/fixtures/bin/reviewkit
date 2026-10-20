@@ -13,7 +13,7 @@ local stdin = io.stdin:read("*a") or ""
 if dir then
   local log = io.open(dir .. "/calls.jsonl", "a")
   if log then
-    log:write(vim.json.encode({ args = args, stdin = stdin }), "\n")
+    log:write(vim.json.encode({ args = args, stdin = stdin, cwd = vim.uv.cwd() }), "\n")
     log:close()
   end
 end

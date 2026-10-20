@@ -130,6 +130,10 @@ fn get_list_target_list_and_close_purge() {
     let listed = json(&reviewkit(&state, &repo).args(["session", "list"]).output().unwrap());
     assert_eq!(listed["data"][0]["id"], id);
     assert_eq!(listed["data"][0]["kind"], "local");
+    assert_eq!(
+        listed["data"][0]["title"], "HEAD~1..worktree",
+        "local ids are hashes, so the summary names the comparison"
+    );
 
     let targets = json(
         &reviewkit(&state, &repo)

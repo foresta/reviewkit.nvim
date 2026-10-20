@@ -102,6 +102,13 @@ T["cli"]["passes configured tool paths as REVIEWKIT_* and the state dir as a fla
   eq(calls[#calls].args, { "--state-dir", "/tmp/rk-state", "health" })
 end
 
+T["cli"]["run_sync passes its cwd as --cwd, like run"] = function()
+  helpers.respond(dir, { { match = { "session list" }, body = { ok = true, data = {} } } })
+  child.lua("require('reviewkit.cli').run_sync({ 'session', 'list' }, { cwd = '/some/where' })")
+  local calls = helpers.calls(dir)
+  eq(calls[#calls].args, { "--cwd", "/some/where", "session", "list" })
+end
+
 T["cli"]["call retries a locked session a few times, then gives up"] = function()
   child.lua([[
     local cli = require("reviewkit.cli")
