@@ -532,7 +532,7 @@ end
 
 ---@param session reviewkit.Session
 ---@param ids string[]
----@param cb fun(err: reviewkit.Error?, view: reviewkit.Session?)
+---@param cb fun(err: reviewkit.Error?, view: reviewkit.Session?, decision_left: boolean?)
 local function narrowed(session, ids, cb)
   if #ids == 0 then
     return vim.schedule(function()
@@ -544,6 +544,17 @@ local function narrowed(session, ids, cb)
     queued[c.id] = true
   end
   local function finish(sent)
+    -- After an async history lookup the cache may be newer; the sink must
+    -- see the comments as they are now, and only of this session.
+    local current = state.session
+    if not current or current.id ~= session.id then
+      return cb({ code = "E_NO_SESSION", message = "the review was closed meanwhile", retryable = false, details = {} })
+    end
+    session = current
+    queued = {}
+    for _, c in ipairs(session.comments) do
+      queued[c.id] = true
+    end
     for _, id in ipairs(ids) do
       if not queued[id] and not sent[id] then
         return cb({ code = "E_NO_COMMENT", message = "no such comment: " .. id, retryable = false, details = {} })
@@ -560,7 +571,7 @@ local function narrowed(session, ids, cb)
     view.decision = nil
     view.thread_actions = {}
     view.history = {}
-    cb(nil, view)
+    cb(nil, view, session.decision ~= nil)
   end
   local missing = vim.tbl_filter(function(id)
     return not queued[id]
@@ -653,7 +664,7 @@ function M.submit(sink, opts, cb)
   if lua_sink and opts.comment_ids then
     -- The same view the CLI gives its own sinks: the chosen comments only,
     -- without the decision and thread actions.
-    return narrowed(session, opts.comment_ids, function(narrow_err, view)
+    return narrowed(session, opts.comment_ids, function(narrow_err, view, decision_left)
       if narrow_err or not view then
         return cb(narrow_err)
       end
@@ -665,7 +676,7 @@ function M.submit(sink, opts, cb)
           details = {},
         })
       end
-      submit_lua(view, sink, lua_sink, opts, cb, session.decision ~= nil)
+      submit_lua(view, sink, lua_sink, opts, cb, decision_left == true)
     end)
   end
   if lua_sink then

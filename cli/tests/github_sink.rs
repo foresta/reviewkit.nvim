@@ -1200,3 +1200,73 @@ fn a_selection_posts_only_those_comments_and_keeps_the_decision() {
         "still to be sent"
     );
 }
+
+#[test]
+fn a_selection_after_an_interrupted_submit_records_both_and_keeps_the_decision() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(
+        &remote,
+        "OPEN",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", "already there")]),
+    );
+    let id = open(&state, &remote, &gh);
+    let posted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "already there"}),
+    );
+    let picked = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 11, "body": "picked"}),
+    );
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 11, "body": "later"}),
+    );
+    decide(&state, &remote, &gh, &id, "approve", "");
+    pending(
+        &state,
+        serde_json::json!({ "at": "2000-01-01T00:00:00Z", "comments": [ { "id": posted, "path": "keep.txt", "side": "head", "line": 3, "body": "already there" } ] }),
+    );
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_2", "url": "u2" } } } }),
+        0,
+    );
+    let body = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github", "--options", "-"])
+            .write_stdin(serde_json::json!({ "comment_ids": [picked] }).to_string())
+            .output()
+            .unwrap(),
+    );
+    let sent: Vec<&str> = body["data"]["sent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["comment_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        sent,
+        vec![posted.as_str(), picked.as_str()],
+        "the recovered one is recorded too"
+    );
+    let left = body["session"]["comments"].as_array().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0]["body"], "later");
+    assert_eq!(
+        body["session"]["decision"]["event"], "approve",
+        "a selection never posts the decision"
+    );
+    assert_eq!(body["data"]["decision"], "skipped");
+    assert_eq!(body["session"]["pending_submit"], false);
+}
