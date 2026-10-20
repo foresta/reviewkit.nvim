@@ -43,7 +43,8 @@ pub struct SystemGit {
 impl SystemGit {
     pub fn new(path: Option<&Path>) -> Result<Self> {
         let path = path.ok_or_else(|| {
-            Error::new(ErrorCode::EGit, "git is not installed or not on PATH").hint("install git or set REVIEWKIT_GIT")
+            Error::tool("git", ErrorCode::EToolMissing, "git is not installed or not on PATH")
+                .hint("install git or set REVIEWKIT_GIT")
         })?;
         let network_timeout = env_non_empty("REVIEWKIT_GIT_TIMEOUT_MS")
             .and_then(|v| v.to_str().and_then(|s| s.parse::<u64>().ok()))
@@ -79,11 +80,10 @@ impl Git for SystemGit {
             .stderr(Stdio::piped());
         let mut child = command
             .spawn()
-            .map_err(|err| Error::new(ErrorCode::EGit, format!("cannot run git: {err}")))?;
+            .map_err(|err| Error::tool("git", ErrorCode::EToolMissing, format!("cannot run git: {err}")))?;
         let stdout = drain(child.stdout.take());
         let stderr = drain(child.stderr.take());
-        let deadline = args
-            .first()
+        let deadline = subcommand(args)
             .filter(|a| NETWORK_COMMANDS.contains(a))
             .map(|_| Instant::now() + self.network_timeout);
         let status = loop {
@@ -95,13 +95,24 @@ impl Git for SystemGit {
                 Ok(None) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(Error::new(
+                    return Err(Error::tool(
+                        "git",
                         ErrorCode::EGit,
-                        format!("git {} did not finish within {:?}", args[0], self.network_timeout),
+                        format!(
+                            "git {} did not finish within {:?}",
+                            subcommand(args).unwrap_or("command"),
+                            self.network_timeout
+                        ),
                     )
                     .retryable());
                 }
-                Err(err) => return Err(Error::new(ErrorCode::EGit, format!("git {}: {err}", args.join(" ")))),
+                Err(err) => {
+                    return Err(Error::tool(
+                        "git",
+                        ErrorCode::EGit,
+                        format!("git {}: {err}", args.join(" ")),
+                    ));
+                }
             }
         };
         let stdout = stdout.join().unwrap_or_default();
@@ -109,12 +120,52 @@ impl Git for SystemGit {
             let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default())
                 .trim()
                 .to_string();
-            return Err(
-                Error::new(ErrorCode::EGit, format!("git {} failed: {stderr}", args.join(" ")))
-                    .details(serde_json::json!({ "exit": status.code() })),
-            );
+            let code = failure_code(&stderr);
+            let mut err = Error::tool("git", code, format!("git {} failed: {stderr}", args.join(" ")))
+                .details(serde_json::json!({ "exit": status.code() }));
+            if code == ErrorCode::EAuth {
+                err =
+                    err.hint("check the credentials for this remote; for GitHub run `gh auth login --hostname <host>`");
+            }
+            return Err(err);
         }
         Ok(stdout)
+    }
+}
+
+/// The subcommand after any leading `-c key=value` pairs.
+fn subcommand<'a>(args: &[&'a str]) -> Option<&'a str> {
+    let mut rest = args;
+    while let ["-c", _, tail @ ..] = rest {
+        rest = tail;
+    }
+    rest.first().copied()
+}
+
+/// `-c` values that make gh answer git's credential requests for one host.
+/// The empty value first drops the helpers configured for that host, so a
+/// token gh hands out is not also stored into the user's keychain.
+pub fn gh_credential_config(host: &str, gh: &Path) -> Vec<String> {
+    let quoted = format!("'{}'", gh.to_string_lossy().replace('\'', "'\\''"));
+    vec![
+        format!("credential.https://{host}.helper="),
+        format!("credential.https://{host}.helper=!{quoted} auth git-credential"),
+    ]
+}
+
+/// GitHub answers an unauthenticated fetch of a private repository with
+/// "not found", so that counts as a credentials problem too.
+fn failure_code(stderr: &str) -> ErrorCode {
+    let auth = [
+        "Authentication failed",
+        "could not read Username",
+        "could not read Password",
+        "Repository not found",
+    ];
+    if auth.iter().any(|needle| stderr.contains(needle)) {
+        ErrorCode::EAuth
+    } else {
+        ErrorCode::EGit
     }
 }
 
@@ -140,7 +191,11 @@ pub struct Repository<'a> {
 impl<'a> Repository<'a> {
     pub fn discover(git: &'a dyn Git, cwd: &Path) -> Result<Self> {
         let out = git.run(cwd, &["rev-parse", "--show-toplevel"]).map_err(|err| {
-            Error::new(
+            if err.code == ErrorCode::EToolMissing {
+                return err;
+            }
+            Error::tool(
+                "git",
                 ErrorCode::EGit,
                 format!("not inside a git repository: {}", cwd.display()),
             )
@@ -412,7 +467,13 @@ impl<'a> Repository<'a> {
     }
 
     pub fn fetch(&self, remote: &str, refspecs: &[String]) -> Result<()> {
-        let mut args = vec!["fetch", "--quiet", "--no-tags", remote];
+        self.fetch_with(&[], remote, refspecs)
+    }
+
+    /// `config` entries are passed as `-c` for this one fetch only.
+    pub fn fetch_with(&self, config: &[String], remote: &str, refspecs: &[String]) -> Result<()> {
+        let mut args: Vec<&str> = config.iter().flat_map(|c| ["-c", c.as_str()]).collect();
+        args.extend(["fetch", "--quiet", "--no-tags", remote]);
         args.extend(refspecs.iter().map(String::as_str));
         self.run(&args).map(|_| ())
     }
@@ -523,6 +584,40 @@ fn text(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_before_the_subcommand_keeps_the_network_timeout() {
+        assert_eq!(subcommand(&["fetch", "origin"]), Some("fetch"));
+        assert_eq!(
+            subcommand(&["-c", "a=b", "-c", "c=d", "fetch", "origin"]),
+            Some("fetch")
+        );
+        assert_eq!(subcommand(&["-c", "a=b"]), None);
+    }
+
+    #[test]
+    fn the_gh_credential_helper_is_scoped_to_one_host_and_quoted() {
+        let config = gh_credential_config("ghe.example.com", Path::new("/opt/it's/gh"));
+        assert_eq!(
+            config,
+            vec![
+                "credential.https://ghe.example.com.helper=".to_string(),
+                "credential.https://ghe.example.com.helper=!'/opt/it'\\''s/gh' auth git-credential".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejected_credentials_are_auth_errors() {
+        for stderr in [
+            "fatal: Authentication failed for 'https://github.com/o/r.git/'",
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+            "remote: Repository not found.\nfatal: repository 'https://github.com/o/private.git/' not found",
+        ] {
+            assert_eq!(failure_code(stderr), ErrorCode::EAuth, "{stderr}");
+        }
+        assert_eq!(failure_code("fatal: bad revision 'nope'"), ErrorCode::EGit);
+    }
 
     #[test]
     fn remote_urls_parse_to_host_owner_name() {

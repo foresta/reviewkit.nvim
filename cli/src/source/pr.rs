@@ -277,8 +277,18 @@ fn materialize_locked(
         mirror.rev_parse(&base_ref).is_none() || !mirror.has_commit(&meta.base_oid)
     };
     if have.as_deref() != Some(meta.head_oid.as_str()) || base_stale {
+        // Only the URL reviewkit made up gets gh's credentials; a remote the
+        // user configured keeps the user's own setup.
+        let synthesized = format!("https://{}/{}/{}.git", repo_ref.host, repo_ref.owner, repo_ref.name);
+        let config = match src.gh.executable() {
+            Some(gh) if mirror.remote_url("origin").as_deref() == Some(synthesized.as_str()) => {
+                crate::ext::git::gh_credential_config(&repo_ref.host, gh)
+            }
+            _ => vec![],
+        };
         mirror
-            .fetch(
+            .fetch_with(
+                &config,
                 "origin",
                 &[
                     format!("+refs/pull/{}/head:{pr_ref}", meta.number),
@@ -286,15 +296,18 @@ fn materialize_locked(
                 ],
             )
             .map_err(|err| {
-                Error::new(
-                    ErrorCode::EGit,
-                    format!("cannot fetch pull request #{}: {}", meta.number, err.message),
-                )
+                let message = format!("cannot fetch pull request #{}: {}", meta.number, err.message);
+                if err.code == ErrorCode::EAuth {
+                    Error::tool("git", ErrorCode::EAuth, message)
+                        .hint(format!("run `gh auth login --hostname {}`", repo_ref.host))
+                } else {
+                    Error::tool("git", ErrorCode::EGit, message)
+                }
             })?;
     }
     let head = mirror
         .rev_parse(&pr_ref)
-        .ok_or_else(|| Error::new(ErrorCode::EGit, "the pull request head is missing after fetch"))?;
+        .ok_or_else(|| Error::tool("git", ErrorCode::EGit, "the pull request head is missing after fetch"))?;
     // A merged PR is contained in its base branch, so merge-base with the
     // branch would be the PR head itself; GitHub's recorded base commit
     // keeps the diff visible.

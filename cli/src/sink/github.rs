@@ -660,7 +660,12 @@ fn write_pending(session: &Session, plan: &Plan, session_dir: &Path) -> Result<(
 pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path) -> Result<SinkResult> {
     let plan = plan(session)?;
     write_pending(session, &plan, session_dir)?;
-    let response = gh::graphql(gh, &repo.host, &plan.mutation, plan.variables.clone())?;
+    let response = gh::graphql(gh, &repo.host, &plan.mutation, plan.variables.clone()).map_err(|err| {
+        if err.code == ErrorCode::EToolMissing {
+            return err;
+        }
+        err.outcome_unknown("the next submit checks GitHub for what was already posted before sending")
+    })?;
     let at = time::now();
     let mut sent = Vec::new();
     let mut failed = Vec::new();

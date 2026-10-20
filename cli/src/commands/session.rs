@@ -110,7 +110,7 @@ pub fn refresh(ctx: &Context, git: &SystemGit, store: &Store, id: &str) -> Resul
     let (session, ()) = match &current.source {
         Source::Local { worktree, .. } => {
             let repo = Repository::at(git, worktree.clone());
-            store.update(id, |s| local::refresh(s, &repo))?
+            store.update_if_changed(id, |s| local::refresh(s, &repo))?
         }
         Source::Pr { .. } => {
             let gh = SystemGh::new(ctx.tools.gh.as_deref())?;
@@ -124,7 +124,7 @@ pub fn refresh(ctx: &Context, git: &SystemGit, store: &Store, id: &str) -> Resul
             store.with_fetch_lock(id, || {
                 let current = store.load(id)?;
                 let snapshot = pr::fetch(&current, &src, store, None)?;
-                store.update(id, |s| crate::core::refresh::apply(s, snapshot, git))
+                store.update_if_changed(id, |s| crate::core::refresh::apply(s, snapshot, git))
             })?
         }
     };

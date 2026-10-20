@@ -252,6 +252,11 @@ fn a_failed_send_keeps_the_queue_with_last_error() {
     );
     assert_eq!(body["data"]["failed"][0]["comment_id"], serde_json::Value::Null);
     assert_eq!(body["data"]["failed"][0]["error"]["code"], "E_TOOL");
+    assert_eq!(
+        body["data"]["failed"][0]["error"]["retryable"], false,
+        "the agent may have received it"
+    );
+    assert_eq!(body["data"]["failed"][0]["error"]["details"]["outcome"], "unknown");
     assert_eq!(body["data"]["decision"], "failed");
     assert_eq!(body["session"]["comments"].as_array().unwrap().len(), 2);
     assert_eq!(body["session"]["comments"][0]["last_error"]["code"], "E_TOOL");

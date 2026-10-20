@@ -114,7 +114,7 @@ M.SCHEMA_VERSION = 1
 --- new sink or source adds no codes. The aliases read states saved before
 --- the codes were generic. No per-variant docs: they would turn the JSON
 --- Schema into a `oneOf` instead of one `enum` list.
----@alias reviewkit.ErrorCode "E_USAGE"|"E_INVALID"|"E_NOT_COMMENTABLE"|"E_NO_SESSION"|"E_NO_COMMENT"|"E_NO_TARGET"|"E_NO_THREAD"|"E_GIT"|"E_TOOL"|"E_TOOL_MISSING"|"E_AUTH"|"E_PENDING_REVIEW"|"E_AMBIGUOUS"|"E_CONFLICT"|"E_LOCKED"|"E_SCHEMA_VERSION"|"E_INTERNAL"
+---@alias reviewkit.ErrorCode "E_USAGE"|"E_INVALID"|"E_NOT_COMMENTABLE"|"E_NO_SESSION"|"E_NO_COMMENT"|"E_NO_TARGET"|"E_NO_THREAD"|"E_GIT"|"E_TOOL"|"E_TOOL_MISSING"|"E_AUTH"|"E_PENDING_REVIEW"|"E_AMBIGUOUS"|"E_CONFLICT"|"E_LOCKED"|"E_SCHEMA_VERSION"|"E_INTERNAL"|"E_IO"
 
 --- One hash per section, so a client can tell which sections changed
 --- without diffing the whole session.
@@ -147,7 +147,7 @@ M.SCHEMA_VERSION = 1
 ---@field agent_type? reviewkit.AgentType
 ---@field header? string
 ---@field match_foreground_cwd? boolean
----@field stage? boolean
+---@field stage? boolean Puts the text in the agent's input without pressing Enter (not git staging); the agent's user submits or discards it.
 ---@field target? string A pane id (`SinkTarget.id`); without it the pane is found by cwd.
 
 --- Zero-context hunk. When a count is 0 the start is the line *before* the

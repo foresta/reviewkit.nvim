@@ -54,17 +54,32 @@ fn resolve_base(repo: &Repository<'_>, base: &str, head: Option<&str>) -> Result
     })
 }
 
-/// `local/<sha256(root)[:12]>/<base>..<head>`. The root hash keeps sessions
-/// of different checkouts apart; specs are path-safe because `/` would split
-/// the id into extra directories.
+/// `local/<sha256(root)[:12]>/<sha256(base, head)[:16]>`. The specs are
+/// hashed rather than escaped: an escape that maps `/` to something else
+/// collides with a spec that already contains it, and refs differing only in
+/// case share a directory on case-insensitive file systems. The specs stay
+/// readable in `Source::Local`.
 pub fn session_id(root: &Path, spec: &LocalSpec) -> String {
-    let digest = Sha256::digest(root.to_string_lossy().as_bytes());
-    let root_key: String = digest[..6].iter().map(|b| format!("{b:02x}")).collect();
-    format!(
-        "local/{root_key}/{}..{}",
-        spec.base.replace('/', "__"),
-        spec.head_label().replace('/', "__")
-    )
+    let hex = |bytes: &[u8]| -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() };
+    let root_key = hex(&Sha256::digest(root.to_string_lossy().as_bytes())[..6]);
+    let mut specs = Sha256::new();
+    specs.update(spec.base.as_bytes());
+    specs.update([0]);
+    specs.update(spec.head_label().as_bytes());
+    format!("local/{root_key}/{}", hex(&specs.finalize()[..8]))
+}
+
+/// A hash collision must not resume another review in place of this one.
+fn same_spec(session: &Session, spec: &LocalSpec) -> Result<()> {
+    match &session.source {
+        Source::Local {
+            base_spec, head_spec, ..
+        } if *base_spec == spec.base && head_spec == spec.head_label() => Ok(()),
+        _ => Err(Error::new(
+            crate::error::ErrorCode::EConflict,
+            format!("session {} belongs to another comparison", session.id),
+        )),
+    }
 }
 
 /// Specs are resolved before the store touches disk, so a typo in --base
@@ -78,7 +93,10 @@ pub fn open(store: &Store, repo: &Repository<'_>, spec: &LocalSpec) -> Result<Se
     let (session, ()) = store.open_or_create(
         &id,
         || Ok(new_session(id.clone(), repo, spec)),
-        |session| refresh(session, repo),
+        |session| {
+            same_spec(session, spec)?;
+            refresh(session, repo)
+        },
     )?;
     Ok(session)
 }
@@ -177,7 +195,69 @@ mod tests {
         };
         let id = session_id(Path::new("/repo"), &spec);
         assert!(id.starts_with("local/"));
-        assert!(id.ends_with("/origin__main..worktree"));
+        assert_eq!(id.split('/').count(), 3, "{id}");
         assert_eq!(id, session_id(Path::new("/repo"), &spec));
+    }
+
+    #[test]
+    fn a_session_of_another_comparison_under_the_same_id_is_a_conflict() {
+        use crate::model::{HeadRef, Repo, RevRef};
+        let session = Session::new(
+            "local/x/y".into(),
+            Repo {
+                root: "/repo".into(),
+                host: None,
+                owner: None,
+                name: None,
+                remote_url: None,
+            },
+            Source::Local {
+                base_spec: "main".into(),
+                head_spec: "worktree".into(),
+                worktree: "/repo".into(),
+            },
+            RevRef {
+                r#ref: Some("main".into()),
+                sha: String::new(),
+            },
+            HeadRef {
+                r#ref: None,
+                sha: None,
+                dirty: false,
+            },
+            "t".into(),
+        );
+        let spec = |base: &str| LocalSpec {
+            base: base.into(),
+            head: None,
+        };
+        assert!(same_spec(&session, &spec("main")).is_ok());
+        assert_eq!(
+            same_spec(&session, &spec("Main")).unwrap_err().code,
+            crate::error::ErrorCode::EConflict
+        );
+    }
+
+    #[test]
+    fn session_ids_differ_for_specs_that_used_to_collide() {
+        let id = |base: &str| {
+            session_id(
+                Path::new("/repo"),
+                &LocalSpec {
+                    base: base.into(),
+                    head: None,
+                },
+            )
+        };
+        assert_ne!(id("a/b"), id("a__b"));
+        assert_ne!(id("Feature"), id("feature"), "case-insensitive file systems");
+        let with_head = session_id(
+            Path::new("/repo"),
+            &LocalSpec {
+                base: "a".into(),
+                head: Some("b".into()),
+            },
+        );
+        assert_ne!(with_head, id("a"));
     }
 }

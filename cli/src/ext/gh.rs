@@ -17,6 +17,11 @@ pub trait Gh {
     /// exit 1 and a body that still carries the successful parts.
     fn run_raw(&self, args: &[&str], stdin: Option<&str>) -> Result<RawOutput>;
 
+    /// Where gh lives, for git to call it as a credential helper.
+    fn executable(&self) -> Option<&Path> {
+        None
+    }
+
     fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<Vec<u8>> {
         let what = args.iter().take(2).copied().collect::<Vec<_>>().join(" ");
         let out = self.run_raw(args, stdin)?;
@@ -92,6 +97,10 @@ impl SystemGh {
 }
 
 impl Gh for SystemGh {
+    fn executable(&self) -> Option<&Path> {
+        Some(&self.path)
+    }
+
     fn run_raw(&self, args: &[&str], stdin: Option<&str>) -> Result<RawOutput> {
         let what = args.iter().take(2).copied().collect::<Vec<_>>().join(" ");
         log::debug!("gh {what}");
@@ -544,6 +553,7 @@ pub fn parse_pr_arg(arg: &str) -> Result<(u64, Option<RepoRef>)> {
         .strip_prefix("https://")
         .or_else(|| arg.strip_prefix("http://"))
         .ok_or_else(|| Error::invalid(format!("not a pull request number or URL: {arg}")))?;
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
     let mut parts = rest.trim_end_matches('/').split('/');
     let host = parts.next().unwrap_or("");
     let host = host.split('@').next_back().unwrap_or(host);
@@ -593,6 +603,13 @@ mod tests {
         let (_, repo) = parse_pr_arg("https://me@ghe.example.com/o/r/pull/1").unwrap();
         assert_eq!(repo.unwrap().host, "ghe.example.com");
         assert!(parse_pr_arg("https://github.com/o/r/issues/1").is_err());
+        for url in [
+            "https://github.com/o/r/pull/9?notification_referrer_id=x",
+            "https://github.com/o/r/pull/9#discussion_r1",
+            "https://github.com/o/r/pull/9/files?w=1#diff-abc",
+        ] {
+            assert!(matches!(parse_pr_arg(url), Ok((9, Some(_)))), "{url}");
+        }
         assert!(parse_pr_arg("abc").is_err());
     }
 

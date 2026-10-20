@@ -63,8 +63,8 @@ impl Store {
         }
     }
 
-    /// First save. The lock is taken even here so two `session open` calls
-    /// racing on the same id cannot both think they created it.
+    /// Sessions are created through `open_or_create`; this seeds tests.
+    #[cfg(test)]
     pub fn create(&self, mut session: Session) -> Result<Session> {
         let dir = self.dir.session_dir(&session.id)?;
         std::fs::create_dir_all(&dir)?;
@@ -90,6 +90,30 @@ impl Store {
             let mut session = self.load_for_write(id)?;
             let value = apply(&mut session)?;
             self.commit(&mut session)?;
+            self.mark_pending(&mut session);
+            Ok((session, value))
+        })
+    }
+
+    /// `update` that leaves the file alone when `apply` changed nothing. For
+    /// refreshes: the client watches the file, and a write that changes
+    /// nothing would make it refresh again.
+    pub fn update_if_changed<T>(
+        &self,
+        id: &str,
+        apply: impl FnOnce(&mut Session) -> Result<T>,
+    ) -> Result<(Session, T)> {
+        self.with_lock(id, || {
+            let mut session = self.load_for_write(id)?;
+            let before = serde_json::to_value(&session).map_err(serialize_error)?;
+            let value = apply(&mut session)?;
+            if serde_json::to_value(&session).map_err(serialize_error)? != before {
+                self.commit(&mut session)?;
+            } else {
+                // commit sets it on writes; a moved state dir must still
+                // hand the client the file it can watch.
+                session.state_path = self.dir.session_file(id)?;
+            }
             self.mark_pending(&mut session);
             Ok((session, value))
         })
@@ -695,7 +719,7 @@ mod tests {
             .collect();
         assert_eq!(
             (SCHEMA_REVISION, hash.as_str()),
-            (4, "7361b57554d0b6da"),
+            (5, "d3d5b062baa7a1b2"),
             "the persisted shape of Session changed (doc comments do not count): bump SCHEMA_REVISION and update this hash"
         );
     }

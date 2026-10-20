@@ -118,7 +118,7 @@ fn reopening_rereads_metadata_and_resume_works() {
             .output()
             .unwrap(),
     );
-    assert_eq!(again["session"]["rev"], 2);
+    assert_eq!(again["session"]["rev"], 1, "nothing changed, so nothing was written");
     assert!(gh.calls().len() > calls_before, "metadata is re-read on resume");
     let listed = json(
         &reviewkit(&state, &remote, &gh)
@@ -306,7 +306,7 @@ fn reopen_skips_the_fetch_when_nothing_moved_and_fetches_when_the_base_moves() {
             .output()
             .unwrap(),
     );
-    assert_eq!(again["session"]["rev"], 2);
+    assert_eq!(again["session"]["rev"], 1, "nothing changed, so nothing was written");
 
     // main moves on the remote; GitHub reports the new base oid; the mirror
     // must fetch it even though the PR head is unchanged.
@@ -441,7 +441,7 @@ fn a_deleted_mirror_is_recreated_on_reopen() {
             .output()
             .unwrap(),
     );
-    assert_eq!(again["session"]["rev"], 2);
+    assert_eq!(again["session"]["rev"], 1, "nothing changed, so nothing was written");
     assert!(worktree.join("added.txt").exists());
 }
 

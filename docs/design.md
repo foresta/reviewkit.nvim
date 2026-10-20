@@ -35,16 +35,24 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
 | 4 | 外部ツール | `E_GIT`、`E_TOOL`、`E_TOOL_MISSING`、`E_AUTH`、`E_PENDING_REVIEW`、`E_AMBIGUOUS` |
 | 5 | 競合 | `E_CONFLICT`、`E_LOCKED` |
 | 6 | 契約不一致 | `E_SCHEMA_VERSION`（保存済み session.json を移行できないとき） |
-| 70 | 内部 | `E_INTERNAL` |
+| 70 | 内部 | `E_INTERNAL`（バグ） |
+| 74 | 入出力 | `E_IO`（ディスクフル、権限不足など環境の問題） |
 
 - `E_NOT_COMMENTABLE` は「行がファイルの範囲外」か「path がリポジトリに無い」ときだけ。diff 外や targets 外の path への
   コメントは積める（D4）。その場合 `commentable.github = false` で、sink-github は review 本文の「Comments outside the diff」節に
   `path` と行、`blob/<sha>/path#L..` のリンク、本文を書いて送る（`SubmitPreview.body_comment_ids`）。stale だけは `skipped`。
   issue 以外の kind は本文の先頭に `**nit:**` のように付ける
 - `E_AMBIGUOUS` は `details.candidates` に候補（`SinkTarget[]`）を載せる。cwd に一致する agent が 0 件なら全 agent を候補にする
-- コードは「何が起きたか」を表し、ツール名を含めない。どのツールかは `error.tool`（"gh" / "herdr"）で示すので、
-  sink や source を足してもコードは増えない。最初のリリース以降、コードは追加だけで改名しない。`E_GIT` は core が
-  直接依存する git のために残す
+- コードは「何が起きたか」を表し、ツール名を含めない。どのツールかは `error.tool`（"git" / "gh" / "herdr"）で示すので、
+  sink や source を足してもコードは増えない。最初のリリース以降、コードは追加だけで改名しない。`E_GIT` は「git が動いて
+  失敗した」ときに限り（core が直接依存するため残す）、git が無いときは他のツールと同じ `E_TOOL_MISSING`
+- `retryable` は「同じコマンドをそのまま再実行しても副作用が重複しない」ときだけ true。GitHub への mutation と herdr への
+  送信が失敗・timeout したときは、相手に届いたかどうか分からないので false にし、`details.outcome = "unknown"` と
+  確かめ方の hint を付ける。GitHub は次の submit が pending の記録と照合する（§5）。herdr には照合が無いので、
+  エージェントの画面で確かめてから送り直す
+- private リポジトリの PR を、origin が別のリポジトリの checkout から開くと、reviewkit は `https://<host>/<owner>/<name>.git`
+  を自分で組み立てて mirror を作る。この URL の fetch に限り、その host の credential helper を gh（`gh auth git-credential`）に
+  差し替える。ユーザーの remote と設定には触れない。認証に失敗したら `E_AUTH`（tool = git、hint `gh auth login --hostname <host>`）
 - `E_PENDING_REVIEW` は GitHub 側に pending review が残っていて `addPullRequestReview` が通らないとき
 - `E_SCHEMA_VERSION` は CLI が移行できない session.json を読んだとき（移行の手順が無い古い版、または新しい版）。
   古い版でも移行の手順があれば読むときに移行するので、このエラーにはならない。CLI と `types.lua` の版違いは Lua が `version` で検出する
@@ -62,7 +70,8 @@ JSON、snake_case。`?` は省略可能な入力、`| null` は出力で null �
 Session {
   schema_version: 1
   id: string                -- "pr/<host>/<owner>/<repo>/<number>"
-                            -- "local/<sha256(repo_root)[:12]>/<base_spec>..<head_spec>"（'/' は '__'）
+                            -- "local/<sha256(repo_root)[:12]>/<sha256(base_spec + "\0" + head_spec)[:16]>"
+                            -- spec は source に読める形で残る。同じ id で spec が違えば E_CONFLICT
   rev: int                  -- 変更ごとに +1
   state_path: string        -- Lua が fs_event で監視できる
   repo:   { root, host, owner, name, remote_url }     -- host / owner / name は local の非 GitHub なら null
@@ -144,7 +153,7 @@ HerdrOptions {
   target?: string           -- SinkTarget.id（pane）。無ければ cwd で探す
   agent_type?: "claude" | "plain"
   header?: string
-  stage?: bool              -- 送信せず入力欄に置くだけ（pane send-text）
+  stage?: bool              -- エージェントの入力欄に置くだけで Enter は送らない（pane send-text）。git の staging とは無関係
   match_foreground_cwd?: bool
 }
 GithubOptions {}

@@ -31,6 +31,7 @@ pub enum ErrorCode {
     ELocked,
     ESchemaVersion,
     EInternal,
+    EIo,
 }
 
 impl ErrorCode {
@@ -44,6 +45,7 @@ impl ErrorCode {
             EConflict | ELocked => 5,
             ESchemaVersion => 6,
             EInternal => 70,
+            EIo => 74,
         }
     }
 }
@@ -97,6 +99,21 @@ impl Error {
         err
     }
 
+    /// For a failure after something may already have reached the other
+    /// side: running the same command again could deliver it twice.
+    pub fn outcome_unknown(mut self, hint: impl Into<String>) -> Self {
+        // Refused before anything was sent: the original hint says what to fix.
+        if matches!(self.code, ErrorCode::EAuth | ErrorCode::EToolMissing) {
+            return self;
+        }
+        self.retryable = false;
+        if let serde_json::Value::Object(map) = &mut self.details {
+            map.insert("outcome".into(), serde_json::json!("unknown"));
+        }
+        self.hint = Some(hint.into());
+        self
+    }
+
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
@@ -131,13 +148,33 @@ impl Error {
 
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Self {
-        Error::internal(err.to_string())
+        Error::new(ErrorCode::EIo, err.to_string())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_request_keeps_its_hint_when_marked_as_possibly_sent() {
+        let auth = Error::tool("gh", ErrorCode::EAuth, "not logged in").hint("run `gh auth login`");
+        let kept = auth.outcome_unknown("check what was posted");
+        assert_eq!(kept.hint.as_deref(), Some("run `gh auth login`"));
+        assert!(kept.details.get("outcome").is_none());
+        let maybe = Error::tool("gh", ErrorCode::ETool, "timeout")
+            .retryable()
+            .outcome_unknown("check");
+        assert!(!maybe.retryable);
+        assert_eq!(maybe.details["outcome"], "unknown");
+    }
+
+    #[test]
+    fn io_errors_are_environment_errors_not_bugs() {
+        let err: Error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied").into();
+        assert_eq!(err.code.to_string(), "E_IO");
+        assert_eq!(err.code.exit_code(), 74);
+    }
 
     #[test]
     fn display_uses_the_wire_name() {
