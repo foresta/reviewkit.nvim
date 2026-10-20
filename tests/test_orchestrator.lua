@@ -861,6 +861,34 @@ T["orchestrator"]["cancelling the preview sends nothing, and the preview can be 
   eq(github_submits(), 1)
 end
 
+T["orchestrator"]["a send that differs from the confirmed preview is previewed again"] = function()
+  local rules = github_rules()
+  rules[2].body.data.preview.digest = "d1"
+  table.insert(rules, 2, {
+    match = { "submit", "--sink github", '"expect_digest":"d1"' },
+    body = {
+      ok = false,
+      error = {
+        code = "E_CONFLICT",
+        message = "changed",
+        retryable = false,
+        details = { reason = "preview_changed" },
+      },
+    },
+    exit = 5,
+  })
+  helpers.respond(dir, rules)
+  child.cmd("Review pr 7")
+  wait_notice("#7 Add k")
+  child.cmd("ReviewSubmit github")
+  child.lua("vim.wait(20000, function() return vim.bo.filetype == 'markdown' end, 20)")
+  child.type_keys("y")
+  wait_notice("check it again")
+  child.lua("vim.wait(20000, function() return vim.bo.filetype == 'markdown' end, 20)")
+  eq(#calls_with("--dry-run"), 2)
+  eq(child.lua_get("vim.bo.filetype"), "markdown")
+end
+
 T["orchestrator"]["the GitHub confirmation previews the same selection it sends"] = function()
   helpers.respond(dir, github_rules())
   child.cmd("Review pr 7")

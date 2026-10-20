@@ -943,3 +943,19 @@ fn a_comment_edited_while_a_client_side_sink_ran_is_not_taken_as_delivered() {
     assert!(marked(&second));
     assert!(!marked(&third), "added after the attempt started");
 }
+
+#[test]
+fn herdr_refuses_a_preview_digest_it_never_gave() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let out = cmd(&state, &repo, &herdr)
+        .args(["submit", "--session", &id, "--sink", "herdr", "--options", "-"])
+        .write_stdin(r#"{"target": "w9:p3", "expect_digest": "abc"}"#)
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(body["error"]["code"], "E_INVALID");
+    assert!(herdr.last_text().is_empty());
+}

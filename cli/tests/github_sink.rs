@@ -1747,3 +1747,154 @@ fn a_decision_sent_with_threads_is_found_through_their_markers_and_not_resent() 
     assert!(body["session"]["decision"].is_null());
     assert_eq!(mutation_calls(&gh).len(), 1, "not approved twice");
 }
+
+fn preview_github(state: &tempfile::TempDir, remote: &Remote, gh: &FakeGh, id: &str) -> serde_json::Value {
+    json(
+        &reviewkit(state, remote, gh)
+            .args(["submit", "--session", id, "--sink", "github", "--dry-run"])
+            .output()
+            .unwrap(),
+    )["data"]["preview"]
+        .clone()
+}
+
+fn submit_confirmed(
+    state: &tempfile::TempDir,
+    remote: &Remote,
+    gh: &FakeGh,
+    id: &str,
+    digest: &serde_json::Value,
+) -> serde_json::Value {
+    serde_json::from_slice(
+        &reviewkit(state, remote, gh)
+            .args(["submit", "--session", id, "--sink", "github", "--options", "-"])
+            .write_stdin(serde_json::json!({ "expect_digest": digest }).to_string())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_confirmed_submit_is_refused_when_the_session_changed_after_the_preview() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "looked at"}),
+    );
+    decide(&state, &remote, &gh, &id, "comment", "fine");
+    let preview = preview_github(&state, &remote, &gh, &id);
+    assert!(preview["digest"].is_string());
+    assert_eq!(
+        preview_github(&state, &remote, &gh, &id)["digest"],
+        preview["digest"],
+        "the same content gives the same digest"
+    );
+    // Another instance approves between the preview and the send.
+    decide(&state, &remote, &gh, &id, "approve", "fine");
+    let refused = submit_confirmed(&state, &remote, &gh, &id, &preview["digest"]);
+    assert_eq!(refused["error"]["code"], "E_CONFLICT");
+    assert_eq!(refused["error"]["details"]["reason"], "preview_changed");
+    assert!(mutation_calls(&gh).is_empty());
+
+    let again = preview_github(&state, &remote, &gh, &id);
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_1", "url": "u1" } } } }),
+        0,
+    );
+    let sent = submit_confirmed(&state, &remote, &gh, &id, &again["digest"]);
+    assert_eq!(sent["ok"], true);
+    assert_eq!(mutation_calls(&gh)[0]["variables"]["event"], "APPROVE");
+}
+
+#[test]
+fn the_preview_reconciles_an_interrupted_submit_so_its_digest_matches_the_send() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let posted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "landed"}),
+    );
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let landed = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", &landed)]),
+        serde_json::json!([]),
+    );
+    let fresh = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 11, "body": "new"}),
+    );
+    let preview = preview_github(&state, &remote, &gh, &id);
+    assert_eq!(preview["comment_ids"], serde_json::json!([fresh]), "{preview}");
+    assert!(pending_file(&state).exists(), "the preview saves nothing");
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_2", "url": "u2" } } } }),
+        0,
+    );
+    let sent = submit_confirmed(&state, &remote, &gh, &id, &preview["digest"]);
+    let ids: Vec<&str> = sent["data"]["sent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["comment_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec![posted.as_str(), fresh.as_str()]);
+}
+
+#[test]
+fn a_preview_of_an_interrupted_submit_that_fully_landed_still_lets_the_send_record_it() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let posted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "all of it"}),
+    );
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let landed = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", &landed)]),
+        serde_json::json!([]),
+    );
+    let preview = preview_github(&state, &remote, &gh, &id);
+    assert_eq!(preview["comment_ids"], serde_json::json!([]), "{preview}");
+    let sent = submit_confirmed(&state, &remote, &gh, &id, &preview["digest"]);
+    assert_eq!(sent["data"]["sent"][0]["comment_id"], posted);
+    assert!(sent["session"]["comments"].as_array().unwrap().is_empty());
+    assert!(!pending_file(&state).exists());
+    assert_eq!(mutation_calls(&gh).len(), 1);
+}

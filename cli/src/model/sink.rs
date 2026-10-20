@@ -5,7 +5,7 @@ use super::Reason;
 use super::session::ThreadActionKind;
 use crate::error::Error;
 
-/// `consume` and `comment_ids` are the keys every sink shares; the rest of
+/// `consume`, `comment_ids` and `expect_digest` are the keys every sink shares; the rest of
 /// the object is the chosen sink's own options (`HerdrOptions`,
 /// `GithubOptions`), kept flat so a client can pass one table per sink as it is.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -19,6 +19,10 @@ pub struct SubmitOptions {
     /// actions. An id already in the history counts as sent and is dropped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment_ids: Option<Vec<String>>,
+    /// The `digest` of the preview the user confirmed; a send that differs
+    /// from it is refused instead of posting something not shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_digest: Option<String>,
     #[serde(flatten)]
     pub sink: serde_json::Map<String, serde_json::Value>,
 }
@@ -162,6 +166,10 @@ pub struct SubmitPreview {
     /// changes whenever the sink's transport does.
     #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
     pub raw: serde_json::Value,
+    /// What `SubmitOptions.expect_digest` is compared with; only sinks that
+    /// can check it under the session lock give one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

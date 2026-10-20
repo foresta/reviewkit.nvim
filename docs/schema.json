@@ -1382,7 +1382,7 @@
       },
       "SubmitOptions": {
         "additionalProperties": true,
-        "description": "`consume` and `comment_ids` are the keys every sink shares; the rest of\nthe object is the chosen sink's own options (`HerdrOptions`,\n`GithubOptions`), kept flat so a client can pass one table per sink as it is.",
+        "description": "`consume`, `comment_ids` and `expect_digest` are the keys every sink shares; the rest of\nthe object is the chosen sink's own options (`HerdrOptions`,\n`GithubOptions`), kept flat so a client can pass one table per sink as it is.",
         "properties": {
           "comment_ids": {
             "description": "Sends only these queued comments, without the decision and thread\nactions. An id already in the history counts as sent and is dropped.",
@@ -1399,6 +1399,13 @@
             "description": "Whether delivered comments leave the queue. By default only the\nsession kind's own destination consumes them; github always does,\nsince keeping posted comments would post them again.",
             "type": [
               "boolean",
+              "null"
+            ]
+          },
+          "expect_digest": {
+            "description": "The `digest` of the preview the user confirmed; a send that differs\nfrom it is refused instead of posting something not shown.",
+            "type": [
+              "string",
               "null"
             ]
           }
@@ -1432,6 +1439,13 @@
               }
             ],
             "description": "The review event that will be posted, also when it is implied (a\ngithub review of comments without a Decision is a `comment`)."
+          },
+          "digest": {
+            "description": "What `SubmitOptions.expect_digest` is compared with; only sinks that\ncan check it under the session lock give one.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "mode": {
             "$ref": "#/$defs/DeliveryMode"
@@ -1933,6 +1947,6 @@
     "title": "Contract",
     "type": "object"
   },
-  "schema_revision": 8,
+  "schema_revision": 9,
   "schema_version": 1
 }
