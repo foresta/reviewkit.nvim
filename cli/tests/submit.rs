@@ -277,6 +277,85 @@ fn the_history_stays_out_of_the_envelope_and_is_listed_on_request() {
 }
 
 #[test]
+fn delivered_comments_can_be_cleared_restored_and_the_history_emptied() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let root = repo.path().canonicalize().unwrap();
+    let herdr = FakeHerdr::new(serde_json::json!([agent("w1:p1", root.to_str().unwrap())]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let run = |args: &[&str], stdin: Option<&str>| {
+        let mut c = cmd(&state, &repo, &herdr);
+        c.args(args);
+        if let Some(stdin) = stdin {
+            c.write_stdin(stdin.to_string());
+        }
+        let out = c.output().unwrap();
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let sent = run(
+        &["submit", "--session", &id, "--sink", "herdr", "--options", "-"],
+        Some(r#"{"consume": false}"#),
+    );
+    assert_eq!(sent["session"]["comments"].as_array().unwrap().len(), 2);
+    let no_flag = run(&["comment", "clear", "--session", &id], None);
+    assert_eq!(no_flag["error"]["code"], "E_USAGE", "clearing needs --delivered");
+    let other_sink = run(
+        &["comment", "clear", "--session", &id, "--delivered", "--sink", "github"],
+        None,
+    );
+    assert_eq!(other_sink["data"]["moved"], serde_json::json!([]));
+    let cleared = run(
+        &["comment", "clear", "--session", &id, "--delivered", "--sink", "herdr"],
+        None,
+    );
+    let moved = cleared["data"]["moved"].as_array().unwrap().clone();
+    assert_eq!(moved.len(), 2);
+    assert!(cleared["session"]["comments"].as_array().unwrap().is_empty());
+    let cid = moved[0].as_str().unwrap();
+    let restored = run(&["history", "restore", "--session", &id, "--id", cid], None);
+    let queue = restored["session"]["comments"].as_array().unwrap();
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0]["deliveries"][0]["sink"], "herdr", "where it went is kept");
+    let twice = run(&["history", "restore", "--session", &id, "--id", cid], None);
+    assert_eq!(
+        twice["session"]["comments"].as_array().unwrap().len(),
+        1,
+        "restoring is idempotent"
+    );
+    let missing = run(&["history", "restore", "--session", &id, "--id", "c_nope"], None);
+    assert_eq!(missing["error"]["code"], "E_NO_COMMENT");
+    let emptied = run(&["history", "clear", "--session", &id], None);
+    assert_eq!(emptied["data"]["removed"], 1);
+    let listed = run(&["history", "list", "--session", &id], None);
+    assert_eq!(listed["data"], serde_json::json!([]));
+}
+
+#[test]
+fn a_comment_that_reached_its_destination_cannot_come_back() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let root = repo.path().canonicalize().unwrap();
+    let herdr = FakeHerdr::new(serde_json::json!([agent("w1:p1", root.to_str().unwrap())]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let sent = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "--session", &id, "--sink", "herdr"])
+            .output()
+            .unwrap(),
+    );
+    let cid = sent["data"]["sent"][0]["comment_id"].as_str().unwrap().to_string();
+    let out = cmd(&state, &repo, &herdr)
+        .args(["history", "restore", "--session", &id, "--id", &cid])
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        body["error"]["code"], "E_INVALID",
+        "editing it would deliver it twice: {body}"
+    );
+}
+
+#[test]
 fn a_lua_sink_consumes_only_when_asked() {
     let state = tempfile::tempdir().unwrap();
     let repo = Repo::new();

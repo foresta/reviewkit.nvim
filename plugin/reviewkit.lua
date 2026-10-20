@@ -64,6 +64,10 @@ for _, map in ipairs(require("reviewkit.maps")) do
   end, { desc = desc })
 end
 
+vim.api.nvim_create_user_command("ReviewHistory", function()
+  orchestrator().history()
+end, { desc = "reviewkit: list comments that left the queue (r puts one back)" })
+
 vim.api.nvim_create_user_command("ReviewLog", function()
   require("reviewkit.log").show()
 end, { desc = "reviewkit: show recent CLI calls and errors" })

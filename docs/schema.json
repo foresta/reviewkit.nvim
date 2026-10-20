@@ -415,6 +415,11 @@
           "at": {
             "type": "string"
           },
+          "consumed": {
+            "default": false,
+            "description": "This delivery took the comment out of the queue: it reached the\nsession's destination. Such a comment is never put back (an edit\nwould deliver it twice) and is the only kind the history drops.",
+            "type": "boolean"
+          },
           "mode": {
             "$ref": "#/$defs/DeliveryMode"
           },

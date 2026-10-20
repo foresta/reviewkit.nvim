@@ -194,6 +194,43 @@ pub fn remove(session: &mut Session, id: &str) -> Result<Comment> {
     Ok(session.comments.remove(index))
 }
 
+/// Moves comments delivered (for real, not staged or copied) out of the
+/// queue, optionally only those delivered through one sink.
+pub fn clear_delivered(session: &mut Session, sink: Option<&str>) -> Vec<String> {
+    let delivered = |c: &Comment| {
+        c.deliveries
+            .iter()
+            .any(|d| d.mode == crate::model::DeliveryMode::Sent && sink.is_none_or(|s| d.sink == s))
+    };
+    let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut session.comments).into_iter().partition(delivered);
+    session.comments = kept;
+    let moved = gone.iter().map(|c| c.id.clone()).collect();
+    crate::core::apply::retire(&mut session.history, gone);
+    moved
+}
+
+/// Brings a comment back with its deliveries, so no sink sends it twice.
+/// A comment already in the queue stays where it is.
+pub fn restore(session: &mut Session, id: &str) -> Result<()> {
+    if session.comments.iter().any(|c| c.id == id) {
+        return Ok(());
+    }
+    let index = session
+        .history
+        .iter()
+        .position(|c| c.id == id)
+        .ok_or_else(|| Error::new(ErrorCode::ENoComment, format!("no such comment in the history: {id}")))?;
+    if let Some(d) = session.history[index].deliveries.iter().find(|d| d.consumed) {
+        return Err(Error::invalid(format!(
+            "{id} already reached its destination ({}); queue a new comment instead",
+            d.sink
+        )));
+    }
+    let comment = session.history.remove(index);
+    session.comments.push(comment);
+    Ok(())
+}
+
 pub fn find(session: &Session, id: &str) -> Result<usize> {
     session
         .comments

@@ -711,6 +711,19 @@ function M.close(opts)
   end)
 end
 
+function M.history()
+  if not core.session() then
+    return notify("no review session is open")
+  end
+  core.history(function(err, history)
+    if err then
+      return notify_error(err)
+    end
+    require("reviewkit.view.queue").show_history(history or {})
+    vim.cmd("botright copen")
+  end)
+end
+
 function M.install()
   require("reviewkit.install").ensure_async({ log = notify }, function(result, err)
     if not result then

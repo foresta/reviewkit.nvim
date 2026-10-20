@@ -145,13 +145,15 @@ expression: full_session()
         {
           "sink": "herdr",
           "at": "2026-01-02T03:04:05.000000Z",
-          "mode": "staged"
+          "mode": "staged",
+          "consumed": false
         },
         {
           "sink": "clipboard",
           "at": "2026-01-02T03:04:05.000000Z",
           "mode": "copied",
-          "url": "u"
+          "url": "u",
+          "consumed": false
         }
       ],
       "created_at": "2026-01-02T03:04:05.000000Z",

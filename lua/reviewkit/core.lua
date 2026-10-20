@@ -339,6 +339,41 @@ local function mutate(args, stdin, cb)
   end)
 end
 
+--- Newest first; not cached, since the session is sent without it.
+---@param cb fun(err: reviewkit.Error?, history: reviewkit.Comment[]?)
+function M.history(cb)
+  local session, err = require_session()
+  if not session then
+    return vim.schedule(function()
+      cb(err)
+    end)
+  end
+  cli.call({ "history", "list", "--session", session.id }, {}, function(run_err, envelope)
+    cb(run_err, envelope and envelope.data or nil)
+  end)
+end
+
+---@param id string
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
+function M.restore(id, cb)
+  mutate({ "history", "restore", "--id", id }, nil, cb)
+end
+
+---@param sink string?
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?, data?: { moved: string[] })
+function M.clear_delivered(sink, cb)
+  local args = { "comment", "clear", "--delivered" }
+  if sink then
+    vim.list_extend(args, { "--sink", sink })
+  end
+  mutate(args, nil, cb)
+end
+
+---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?, data?: { removed: integer })
+function M.clear_history(cb)
+  mutate({ "history", "clear" }, nil, cb)
+end
+
 ---@param input reviewkit.CommentInput
 ---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?, data?: { id: string })
 function M.add_comment(input, cb)

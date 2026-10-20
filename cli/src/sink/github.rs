@@ -1057,6 +1057,7 @@ mod tests {
                 at: "t".into(),
                 mode: DeliveryMode::Sent,
                 url: None,
+                consumed: false,
             });
         }
         let c2 = s.comments.iter_mut().find(|c| c.id == "c_2").unwrap();
@@ -1065,6 +1066,7 @@ mod tests {
             at: "t".into(),
             mode: DeliveryMode::Sent,
             url: None,
+            consumed: false,
         });
         let plan = plan(&s).unwrap();
         assert_eq!(

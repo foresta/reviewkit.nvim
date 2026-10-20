@@ -47,6 +47,7 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
                 at: result.at.clone(),
                 mode: result.mode,
                 url: sent.url.clone(),
+                consumed: consume,
             });
         }
     }
@@ -111,6 +112,7 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
                 at: result.at.clone(),
                 mode: result.mode,
                 url: result.url.clone(),
+                consumed: consume,
             });
         }
         if consume {
@@ -129,11 +131,19 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
 /// so without a limit the history only grows.
 pub const HISTORY_LIMIT: usize = 200;
 
-/// Oldest first; what falls off the front only loses its delivery record.
+/// Oldest first. Only comments that reached their destination are dropped
+/// to stay within the limit; one merely cleared from the queue has been
+/// sent nowhere final and would be lost for good.
 pub fn retire(history: &mut Vec<crate::model::Comment>, gone: Vec<crate::model::Comment>) {
     history.extend(gone);
-    let excess = history.len().saturating_sub(HISTORY_LIMIT);
-    history.drain(..excess);
+    let mut excess = history.len().saturating_sub(HISTORY_LIMIT);
+    history.retain(|c| {
+        if excess > 0 && c.deliveries.iter().any(|d| d.consumed) {
+            excess -= 1;
+            return false;
+        }
+        true
+    });
 }
 
 /// "3 sent, 1 skipped (outside diff), 0 failed"
@@ -209,22 +219,33 @@ mod tests {
     }
 
     #[test]
-    fn the_history_keeps_only_the_newest() {
-        let comment = |n: usize| {
+    fn the_history_drops_only_the_oldest_consumed_comments() {
+        let comment = |n: usize, consumed: bool| {
             serde_json::from_value::<crate::model::Comment>(serde_json::json!({
                 "id": format!("c_{n}"), "path": "a", "side": "head", "line": 1, "kind": "issue",
                 "body": "b", "anchor": { "base_sha": "a", "head_sha": null, "blob": null,
                     "context": { "before": [], "lines": [], "after": [] } },
                 "stale": false, "commentable": { "github": true, "reason": null },
+                "deliveries": [{ "sink": "x", "at": "t", "mode": "sent", "consumed": consumed }],
                 "created_at": "t", "updated_at": "t"
             }))
             .unwrap()
         };
-        let mut history: Vec<_> = (0..HISTORY_LIMIT).map(comment).collect();
-        retire(&mut history, vec![comment(HISTORY_LIMIT), comment(HISTORY_LIMIT + 1)]);
+        let mut history = vec![comment(0, false)];
+        history.extend((1..HISTORY_LIMIT).map(|n| comment(n, true)));
+        retire(
+            &mut history,
+            vec![comment(HISTORY_LIMIT, true), comment(HISTORY_LIMIT + 1, true)],
+        );
         assert_eq!(history.len(), HISTORY_LIMIT);
-        assert_eq!(history[0].id, "c_2", "the oldest go first");
-        assert_eq!(history.last().unwrap().id, format!("c_{}", HISTORY_LIMIT + 1));
+        assert_eq!(
+            history[0].id, "c_0",
+            "a comment only cleared never reached its destination"
+        );
+        assert_eq!(history[1].id, "c_3", "the oldest consumed ones go");
+        let mut cleared: Vec<_> = (0..HISTORY_LIMIT + 5).map(|n| comment(n, false)).collect();
+        retire(&mut cleared, vec![]);
+        assert_eq!(cleared.len(), HISTORY_LIMIT + 5, "nothing unconsumed is ever dropped");
     }
 
     #[test]
