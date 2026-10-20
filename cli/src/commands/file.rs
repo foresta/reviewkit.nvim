@@ -5,7 +5,7 @@ use crate::context::Context;
 use crate::core::files::is_binary;
 use crate::core::{TOO_LARGE_BYTES, files};
 use crate::envelope::Response;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::ext::git::SystemGit;
 use crate::store::Store;
 
@@ -13,6 +13,14 @@ use crate::store::Store;
 pub enum FileCommand {
     /// Print the base-side contents of a path, as lines.
     Base {
+        #[arg(long, value_name = "ID")]
+        session: String,
+        #[arg(long, value_name = "PATH")]
+        path: String,
+    },
+    /// Print the head-side contents of a path at the head commit. Not for a
+    /// session whose head is the working tree: the file itself is the head.
+    Head {
         #[arg(long, value_name = "ID")]
         session: String,
         #[arg(long, value_name = "PATH")]
@@ -43,32 +51,47 @@ pub fn run(ctx: &Context, command: FileCommand) -> Result<Response> {
             files::check_path(&path)?;
             let git = SystemGit::new(ctx.tools.git.as_deref())?;
             let repo = files::object_repo(&git, &session);
-            let rev = &session.base.sha;
-            let path = files::base_git_path(&session, &path);
-            if !repo.is_blob(rev, path) {
-                return Response::new(BaseFile {
-                    exists: false,
-                    binary: false,
-                    too_large: false,
-                    lines: None,
-                    raw: None,
-                });
-            }
-            let bytes = repo.read_blob(rev, path)?;
-            let binary = is_binary(&bytes);
-            let too_large = bytes.len() > TOO_LARGE_BYTES;
-            let readable = !binary && !too_large;
-            let lines = readable.then(|| files::split_lines(&String::from_utf8_lossy(&bytes)));
-            let raw = (readable && std::str::from_utf8(&bytes).is_err()).then(|| base64(&bytes));
-            Response::new(BaseFile {
-                exists: true,
-                binary,
-                too_large,
-                lines,
-                raw,
-            })
+            let git_path = files::base_git_path(&session, &path);
+            Response::new(side_file(&repo, &session.base.sha, git_path)?)
+        }
+        FileCommand::Head { session, path } => {
+            let session = store.load(&session)?;
+            files::check_path(&path)?;
+            let Some(sha) = session.head.sha.clone() else {
+                return Err(
+                    Error::invalid("the head side of this session is the working tree").hint("open the file itself")
+                );
+            };
+            let git = SystemGit::new(ctx.tools.git.as_deref())?;
+            let repo = files::object_repo(&git, &session);
+            Response::new(side_file(&repo, &sha, &path)?)
         }
     }
+}
+
+fn side_file(repo: &crate::ext::git::Repository<'_>, rev: &str, path: &str) -> Result<BaseFile> {
+    if !repo.is_blob(rev, path) {
+        return Ok(BaseFile {
+            exists: false,
+            binary: false,
+            too_large: false,
+            lines: None,
+            raw: None,
+        });
+    }
+    let bytes = repo.read_blob(rev, path)?;
+    let binary = is_binary(&bytes);
+    let too_large = bytes.len() > TOO_LARGE_BYTES;
+    let readable = !binary && !too_large;
+    let lines = readable.then(|| files::split_lines(&String::from_utf8_lossy(&bytes)));
+    let raw = (readable && std::str::from_utf8(&bytes).is_err()).then(|| base64(&bytes));
+    Ok(BaseFile {
+        exists: true,
+        binary,
+        too_large,
+        lines,
+        raw,
+    })
 }
 
 fn base64(bytes: &[u8]) -> String {

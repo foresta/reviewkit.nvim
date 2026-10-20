@@ -324,6 +324,46 @@ fn nested_repository_is_not_an_untracked_target_and_clean_tree_is_not_dirty() {
 }
 
 #[test]
+fn file_head_reads_the_head_commit_not_the_working_tree() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.write("keep.txt", "edited in the working tree\n");
+    let opened = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD~1", "--head", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let id = opened["session"]["id"].as_str().unwrap().to_string();
+    let head = json(
+        &reviewkit(&state, &repo)
+            .args(["file", "head", "--session", &id, "--path", "keep.txt"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(head["data"]["exists"], true);
+    let lines = head["data"]["lines"].as_array().unwrap();
+    assert!(!lines.iter().any(|l| l == "edited in the working tree"), "{lines:?}");
+
+    let worktree = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD~1"])
+            .output()
+            .unwrap(),
+    );
+    let wid = worktree["session"]["id"].as_str().unwrap().to_string();
+    let out = reviewkit(&state, &repo)
+        .args(["file", "head", "--session", &wid, "--path", "keep.txt"])
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        body["error"]["code"], "E_INVALID",
+        "the working tree is the head side: {body}"
+    );
+}
+
+#[test]
 fn file_base_on_a_directory_is_exists_false() {
     let state = tempfile::tempdir().unwrap();
     let repo = Repo::new();

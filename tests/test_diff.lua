@@ -103,6 +103,107 @@ T["diff"]["opening a review shows base and head side by side in diff mode"] = fu
   eq(child.lua_get("vim.bo[vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().left)].modifiable"), false)
 end
 
+T["diff"]["a session with a head commit shows that commit, read-only, not the working tree"] = function()
+  local session = with_targets({ head = { ref = "feature", sha = string.rep("e", 40), dirty = false } })
+  open_review(session, {
+    {
+      match = { "file head", "--path src/a.rs" },
+      body = {
+        ok = true,
+        data = { exists = true, binary = false, too_large = false, lines = { "from", "the", "commit" } },
+      },
+    },
+  })
+  wait(
+    "vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().right), 0, 1, false)[1] == 'from'"
+  )
+  local right = "vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().right)"
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(" .. right .. ", 0, -1, false)"), { "from", "the", "commit" })
+  eq(child.lua_get("vim.bo[" .. right .. "].modifiable"), false)
+  eq(child.lua_get("vim.b[" .. right .. "].reviewkit_side"), "head")
+  eq(child.lua_get("vim.b[" .. right .. "].reviewkit_path"), "src/a.rs")
+end
+
+local function commit_session(head_blob)
+  local session = with_targets({ head = { ref = "feature", sha = string.rep("e", 40), dirty = false } })
+  session.targets[1].head_blob = head_blob
+  return session
+end
+
+local function right_lines()
+  return child.lua_get(
+    "vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().right), 0, -1, false)"
+  )
+end
+
+T["diff"]["a head commit that moves on refresh shows its new content"] = function()
+  local first, second = commit_session(string.rep("1", 40)), commit_session(string.rep("2", 40))
+  second.rev = 2
+  second.etags = vim.tbl_extend("force", second.etags or {}, { targets = "head-moved" })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = first } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = second } },
+    {
+      match = { "file base", "--path src/a.rs" },
+      body = { ok = true, data = { exists = true, binary = false, too_large = false, lines = { "base" } } },
+    },
+    {
+      match = { "file head", "--path src/a.rs" },
+      body = { ok = true, data = { exists = true, binary = false, too_large = false, lines = { "old", "head" } } },
+    },
+  })
+  child.cmd("Review diff HEAD~1")
+  wait("require('reviewkit.view.diff').is_open() and not require('reviewkit.view.diff')._state().showing")
+  wait("vim.b[vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().right)].reviewkit_side == 'head'")
+  eq(right_lines(), { "old", "head" })
+  helpers.respond(dir, {
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = second } },
+    {
+      match = { "file base", "--path src/a.rs" },
+      body = { ok = true, data = { exists = true, binary = false, too_large = false, lines = { "base" } } },
+    },
+    {
+      match = { "file head", "--path src/a.rs" },
+      body = {
+        ok = true,
+        data = { exists = true, binary = false, too_large = false, lines = { "new", "head", "line" } },
+      },
+    },
+  })
+  child.cmd("Review refresh")
+  wait(
+    "#vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().right), 0, -1, false) == 3"
+  )
+  eq(right_lines(), { "new", "head", "line" })
+end
+
+T["diff"]["reveal lands on a head line of a commit session"] = function()
+  open_review(commit_session(string.rep("1", 40)), {
+    {
+      match = { "file head", "--path src/a.rs" },
+      body = { ok = true, data = { exists = true, binary = false, too_large = false, lines = { "a", "b", "c", "d" } } },
+    },
+  })
+  child.lua("require('reviewkit.view.diff').reveal('src/a.rs', 'head', 3)")
+  wait("vim.api.nvim_win_get_cursor(0)[1] == 3")
+  eq(child.lua_get("vim.api.nvim_win_get_cursor(0)[1]"), 3)
+end
+
+T["diff"]["a head commit in another encoding is decoded with fileencodings"] = function()
+  child.lua("vim.o.fileencodings = 'ucs-bom,utf-8,latin1'")
+  open_review(commit_session(string.rep("1", 40)), {
+    {
+      match = { "file head", "--path src/a.rs" },
+      body = {
+        ok = true,
+        data = { exists = true, binary = false, too_large = false, lines = { "caf\239\191\189" }, raw = "Y2Fm6Qo=" },
+      },
+    },
+  })
+  wait("vim.b[vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().right)].reviewkit_side == 'head'")
+  eq(right_lines(), { "café" })
+end
+
 T["diff"]["step moves between targets, wraps around and shows added files against a placeholder"] = function()
   open_review()
   child.lua("require('reviewkit.view.diff').step(1)")
