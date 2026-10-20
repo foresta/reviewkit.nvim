@@ -523,3 +523,63 @@ fn a_base_file_that_is_not_utf8_also_comes_as_raw_bytes() {
     );
     assert!(utf8["data"].get("raw").is_none());
 }
+
+#[test]
+fn a_worktree_refresh_hashes_all_changed_files_with_one_git_call() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    for name in ["u1.txt", "u2.txt", "u3.txt"] {
+        repo.write(name, "x\n");
+    }
+    repo.write("keep.txt", "changed\n");
+    let bin = tempfile::tempdir().unwrap();
+    let log = bin.path().join("calls");
+    let wrapper = bin.path().join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> {}\nexec {} \"$@\"\n",
+            log.display(),
+            real_git().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let body = json(
+        &reviewkit(&state, &repo)
+            .env("REVIEWKIT_GIT", &wrapper)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        calls.lines().filter(|l| l.contains("hash-object")).count(),
+        1,
+        "{calls}"
+    );
+    let targets = body["session"]["targets"].as_array().unwrap();
+    assert!(
+        targets
+            .iter()
+            .all(|t| t["status"] == "deleted" || t["head_blob"].is_string())
+    );
+}
+
+#[test]
+fn a_large_untracked_file_is_only_sniffed() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.write("big.log", &"line\n".repeat(400_000));
+    let body = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let big = target(&body["session"], "big.log");
+    assert_eq!(big["too_large"], true);
+    assert_eq!(big["hunks"], serde_json::json!([]));
+    assert_eq!(big["commentable"]["head"], serde_json::json!([]));
+    assert!(big["head_blob"].is_string());
+}
