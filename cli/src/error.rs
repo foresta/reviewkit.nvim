@@ -2,8 +2,11 @@ use serde::{Deserialize, Serialize};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Codes are only ever added, never renamed. No per-variant docs: they would
-/// turn the JSON Schema into a `oneOf` instead of one `enum` list.
+/// From the first release on, codes are only ever added, never renamed.
+/// They name what went wrong, not which tool: `Error.tool` says that, so a
+/// new sink or source adds no codes. The aliases read states saved before
+/// the codes were generic. No per-variant docs: they would turn the JSON
+/// Schema into a `oneOf` instead of one `enum` list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCode {
@@ -15,12 +18,14 @@ pub enum ErrorCode {
     ENoTarget,
     ENoThread,
     EGit,
-    EGh,
-    EGhAuth,
-    EGhMissing,
-    EGhPendingReview,
-    EHerdr,
-    EHerdrMissing,
+    #[serde(alias = "E_GH", alias = "E_HERDR")]
+    ETool,
+    #[serde(alias = "E_GH_MISSING", alias = "E_HERDR_MISSING")]
+    EToolMissing,
+    #[serde(alias = "E_GH_AUTH")]
+    EAuth,
+    #[serde(alias = "E_GH_PENDING_REVIEW")]
+    EPendingReview,
     EAmbiguous,
     EConflict,
     ELocked,
@@ -35,7 +40,7 @@ impl ErrorCode {
             EUsage => 1,
             EInvalid | ENotCommentable => 2,
             ENoSession | ENoComment | ENoTarget | ENoThread => 3,
-            EGit | EGh | EGhAuth | EGhMissing | EGhPendingReview | EHerdr | EHerdrMissing | EAmbiguous => 4,
+            EGit | ETool | EToolMissing | EAuth | EPendingReview | EAmbiguous => 4,
             EConflict | ELocked => 5,
             ESchemaVersion => 6,
             EInternal => 70,
@@ -60,6 +65,9 @@ pub struct Error {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// The external tool that failed ("gh", "herdr"), for the tool codes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
     #[serde(default)]
     pub retryable: bool,
     /// Always an object, so callers can index it without a null check.
@@ -77,9 +85,16 @@ impl Error {
             code,
             message: message.into(),
             hint: None,
+            tool: None,
             retryable: false,
             details: empty_object(),
         }
+    }
+
+    pub fn tool(tool: &str, code: ErrorCode, message: impl Into<String>) -> Self {
+        let mut err = Self::new(code, message);
+        err.tool = Some(tool.into());
+        err
     }
 
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
@@ -126,7 +141,9 @@ mod tests {
 
     #[test]
     fn display_uses_the_wire_name() {
-        assert_eq!(ErrorCode::EGhAuth.to_string(), "E_GH_AUTH");
+        assert_eq!(ErrorCode::EAuth.to_string(), "E_AUTH");
+        let old: ErrorCode = serde_json::from_str("\"E_HERDR_MISSING\"").unwrap();
+        assert_eq!(old, ErrorCode::EToolMissing);
         assert_eq!(Error::usage("bad").to_string(), "E_USAGE: bad");
     }
 

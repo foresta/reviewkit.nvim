@@ -200,7 +200,7 @@ fn gh_auth_failure_is_e_gh_auth() {
         .unwrap();
     assert_eq!(out.status.code(), Some(4));
     let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(body["error"]["code"], "E_GH_AUTH");
+    assert_eq!(body["error"]["code"], "E_AUTH");
     assert!(
         !state.path().join("sessions").exists(),
         "nothing is created before gh answers"
@@ -460,7 +460,7 @@ fn a_failed_first_open_leaves_no_session_directory() {
         .output()
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(body["error"]["code"], "E_GH");
+    assert_eq!(body["error"]["code"], "E_TOOL");
     assert_eq!(body["error"]["retryable"], false);
     assert!(body["error"]["message"].as_str().unwrap().contains("Could not resolve"));
     assert!(!state.path().join("sessions/pr").exists());

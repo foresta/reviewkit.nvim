@@ -124,7 +124,7 @@ pub fn refresh(ctx: &Context, git: &SystemGit, store: &Store, id: &str) -> Resul
             store.with_fetch_lock(id, || {
                 let current = store.load(id)?;
                 let snapshot = pr::fetch(&current, &src, store, None)?;
-                store.update(id, |s| pr::apply(s, snapshot, git))
+                store.update(id, |s| crate::core::refresh::apply(s, snapshot, git))
             })?
         }
     };

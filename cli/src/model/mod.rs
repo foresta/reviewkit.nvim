@@ -21,8 +21,8 @@ pub use session::{
     ThreadActionKind, Viewed,
 };
 pub use sink::{
-    AgentType, DecisionStatus, Failed, PreviewReply, SendStatus, Sent, SinkResult, SinkTarget, Skipped, SubmitOptions,
-    SubmitPreview, ThreadActionResult,
+    AgentType, DecisionStatus, Failed, GithubOptions, HerdrOptions, PreviewReply, SendStatus, Sent, SinkResult,
+    SinkTarget, Skipped, SubmitOptions, SubmitPreview, ThreadActionResult,
 };
 pub use target::{CommentableRanges, Range, Stats, Target, TargetReason, TargetStatus};
 pub use thread::{SubjectType, Thread, ThreadComment};
@@ -37,7 +37,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// Bumped for every field or enum value added to a persisted type. A CLI
 /// does not write a session last written by a higher revision: it would drop
 /// what it cannot represent. Recorded outside the contract, in `_writer`.
-pub const SCHEMA_REVISION: u32 = 3;
+pub const SCHEMA_REVISION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VersionInfo {
@@ -59,6 +59,8 @@ pub struct Contract {
     pub decision_input: DecisionInput,
     pub pr_info: PrInfo,
     pub submit_options: SubmitOptions,
+    pub herdr_options: HerdrOptions,
+    pub github_options: GithubOptions,
     pub sink_result: SinkResult,
     pub sink_info: crate::sink::SinkInfo,
     pub submit_preview: SubmitPreview,

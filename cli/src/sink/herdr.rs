@@ -6,8 +6,8 @@ use crate::core::time;
 use crate::error::{Error, ErrorCode, Result};
 use crate::ext::herdr::{self, Agent, Herdr};
 use crate::model::{
-    AgentType, Comment, DecisionStatus, DeliveryMode, Failed, Sent, Session, Side, SinkResult, SinkTarget,
-    SubmitOptions, SubmitPreview,
+    AgentType, Comment, DecisionStatus, DeliveryMode, Failed, HerdrOptions, Sent, Session, Side, SinkResult,
+    SinkTarget, Source, SubmitOptions, SubmitPreview,
 };
 
 pub const NAME: &str = "herdr";
@@ -36,7 +36,7 @@ pub fn resolve_target(agents: &[Agent], worktree: &Path, match_foreground_cwd: b
         .collect();
     match matched.as_slice() {
         [one] => Ok(one.pane_id.clone().expect("filtered above")),
-        [] if agents.is_empty() => Err(Error::new(ErrorCode::EHerdr, "no running agent found")),
+        [] if agents.is_empty() => Err(Error::tool("herdr", ErrorCode::ETool, "no running agent found")),
         // Nothing matches the repository: let the user pick from everything,
         // which is how one sends to an agent in another tab on purpose.
         [] => Err(ambiguous(
@@ -61,7 +61,7 @@ fn ambiguous<'a>(message: &str, agents: impl Iterator<Item = &'a Agent>) -> Erro
         })
         .collect();
     Error::new(ErrorCode::EAmbiguous, message)
-        .hint("pick one and pass its pane_id as SubmitOptions.target")
+        .hint("pick one and pass its id as the target option")
         .details(serde_json::json!({ "candidates": candidates }))
 }
 
@@ -126,7 +126,7 @@ fn reply_context(session: &Session, thread_id: &str) -> String {
 
 /// header → decision body → numbered comments. Base-side and stale
 /// comments carry a note because the agent sees only the current file.
-pub fn format_prompt(session: &Session, opts: &SubmitOptions) -> String {
+pub fn format_prompt(session: &Session, opts: &HerdrOptions) -> String {
     let agent_type = opts.agent_type.unwrap_or(AgentType::Claude);
     let mut sections: Vec<String> = Vec::new();
     if let Some(header) = opts.header.as_deref().filter(|h| !h.trim().is_empty()) {
@@ -209,7 +209,7 @@ fn kind_label(kind: crate::model::CommentKind) -> &'static str {
     }
 }
 
-fn request(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Result<Request> {
+fn request(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Result<Request> {
     if to_send(session).is_empty() && session.decision.as_ref().is_none_or(|d| d.body.trim().is_empty()) {
         return Err(Error::invalid(
             "nothing to submit: no comment the agent has not received yet, and no decision body",
@@ -230,7 +230,7 @@ fn request(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Result
     })
 }
 
-pub fn preview(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Result<SubmitPreview> {
+pub fn preview(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Result<SubmitPreview> {
     let request = request(session, opts, herdr)?;
     Ok(SubmitPreview {
         sink: NAME.into(),
@@ -260,7 +260,7 @@ pub fn preview(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Re
 /// did not get through. An agent only receives text, so a Decision whose
 /// body is empty (a bare `approve`) has nothing to send and stays, reported
 /// as skipped.
-pub fn submit(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Result<SinkResult> {
+pub fn submit(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Result<SinkResult> {
     let preview = request(session, opts, herdr)?;
     let outcome = if preview.stage {
         herdr::send_text(herdr, &preview.target, &preview.prompt)
@@ -298,7 +298,7 @@ pub fn submit(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Res
             },
             attempted: Some(to_send(session).iter().map(|c| c.id.clone()).collect()),
         },
-        Err(error) if error.code == ErrorCode::EHerdrMissing => return Err(error),
+        Err(error) if error.code == ErrorCode::EToolMissing => return Err(error),
         Err(error) => SinkResult {
             sink: NAME.into(),
             at: time::now(),
@@ -321,6 +321,62 @@ pub fn submit(session: &Session, opts: &SubmitOptions, herdr: &dyn Herdr) -> Res
         },
     };
     Ok(result)
+}
+
+pub struct HerdrSink;
+
+impl super::Sink for HerdrSink {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
+    fn info(&self, ctx: &crate::context::Context) -> super::SinkInfo {
+        super::tool_info(NAME, ctx.tools.herdr.as_deref(), "herdr")
+    }
+
+    /// A local review is for the agent; a PR's comments stay for GitHub
+    /// even after an agent saw them.
+    fn consumes(&self, source: &Source, requested: Option<bool>) -> bool {
+        requested.unwrap_or(matches!(source, Source::Local { .. }))
+    }
+
+    fn targets(&self, ctx: &crate::context::Context) -> Result<Vec<SinkTarget>> {
+        let herdr = herdr::SystemHerdr::new(ctx.tools.herdr.as_deref())?;
+        Ok(herdr::panes(&herdr)?
+            .into_iter()
+            .map(|p| SinkTarget {
+                id: p.pane_id,
+                name: p.agent,
+                status: p.agent_status,
+                cwd: p.cwd,
+                title: p.terminal_title_stripped,
+            })
+            .collect())
+    }
+
+    fn preview(&self, ctx: &crate::context::Context, session: &Session, opts: &SubmitOptions) -> Result<SubmitPreview> {
+        let options: HerdrOptions = opts.sink_options()?;
+        let herdr = herdr::SystemHerdr::new(ctx.tools.herdr.as_deref())?;
+        preview(session, &options, &herdr)
+    }
+
+    /// The lock is held across the send so a concurrent edit cannot slip
+    /// into the queue between formatting and clearing it.
+    fn submit(
+        &self,
+        ctx: &crate::context::Context,
+        store: &crate::store::Store,
+        id: &str,
+        opts: &SubmitOptions,
+    ) -> Result<(Session, SinkResult)> {
+        let options: HerdrOptions = opts.sink_options()?;
+        let herdr = herdr::SystemHerdr::new(ctx.tools.herdr.as_deref())?;
+        store.update(id, |s| {
+            let result = submit(s, &options, &herdr)?;
+            let consume = self.consumes(&s.source, opts.consume);
+            crate::core::apply::apply(s, result, consume)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -372,7 +428,7 @@ mod tests {
         );
         assert_eq!(
             resolve_target(&[], Path::new("/repo"), false).unwrap_err().code,
-            ErrorCode::EHerdr
+            ErrorCode::ETool
         );
     }
 
@@ -454,7 +510,7 @@ mod tests {
 
     #[test]
     fn prompt_format_for_claude() {
-        let opts = SubmitOptions {
+        let opts = HerdrOptions {
             header: Some("Review feedback:".into()),
             ..Default::default()
         };
@@ -470,7 +526,7 @@ mod tests {
 
     #[test]
     fn prompt_format_for_plain_agents_has_no_at_prefix() {
-        let opts = SubmitOptions {
+        let opts = HerdrOptions {
             agent_type: Some(AgentType::Plain),
             ..Default::default()
         };

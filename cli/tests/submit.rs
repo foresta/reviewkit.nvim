@@ -251,10 +251,10 @@ fn a_failed_send_keeps_the_queue_with_last_error() {
             .unwrap(),
     );
     assert_eq!(body["data"]["failed"][0]["comment_id"], serde_json::Value::Null);
-    assert_eq!(body["data"]["failed"][0]["error"]["code"], "E_HERDR");
+    assert_eq!(body["data"]["failed"][0]["error"]["code"], "E_TOOL");
     assert_eq!(body["data"]["decision"], "failed");
     assert_eq!(body["session"]["comments"].as_array().unwrap().len(), 2);
-    assert_eq!(body["session"]["comments"][0]["last_error"]["code"], "E_HERDR");
+    assert_eq!(body["session"]["comments"][0]["last_error"]["code"], "E_TOOL");
     assert!(body["session"]["decision"].is_object());
 }
 
@@ -287,10 +287,37 @@ fn empty_queue_and_missing_herdr_fail_before_sending() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(4));
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["error"]["code"],
-        "E_HERDR_MISSING"
-    );
+    let missing = serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap();
+    assert_eq!(missing["error"]["code"], "E_TOOL_MISSING");
+    assert_eq!(missing["error"]["tool"], "herdr");
+    let bad_options: serde_json::Value = serde_json::from_slice(
+        &cmd(&state, &repo, &herdr)
+            .args([
+                "submit",
+                "--session",
+                &id,
+                "--sink",
+                "herdr",
+                "--dry-run",
+                "--options",
+                "-",
+            ])
+            .write_stdin(r#"{"agent_type": "robot"}"#)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(bad_options["error"]["code"], "E_INVALID");
+    let no_targets: serde_json::Value = serde_json::from_slice(
+        &cmd(&state, &repo, &herdr)
+            .args(["sink", "targets", "--sink", "github"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(no_targets["error"]["code"], "E_INVALID");
     let out = cmd(&state, &repo, &herdr)
         .args(["submit", "--session", &id, "--sink", "nope"])
         .output()
@@ -309,7 +336,7 @@ fn sink_list_and_targets() {
     let list = json(&cmd(&state, &repo, &herdr).args(["sink", "list"]).output().unwrap());
     assert_eq!(
         list["data"][0],
-        serde_json::json!({"name": "herdr", "available": true, "reason": null})
+        serde_json::json!({"name": "herdr", "available": true, "reason": null, "runtime": "cli"})
     );
     let targets = json(
         &cmd(&state, &repo, &herdr)
@@ -517,7 +544,7 @@ fn submit_apply_rejects_bad_input_and_a_hanging_herdr_times_out() {
             .output()
             .unwrap(),
     );
-    assert_eq!(body["data"]["failed"][0]["error"]["code"], "E_HERDR");
+    assert_eq!(body["data"]["failed"][0]["error"]["code"], "E_TOOL");
     assert!(
         body["data"]["failed"][0]["error"]["message"]
             .as_str()

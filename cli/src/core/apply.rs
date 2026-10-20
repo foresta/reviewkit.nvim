@@ -1,37 +1,19 @@
 use crate::core::time;
 use crate::error::Result;
 use crate::model::{
-    DecisionStatus, Delivery, DeliveryMode, LastError, LastSubmit, Reason, SendStatus, Session, SinkResult, Source,
+    DecisionStatus, Delivery, DeliveryMode, LastError, LastSubmit, Reason, SendStatus, Session, SinkResult,
 };
 
-/// Whether delivered comments leave the queue. Only the destination a
-/// session kind exists for consumes them by default: a PR's comments are
-/// for GitHub even after an agent saw them, and a local review is for the
-/// agent. Staged or copied text never consumes (decisions.md).
-pub fn consumes(session: &Session, result: &SinkResult, requested: Option<bool>) -> bool {
-    if result.mode != DeliveryMode::Sent {
-        return false;
-    }
-    // GitHub keeps what it was sent and the github sink resends the whole
-    // queue, so keeping its comments would post them twice.
-    if result.sink == "github" {
-        return true;
-    }
-    requested.unwrap_or(matches!(
-        (&session.source, result.sink.as_str()),
-        (Source::Local { .. }, "herdr")
-    ))
-}
-
-/// Applies a sink's report to the queue (architecture D4).
-pub fn apply(session: &mut Session, mut result: SinkResult, consume: Option<bool>) -> Result<SinkResult> {
+/// Applies a sink's report to the queue (architecture D4). `consume` is the
+/// sink's call (`Sink::consumes`); staged or copied text never consumes.
+pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Result<SinkResult> {
     if result.at.is_empty() {
         result.at = time::now();
     }
     if result.summary.is_empty() {
         result.summary = summary(&result);
     }
-    let consume = consumes(session, &result, consume);
+    let consume = consume && result.mode == DeliveryMode::Sent;
     let edited_meanwhile = |comment: &crate::model::Comment, sent: &crate::model::Sent| {
         sent.version.as_deref().is_some_and(|v| v != comment.updated_at)
     };
@@ -181,7 +163,7 @@ mod tests {
                 .iter()
                 .map(|id| Failed {
                     comment_id: id.map(str::to_string),
-                    error: Error::new(ErrorCode::EGh, "boom"),
+                    error: Error::new(ErrorCode::ETool, "boom"),
                 })
                 .collect(),
             skipped: skipped

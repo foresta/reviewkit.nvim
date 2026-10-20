@@ -214,6 +214,8 @@ local function attach()
   require("reviewkit.view.thread").attach()
   core.register_sink("clipboard", require("reviewkit.sink.clipboard") --[[@as reviewkit.LuaSink]])
   core.on("ReviewSessionOpened", function()
+    -- Fills the :ReviewSubmit completion; nothing waits on it.
+    core.sinks(function() end)
     local session = core.session()
     if session and session.head.sha == nil then
       watch_worktree(session)

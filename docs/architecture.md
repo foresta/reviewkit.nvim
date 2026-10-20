@@ -115,7 +115,12 @@ source-local と source-pr の違いは「base / head をどう決めるか」�
 連携の仕組みは 2 つに限定する。
 
 - **イベント**: `User` autocmd。`ReviewTargetsChanged` / `ReviewQueueChanged` / `ReviewDecisionChanged` / `ReviewSessionClosed` など。View はこれだけを購読する
-- **登録**: Rust 側の Source / Sink は CLI に組み込み、Lua 側の Sink は `core.register_sink(name, impl)` で足す。Orchestrator は名前で選ぶ
+- **登録**: Rust 側の Sink は `Sink` trait を実装して `sink::builtin()` に 1 行足す。Lua 側の Sink は
+  `core.register_sink(name, impl)` で足し、`core.sinks` が両方を 1 つの一覧にする。Orchestrator は名前で選ぶ
+- **Source**: Session を直接書き換えず、値の `SourceSnapshot`（source、base、head、targets、threads）を返す。
+  代入と後処理（スレッド操作の整理、既読の再計算、コメントの再アンカー）は core の `refresh::apply` が 1 箇所で行う
+- Sink は基本的に Session を読むだけだが、github は送信中の編集を失わないようにロックを持ったまま送るので、
+  Sink には Session ではなく store と id を渡す
 
 ## 配布単位
 

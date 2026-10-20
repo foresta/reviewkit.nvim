@@ -624,7 +624,7 @@ mod tests {
             .collect();
         assert_eq!(
             (SCHEMA_REVISION, hash.as_str()),
-            (3, "a0c0715297800812"),
+            (4, "7361b57554d0b6da"),
             "the persisted shape of Session changed (doc comments do not count): bump SCHEMA_REVISION and update this hash"
         );
     }

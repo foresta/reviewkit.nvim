@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use crate::core::{anchor, threads, time, viewed};
+use crate::core::refresh::{self, SourceSnapshot};
+use crate::core::time;
 use crate::error::{Error, ErrorCode, Result};
 use crate::ext::gh::{self, Gh, PrMeta, RepoRef};
 use crate::ext::git::{Git, Repository, parse_remote_url};
@@ -121,23 +122,15 @@ pub fn refresh(session: &mut Session, src: &PrSource<'_>, store: &Store) -> Resu
     refresh_with(session, src, store, None)
 }
 
-/// Everything a refresh learns from GitHub and the mirror, gathered without
-/// the session lock so other commands are not blocked on the network.
-pub struct Snapshot {
-    meta: PrMeta,
-    checkout: Checkout,
-    targets: Vec<Target>,
-    threads: Vec<Thread>,
-}
-
 fn refresh_with(session: &mut Session, src: &PrSource<'_>, store: &Store, meta: Option<PrMeta>) -> Result<()> {
     let snapshot = fetch(session, src, store, meta)?;
-    apply(session, snapshot, src.git)
+    refresh::apply(session, snapshot, src.git)
 }
 
-/// `pr.json` is written here, next to the session, so the conversation and
-/// checks never travel in the envelope.
-pub fn fetch(session: &Session, src: &PrSource<'_>, store: &Store, meta: Option<PrMeta>) -> Result<Snapshot> {
+/// Gathered without the session lock so other commands are not blocked on
+/// the network. `pr.json` is written here, next to the session, so the
+/// conversation and checks never travel in the envelope.
+pub fn fetch(session: &Session, src: &PrSource<'_>, store: &Store, meta: Option<PrMeta>) -> Result<SourceSnapshot> {
     let (repo_ref, number) = match (&session.repo, &session.source) {
         (
             Repo {
@@ -170,50 +163,31 @@ pub fn fetch(session: &Session, src: &PrSource<'_>, store: &Store, meta: Option<
 
     let pr_path = store.state_dir().pr_file(&session.id)?;
     write_pr_info(&pr_path, &details.info)?;
-    Ok(Snapshot {
-        meta,
-        checkout,
+    Ok(SourceSnapshot {
+        source: Source::Pr {
+            number: meta.number,
+            url: meta.url,
+            title: meta.title,
+            author: meta.author,
+            state: meta.state,
+            head_ref: meta.head_ref.clone(),
+            base_ref: meta.base_ref.clone(),
+            base_oid: meta.base_oid,
+            node_id: meta.node_id,
+            worktree: checkout.worktree,
+        },
+        base: RevRef {
+            r#ref: Some(meta.base_ref),
+            sha: checkout.base,
+        },
+        head: HeadRef {
+            r#ref: Some(meta.head_ref),
+            sha: Some(checkout.head),
+            dirty: false,
+        },
         targets,
         threads: details.threads,
     })
-}
-
-/// Runs under the lock on the freshly read session, so comments added while
-/// the snapshot was fetched are re-anchored too.
-pub fn apply(session: &mut Session, snapshot: Snapshot, git: &dyn Git) -> Result<()> {
-    let Snapshot {
-        meta,
-        checkout,
-        targets,
-        threads,
-    } = snapshot;
-    let worktree = Repository::at(git, checkout.worktree.clone());
-    session.source = Source::Pr {
-        number: meta.number,
-        url: meta.url,
-        title: meta.title,
-        author: meta.author,
-        state: meta.state,
-        head_ref: meta.head_ref.clone(),
-        base_ref: meta.base_ref.clone(),
-        base_oid: meta.base_oid,
-        node_id: meta.node_id,
-        worktree: checkout.worktree,
-    };
-    session.base = RevRef {
-        r#ref: Some(meta.base_ref),
-        sha: checkout.base,
-    };
-    session.head = HeadRef {
-        r#ref: Some(meta.head_ref),
-        sha: Some(checkout.head),
-        dirty: false,
-    };
-    session.targets = targets;
-    session.threads = threads;
-    threads::prune_actions(session);
-    viewed::refresh_flags(session);
-    anchor::reanchor(session, &worktree)
 }
 
 struct Checkout {
