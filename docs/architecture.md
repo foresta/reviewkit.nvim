@@ -50,7 +50,7 @@ View は Core のイベントを購読して描くだけ。Source と Sink は�
 | **source-graph**（将来） | 変更が影響する呼び出し元・参照元を解析し、diff 外の箇所を Target に追加する | LSP / treesitter | 依存グラフの深さ・方向の設定 |
 | **view-diff** | Target を side-by-side で表示し、対象間の移動（次のファイル / hunk）を提供する。head 側は実ファイル、base 側は追従する読み取り専用バッファ | core | inline 表示、既存 diff プラグインへの委譲 |
 | **view-queue** | コメント入力窓、キュー一覧、行注釈。キューの編集・削除 | core | 一覧の表示形式（float / panel / quickfix） |
-| **sink-herdr** | queue を 1 プロンプトに整形し、cwd から解決した herdr pane へ送る | lib/herdr | agent 種別ごとの参照形式、tmux 等の別 transport |
+| **sink-herdr** | queue を 1 プロンプトに整形し、cwd から解決した herdr pane へ送る。PR では送り先のエージェントの checkout の HEAD を lib/git で読み、PR の head と違えば知らせる | lib/herdr、lib/git | agent 種別ごとの参照形式、tmux 等の別 transport |
 | **sink-github** | queue と Decision を 1 リクエストで PR の review として送る。返信・resolve も扱う | lib/gh | GitLab |
 | **orchestrator** | 上記を束ねる preset。`:Review pr 123` のような 1 コマンドで Source → View → Sink を配線する | 全部 | 個人の好みのキーマップ・既定値 |
 
@@ -64,7 +64,7 @@ lib/gh は GitHub の応答を model の値型（Thread、PrInfo）に変換し�
 
 | lib | 中身 | 使う部品 |
 |---|---|---|
-| lib/git | 差分抽出、merge-base、`git show`、PR の実体化（private clone） | source-local、source-pr |
+| lib/git | 差分抽出、merge-base、`git show`、PR の実体化（private clone）、checkout の HEAD | source-local、source-pr、sink-herdr |
 | lib/gh | PR のメタデータ・スレッド取得、GraphQL の実行 | source-pr、sink-github |
 | lib/herdr | pane の解決、プロンプト送信 | sink-herdr |
 

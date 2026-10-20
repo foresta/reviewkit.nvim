@@ -17,7 +17,13 @@ struct Request {
     target: String,
     prompt: String,
     stage: bool,
+    #[serde(skip)]
+    elsewhere: bool,
 }
+
+/// A function rather than a git handle so the formatting stays testable
+/// without a repository.
+pub type CheckoutHead<'a> = &'a dyn Fn(&Path) -> Option<String>;
 
 /// The pane whose agent works in this session's worktree. Several agents
 /// may share a name (one claude per repository), so the match is on cwd,
@@ -168,11 +174,14 @@ fn reply_context(session: &Session, thread_id: &str) -> String {
 
 /// header → decision body → numbered comments. Base-side and stale
 /// comments carry a note because the agent sees only the current file.
-pub fn format_prompt(session: &Session, opts: &HerdrOptions) -> String {
+pub fn format_prompt(session: &Session, opts: &HerdrOptions, agent_head: Option<&str>) -> String {
     let agent_type = opts.agent_type.unwrap_or(AgentType::Claude);
     let mut sections: Vec<String> = Vec::new();
     if let Some(header) = opts.header.as_deref().filter(|h| !h.trim().is_empty()) {
         sections.push(header.trim_end().to_string());
+    }
+    if let Some(context) = pr_context(session, agent_head) {
+        sections.push(context);
     }
     if let Some(decision) = decision_to_send(session) {
         sections.push(decision.body.trim_end().to_string());
@@ -231,6 +240,40 @@ pub fn format_prompt(session: &Session, opts: &HerdrOptions) -> String {
     sections.join("\n\n")
 }
 
+/// The agent is found by the user's clone, which may be on another commit
+/// than the one the comments' line numbers refer to.
+fn pr_context(session: &Session, agent_head: Option<&str>) -> Option<String> {
+    let Source::Pr {
+        number,
+        url,
+        head_ref,
+        worktree,
+        ..
+    } = &session.source
+    else {
+        return None;
+    };
+    let sha = session.head.sha.as_deref()?;
+    let mut lines = vec![
+        format!("Review of pull request #{number} ({url}), branch `{head_ref}` at {sha}."),
+        format!(
+            "Line numbers refer to that commit, checked out at `{}`.",
+            worktree.display()
+        ),
+    ];
+    if let Some(other) = agent_head.filter(|h| *h != sha) {
+        lines.push(format!(
+            "Your checkout is at {}, not that commit: check the lines there before changing anything.",
+            short(other)
+        ));
+    }
+    Some(lines.join("\n"))
+}
+
+fn short(sha: &str) -> &str {
+    &sha[..sha.len().min(12)]
+}
+
 /// One more backtick than the longest run inside, so a suggestion that
 /// itself contains a code fence cannot close ours early.
 fn fence_for(text: &str) -> String {
@@ -249,29 +292,68 @@ fn kind_label(kind: crate::model::CommentKind) -> &'static str {
     }
 }
 
-fn request(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Result<Request> {
+fn request(
+    session: &Session,
+    opts: &HerdrOptions,
+    herdr: &dyn Herdr,
+    checkout_head: CheckoutHead<'_>,
+) -> Result<Request> {
     if to_send(session).is_empty() && decision_to_send(session).is_none() {
         return Err(Error::invalid(
             "nothing to submit: the agent already has every comment and the decision, or the decision has no body",
         ));
     }
+    let is_pr = matches!(session.source, Source::Pr { .. });
+    // With a target given, the list only serves the checkout note; a send
+    // that worked without it must not fail on it.
+    let agents = match (&opts.target, is_pr) {
+        (None, _) => herdr::agents(herdr)?,
+        (Some(_), true) => herdr::agents(herdr).unwrap_or_default(),
+        (Some(_), false) => Vec::new(),
+    };
     let target = match &opts.target {
         Some(target) => target.clone(),
-        None => resolve_target(
-            &herdr::agents(herdr)?,
-            &session.repo.root,
-            opts.match_foreground_cwd.unwrap_or(true),
-        )?,
+        None => resolve_target(&agents, &session.repo.root, opts.match_foreground_cwd.unwrap_or(true))?,
     };
+    // The directory the agent was matched by: a shell cwd outside the
+    // repository with the agent's process inside it matches on the latter.
+    let agent_head = if is_pr {
+        let root = real(&session.repo.root.to_string_lossy());
+        agents
+            .iter()
+            .find(|a| a.pane_id.as_deref() == Some(target.as_str()))
+            .and_then(|a| {
+                let mut dirs: Vec<PathBuf> = a.cwd.as_deref().map(real).into_iter().collect();
+                if opts.match_foreground_cwd.unwrap_or(true) {
+                    dirs.extend(a.foreground_cwd.as_deref().map(real));
+                }
+                let inside = dirs.iter().find(|d| **d == root || inside_checkout(d, &root)).cloned();
+                inside.or_else(|| dirs.into_iter().next())
+            })
+            .and_then(|dir| checkout_head(&dir))
+    } else {
+        None
+    };
+    let elsewhere = session
+        .head
+        .sha
+        .as_deref()
+        .is_some_and(|sha| agent_head.as_deref().is_some_and(|h| h != sha));
     Ok(Request {
         target,
-        prompt: format_prompt(session, opts),
+        prompt: format_prompt(session, opts, agent_head.as_deref()),
         stage: opts.stage.unwrap_or(false),
+        elsewhere,
     })
 }
 
-pub fn preview(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Result<SubmitPreview> {
-    let request = request(session, opts, herdr)?;
+pub fn preview(
+    session: &Session,
+    opts: &HerdrOptions,
+    herdr: &dyn Herdr,
+    checkout_head: CheckoutHead<'_>,
+) -> Result<SubmitPreview> {
+    let request = request(session, opts, herdr, checkout_head)?;
     Ok(SubmitPreview {
         sink: NAME.into(),
         comment_ids: to_send(session).iter().map(|c| c.id.clone()).collect(),
@@ -297,8 +379,13 @@ pub fn preview(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Res
 /// did not get through. An agent only receives text, so a Decision whose
 /// body is empty (a bare `approve`) has nothing to send and stays, reported
 /// as skipped.
-pub fn submit(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Result<SinkResult> {
-    let preview = request(session, opts, herdr)?;
+pub fn submit(
+    session: &Session,
+    opts: &HerdrOptions,
+    herdr: &dyn Herdr,
+    checkout_head: CheckoutHead<'_>,
+) -> Result<SinkResult> {
+    let preview = request(session, opts, herdr, checkout_head)?;
     let outcome = if preview.stage {
         herdr::send_text(herdr, &preview.target, &preview.prompt)
     } else {
@@ -360,7 +447,33 @@ pub fn submit(session: &Session, opts: &HerdrOptions, herdr: &dyn Herdr) -> Resu
             attempted: Some(to_send(session).iter().map(|c| c.id.clone()).collect()),
         },
     };
+    let mut result = result;
+    if preview.elsewhere {
+        result.summary = CHECKOUT_NOTE.into();
+    }
     Ok(result)
+}
+
+const CHECKOUT_NOTE: &str = "the agent's checkout is not at the pull request head";
+
+/// The note is added last: the summary is otherwise derived from fields the
+/// caller may still change (a selection skips the decision).
+fn finish_summary(result: &mut SinkResult) {
+    let noted = result.summary == CHECKOUT_NOTE;
+    result.summary = crate::core::apply::summary(result);
+    if noted {
+        result.summary = format!("{}; {CHECKOUT_NOTE}", result.summary);
+    }
+}
+
+/// `None` when git or the directory gives no answer: then nothing is said
+/// about the agent's checkout rather than a guess.
+fn checkout_head_with(ctx: &crate::context::Context) -> impl Fn(&Path) -> Option<String> + '_ {
+    let git = crate::ext::git::SystemGit::new(ctx.tools.git.as_deref()).ok();
+    move |dir: &Path| {
+        let git = git.as_ref()?;
+        crate::ext::git::Repository::discover(git, dir).ok()?.rev_parse("HEAD")
+    }
 }
 
 pub struct HerdrSink;
@@ -398,7 +511,12 @@ impl super::Sink for HerdrSink {
         let options: HerdrOptions = opts.sink_options()?;
         let herdr = herdr::SystemHerdr::new(ctx.tools.herdr.as_deref())?;
         let view = crate::core::comments::narrowed(session, opts.comment_ids.as_deref())?;
-        preview(view.as_ref().unwrap_or(session), &options, &herdr)
+        preview(
+            view.as_ref().unwrap_or(session),
+            &options,
+            &herdr,
+            &checkout_head_with(ctx),
+        )
     }
 
     /// The lock is held across the send so a concurrent edit cannot slip
@@ -417,12 +535,14 @@ impl super::Sink for HerdrSink {
             ));
         }
         let herdr = herdr::SystemHerdr::new(ctx.tools.herdr.as_deref())?;
+        let checkout_head = checkout_head_with(ctx);
         store.update(id, |s| {
             let view = crate::core::comments::narrowed(s, opts.comment_ids.as_deref())?;
-            let mut result = submit(view.as_ref().unwrap_or(s), &options, &herdr)?;
+            let mut result = submit(view.as_ref().unwrap_or(s), &options, &herdr, &checkout_head)?;
             if view.is_some() && s.decision.is_some() {
                 result.decision = DecisionStatus::Skipped;
             }
+            finish_summary(&mut result);
             let consume = self.consumes(&s.source, opts.consume);
             crate::core::apply::apply(s, result, consume)
         })
@@ -622,7 +742,7 @@ mod tests {
             header: Some("Review feedback:".into()),
             ..Default::default()
         };
-        insta::assert_snapshot!(format_prompt(&session(), &opts));
+        insta::assert_snapshot!(format_prompt(&session(), &opts, None));
     }
 
     #[test]
@@ -638,7 +758,7 @@ mod tests {
             agent_type: Some(AgentType::Plain),
             ..Default::default()
         };
-        let prompt = format_prompt(&session(), &opts);
+        let prompt = format_prompt(&session(), &opts, None);
         assert!(prompt.contains("1. src/a.rs:3\n"));
         assert!(prompt.contains("2. src/b.rs:8-10 (nit)"));
         assert!(!prompt.contains('@'));
