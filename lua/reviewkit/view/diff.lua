@@ -108,11 +108,34 @@ local function base_key(target)
   return (target.base_blob or "") .. ":" .. (target.old_path or target.path)
 end
 
+--- The head buffer was decoded by Neovim's `fileencodings`; the base side
+--- has to use the same encoding or diff mode marks every non-ASCII line.
+---@param raw string base64
+---@param encoding string
+---@return string[]?
+local function decode(raw, encoding)
+  local ok, bytes = pcall(vim.base64.decode, raw)
+  if not ok or encoding == "" or encoding == "utf-8" then
+    return nil
+  end
+  local text = vim.iconv(bytes, encoding, "utf-8")
+  if not text then
+    return nil
+  end
+  local lines = vim.split((text:gsub("\r\n", "\n")), "\n", { plain = true })
+  if lines[#lines] == "" then
+    table.remove(lines)
+  end
+  return lines
+end
+
 ---@param session reviewkit.Session
 ---@param target reviewkit.Target
 ---@param cb fun(buf: integer)
 local function base_buffer(session, target, cb)
-  local key = base_key(target)
+  local right = state.right
+  local encoding = right and api.nvim_win_is_valid(right) and vim.bo[api.nvim_win_get_buf(right)].fileencoding or ""
+  local key = base_key(target) .. ":" .. encoding
   local cached = state.base_bufs[key]
   if cached and api.nvim_buf_is_valid(cached) then
     return cb(cached)
@@ -132,7 +155,8 @@ local function base_buffer(session, target, cb)
     elseif data.too_large then
       buf = scratch(name, { "(too large to show)" }, target.path, "base", true)
     else
-      buf = scratch(name, data.lines or {}, target.path, "base", false)
+      local lines = data.raw and decode(data.raw, encoding) or data.lines or {}
+      buf = scratch(name, lines, target.path, "base", false)
     end
     state.base_bufs[key] = buf
     cb(buf)

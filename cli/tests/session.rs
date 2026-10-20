@@ -492,3 +492,34 @@ fn a_session_written_by_a_newer_cli_is_not_changed_and_exits_with_the_contract_c
     );
     assert_eq!(got["session"]["id"], id.as_str());
 }
+
+#[test]
+fn a_base_file_that_is_not_utf8_also_comes_as_raw_bytes() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    std::fs::write(repo.path().join("latin1.txt"), b"caf\xe9\n").unwrap();
+    repo.git(&["add", "latin1.txt"]);
+    repo.git(&["commit", "-q", "-m", "latin1"]);
+    std::fs::write(repo.path().join("latin1.txt"), b"caf\xe9!\n").unwrap();
+    let opened = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let id = opened["session"]["id"].as_str().unwrap().to_string();
+    let body = json(
+        &reviewkit(&state, &repo)
+            .args(["file", "base", "--session", &id, "--path", "latin1.txt"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(body["data"]["raw"], "Y2Fm6Qo=");
+    let utf8 = json(
+        &reviewkit(&state, &repo)
+            .args(["file", "base", "--session", &id, "--path", "keep.txt"])
+            .output()
+            .unwrap(),
+    );
+    assert!(utf8["data"].get("raw").is_none());
+}
