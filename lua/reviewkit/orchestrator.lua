@@ -3,7 +3,8 @@ local core = require("reviewkit.core")
 
 local M = {}
 
---- Rounds of retries after cli.call itself gave up on a locked session.
+-- On top of cli.call's own LOCK_RETRY_MS: a lock held across a GitHub
+-- submit outlasts those, and the user's action should still land.
 M.LOCKED_ROUNDS = 5
 
 local KINDS = { "issue", "suggestion", "question", "praise", "nit" }
@@ -277,7 +278,6 @@ local function announce(session)
   end
 end
 
---- Opens a session of either kind and shows its targets.
 ---@param spec reviewkit.OpenSpec
 local function open(spec)
   attach()
@@ -855,14 +855,13 @@ local actions = {
   end,
 }
 
---- Called by the <Plug> maps that `plugin/` defines.
 ---@param action string
 function M.run_action(action)
   actions[action]()
 end
 
---- Default keys are global, so they work in any buffer of the worktree. An
---- existing mapping is never overridden; the skipped keys are reported once.
+--- Global rather than buffer-local so they work in any buffer of the
+--- worktree, not only the diff view's.
 function M.set_keymaps()
   local skipped = {}
   for _, map in ipairs(maps) do

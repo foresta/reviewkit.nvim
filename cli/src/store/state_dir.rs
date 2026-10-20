@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
-/// The one place that knows the layout under the state directory.
 #[derive(Debug, Clone)]
 pub struct StateDir(PathBuf);
 
@@ -36,12 +35,10 @@ impl StateDir {
         self.0.join("repos")
     }
 
-    /// `<state>/repos/<host>/<owner>/<name>/mirror.git`
     pub fn mirror_dir(&self, host: &str, owner: &str, name: &str) -> PathBuf {
         self.repos_dir().join(host).join(owner).join(name).join("mirror.git")
     }
 
-    /// `<state>/repos/<host>/<owner>/<name>/pr/<number>`
     pub fn pr_worktree(&self, host: &str, owner: &str, name: &str, number: u64) -> PathBuf {
         self.repos_dir()
             .join(host)

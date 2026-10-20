@@ -19,9 +19,7 @@ local function plugin_root()
   return vim.fn.fnamemodify(source, ":p:h:h:h")
 end
 
---- Resolution order: setup({ cli = { path } }) > $REVIEWKIT_BIN > cli.dev build
---- dirs > <plugin>/bin/reviewkit > PATH. Cached after the first success so the
---- lookups do not run on every call.
+--- Cached after the first success so the lookups do not run on every call.
 ---@return string? path
 ---@return reviewkit.CliError? err
 function M.resolve()
@@ -58,7 +56,6 @@ function M.resolve()
   return nil, make_error("E_INTERNAL", "reviewkit binary not found", "run :ReviewInstall or set cli.path")
 end
 
---- Forget the cached path (after :ReviewInstall or a config change).
 function M.reset()
   M._resolved = nil
   M._compatible = nil
@@ -85,8 +82,8 @@ end
 ---@field session? reviewkit.Session
 ---@field error? reviewkit.Error
 
---- stdout must be one JSON object; anything else (panic, wrong binary) is
---- surfaced as E_INTERNAL with the raw text so the user can see what spoke.
+--- Non-envelope output (a panic, a wrong binary) keeps its raw text in the
+--- error rather than a bare parse failure, so the user can see what spoke.
 ---@param res vim.SystemCompleted
 ---@return reviewkit.Envelope? envelope
 ---@return reviewkit.CliError? err
@@ -106,8 +103,7 @@ local function decode(res)
   return nil, err
 end
 
---- Runs one subcommand. `opts.stdin` is sent as the body. The callback runs
---- on the main loop, so it may touch buffers and windows.
+--- The callback runs on the main loop, so it may touch buffers and windows.
 ---@param args string[]
 ---@param opts? { stdin?: string|table, cwd?: string, timeout?: integer }
 ---@param cb fun(err: reviewkit.CliError?, envelope: reviewkit.Envelope?)
@@ -150,8 +146,7 @@ function M.run(args, opts, cb)
   end)
 end
 
---- Synchronous variant for :checkhealth, scripts and command-line
---- completion; keep the timeout short where the user is waiting on it.
+--- Blocks the editor: keep the timeout short where the user is waiting on it.
 ---@param args string[]
 ---@param opts? { stdin?: string|table, cwd?: string, timeout?: integer }
 ---@return reviewkit.Envelope? envelope
@@ -221,7 +216,6 @@ end
 --- the CLI itself only waits briefly so the editor never hangs on it.
 M.LOCK_RETRY_MS = { 100, 250, 500, 1000, 2000 }
 
---- Runs a subcommand after the compatibility check.
 ---@param args string[]
 ---@param opts? { stdin?: string|table, cwd?: string, timeout?: integer }
 ---@param cb fun(err: reviewkit.CliError?, envelope: reviewkit.Envelope?)

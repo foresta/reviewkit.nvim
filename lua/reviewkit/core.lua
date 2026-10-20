@@ -47,8 +47,8 @@ local sections = {
   { etag = "viewed", event = "ReviewViewedChanged" },
 }
 
---- Replaces the cache and fires one event per changed section. Threads and
---- thread actions share an event, so it fires at most once per response.
+--- Threads and thread actions share an event, so it fires at most once per
+--- response.
 --- A response older than the cache (a slow mutation answered after the
 --- watcher already pulled a newer rev) is dropped so events never run
 --- backwards.
@@ -406,8 +406,7 @@ function M.pending_thread_action(thread_id)
   return nil
 end
 
---- Conversation and checks of a pull request session, kept beside the
---- session rather than in it; `nil` for local sessions.
+--- `nil` for local sessions, which have no pull request.
 ---@param cb fun(err: reviewkit.Error?, info: reviewkit.PrInfo?)
 function M.pr_info(cb)
   local session, err = require_session()
@@ -424,7 +423,6 @@ function M.pr_info(cb)
   end)
 end
 
---- The base side of a target as `file base` returns it.
 ---@param path string
 ---@param cb fun(err: reviewkit.Error?, data: table?)
 function M.base_file(path, cb)
@@ -451,9 +449,9 @@ function M.register_sink(name, impl)
   state.sinks[name] = impl
 end
 
---- The CLI's sinks and the ones registered here. A registered sink shadows
---- a built-in one of the same name, as it does in `submit`. A failed
---- `sink list` still yields the registered sinks, with the error.
+--- A registered sink shadows a built-in one of the same name, as it does
+--- in `submit`. A failed `sink list` still yields the registered sinks,
+--- with the error.
 ---@param cb fun(err: reviewkit.Error?, sinks: reviewkit.SinkInfo[])
 function M.sinks(cb)
   cli.call({ "sink", "list" }, {}, function(err, envelope)
@@ -478,8 +476,7 @@ function M.sinks(cb)
   end)
 end
 
---- Names for completion, from the last `sinks` call and the registered
---- sinks; synchronous, so it never waits on the CLI. Before any `sinks`
+--- Synchronous so completion never waits on the CLI; before any `sinks`
 --- call the CLI's names are unknown, and the ones it has always had stand in.
 ---@return string[]
 function M.sink_names()
@@ -559,7 +556,6 @@ function M.submit(sink, opts, cb)
   end)
 end
 
---- What `submit` would send, without sending it (`--dry-run`).
 ---@param sink string
 ---@param opts? table
 ---@param cb fun(err: reviewkit.Error?, preview: reviewkit.SubmitPreview?)
@@ -586,7 +582,6 @@ function M.preview(sink, opts, cb)
   end)
 end
 
---- `User` autocmd subscription. Returns the autocmd id so a view can remove it.
 ---@param event reviewkit.Event
 ---@param fn fun(args: { data: { session_id?: string, rev?: integer, result?: reviewkit.SinkResult } })
 ---@param group? integer
@@ -595,7 +590,7 @@ function M.on(event, fn, group)
   return vim.api.nvim_create_autocmd("User", { pattern = event, group = group, callback = fn })
 end
 
---- Test seam: drops the cache and the watcher without talking to the CLI.
+--- Test seam: unlike `close`, it never talks to the CLI.
 function M._reset()
   stop_watching()
   state.session = nil

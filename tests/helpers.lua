@@ -103,7 +103,8 @@ function M.child(dir)
       _G.done = { err = err, results = { ... } }
     end
     _G.wait_done = function()
-      local ok = vim.wait(5000, function() return _G.done ~= nil end, 10)
+      -- Generous: a loaded machine has taken over 5s to spawn the CLI.
+      local ok = vim.wait(20000, function() return _G.done ~= nil end, 10)
       local d = _G.done
       _G.done = nil
       if not ok then error("callback never ran") end

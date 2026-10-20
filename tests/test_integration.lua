@@ -39,7 +39,7 @@ T["real binary: open, comment, submit through a Lua sink"] = function()
     _G.done = nil
     _G.finish = function(err, ...) _G.done = { err = err, results = { ... } } end
     _G.wait_done = function()
-      assert(vim.wait(10000, function() return _G.done ~= nil end, 10), "callback never ran")
+      assert(vim.wait(30000, function() return _G.done ~= nil end, 10), "callback never ran")
       local d = _G.done
       _G.done = nil
       return d
@@ -106,7 +106,7 @@ T["real binary: :Review diff → comment → :ReviewSubmit herdr reaches a fake 
   ]]):format(bin, helpers.root .. "/cli/tests/fixtures/bin/herdr", herdr_dir, state_dir, repo))
   local function wait_notice(pattern)
     child.lua(
-      ("vim.wait(10000, function() for _, n in ipairs(_G.notices) do if n:find(%q, 1, true) then return true end end return false end, 20)"):format(
+      ("vim.wait(30000, function() for _, n in ipairs(_G.notices) do if n:find(%q, 1, true) then return true end end return false end, 20)"):format(
         pattern
       )
     )
@@ -158,14 +158,14 @@ T["real binary: a queued comment does not make the worktree watcher refresh by i
     end
   ]]):format(bin, helpers.fake_dir(), repo))
   child.cmd("Review diff HEAD")
-  assert(child.lua_get("vim.wait(10000, function() return require('reviewkit.core').session() ~= nil end, 20)"))
+  assert(child.lua_get("vim.wait(30000, function() return require('reviewkit.core').session() ~= nil end, 20)"))
   child.lua(
     "require('reviewkit.core').add_comment({ path = 'f.txt', side = 'head', line = 2, body = 'b' }, function() _G.added = true end)"
   )
-  assert(child.lua_get("vim.wait(10000, function() return _G.added end, 20)"))
+  assert(child.lua_get("vim.wait(30000, function() return _G.added end, 20)"))
   child.lua([[
     local last, stable_since = -1, vim.uv.now()
-    vim.wait(10000, function()
+    vim.wait(30000, function()
       if _G.refreshes ~= last then
         last, stable_since = _G.refreshes, vim.uv.now()
       end
@@ -205,11 +205,11 @@ T["real binary: a commit in a linked worktree refreshes the session"] = function
     vim.notify = function() end
   ]]):format(bin, helpers.fake_dir(), linked))
   child.cmd("Review diff HEAD")
-  assert(child.lua_get("vim.wait(10000, function() return require('reviewkit.core').session() ~= nil end, 20)"))
+  assert(child.lua_get("vim.wait(30000, function() return require('reviewkit.core').session() ~= nil end, 20)"))
   eq(child.lua_get("#require('reviewkit.core').targets()"), 1)
   child.lua("vim.wait(500)")
   git(linked, { "commit", "-q", "-am", "agent" })
-  assert(child.lua_get("vim.wait(10000, function() return #require('reviewkit.core').targets() == 0 end, 50)"))
+  assert(child.lua_get("vim.wait(30000, function() return #require('reviewkit.core').targets() == 0 end, 50)"))
   child.stop()
 end
 

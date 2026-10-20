@@ -213,7 +213,7 @@ T["install"]["ensure_async reports through the callback"] = function()
   require("reviewkit.install").ensure_async(opts(), function(result, err)
     done = { result = result, err = err }
   end)
-  vim.wait(5000, function()
+  vim.wait(20000, function()
     return done ~= nil
   end, 20)
   eq(done.err, nil)

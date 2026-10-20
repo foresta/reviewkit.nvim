@@ -6,9 +6,8 @@ use crate::error::Result;
 use crate::ext::git::Repository;
 use crate::model::{Anchor, Hunk, Session, Side};
 
-/// Moves a closed 1-based range `[start, line]` past the edits described by
-/// zero-context hunks of old → new. `None` when an edit touches the range
-/// itself: the text the comment was about is no longer what it was.
+/// `None` when an edit touches the range itself: the text the comment was
+/// about is no longer what it was.
 pub fn shift(hunks: &[Hunk], start: u32, line: u32) -> Option<(u32, u32)> {
     let mut delta: i64 = 0;
     for hunk in hunks {
@@ -21,8 +20,8 @@ pub fn shift(hunks: &[Hunk], start: u32, line: u32) -> Option<(u32, u32)> {
     apply_delta(start, line, delta)
 }
 
-/// Like `shift` but ignores edits that touch the range, so the caller can
-/// still look for the original text at the place the surrounding edits
+/// Edits touching the range are ignored so the caller can still look for
+/// the original text at the place the surrounding edits
 /// would have moved it to.
 pub fn shift_past_touching(hunks: &[Hunk], start: u32, line: u32) -> Option<(u32, u32)> {
     let delta = hunks
@@ -68,8 +67,7 @@ fn apply_delta(start: u32, line: u32, delta: i64) -> Option<(u32, u32)> {
     Some((shifted(start)?, shifted(line)?))
 }
 
-/// After targets, base and head were recomputed: follow every comment whose
-/// side blob changed, and recompute GitHub commentability for all of them
+/// Commentability is recomputed for every comment, not only the moved ones,
 /// since the diff may have moved. Side files and blob diffs are read once
 /// per (side, path) / (old, new), not once per comment.
 pub fn reanchor(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
@@ -146,9 +144,7 @@ struct Followed {
     stale: bool,
 }
 
-/// Same blob → nothing moved. Otherwise shift through the diff of the two
-/// blobs and confirm the stored context still reads the same there. The
-/// diff is only an optimisation: when it cannot be taken (no blob on either
+/// The diff is only an optimisation: when it cannot be taken (no blob on either
 /// side, old blob pruned from the object store) the text check alone
 /// decides, at the current position. A text comment on a file that became
 /// binary goes stale but keeps its anchor, so it can be followed again if

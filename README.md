@@ -104,8 +104,9 @@ require("reviewkit").setup({})
 ```
 
 Release assets are plain executables (`reviewkit-<target>`); after downloading one by hand,
-`chmod +x` it. The binary can also be set explicitly with `setup({ cli = { path = "..." } })` or
-`$REVIEWKIT_BIN`. Run `:checkhealth reviewkit` to see which binary is used, whether it matches
+`chmod +x` it. The binary is looked up in this order: `setup({ cli = { path = "..." } })`, `$REVIEWKIT_BIN`,
+the plugin's own `cli/target/{debug,release}` builds when `cli = { dev = true }`, the plugin's
+`bin/reviewkit`, then `reviewkit` on `$PATH`. Run `:checkhealth reviewkit` to see which binary is used, whether it matches
 the plugin, and whether `git`, `gh` and `herdr` are available.
 
 ## Usage
@@ -118,6 +119,16 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 | `:Review threads [refresh]` | list the pull request's review threads |
 | `:ReviewSubmit herdr\|github\|clipboard` | send the queue; comments leave it only at the session's own destination (GitHub for a PR, the agent for a local diff), so a PR review can go to an agent first and to GitHub later; GitHub submits are previewed first (`sinks.github.confirm = false` skips it) |
 | `:ReviewClose[!]` | close the session (`!` also deletes its state); asks first while comments are unsent |
+| `:ReviewInstall` | install or update the CLI (release download, else `cargo build`) |
+| `:ReviewLog` | show recent CLI calls and errors |
+
+In the comment window, a first word like `nit:` sets the comment's kind (`issue`, `suggestion`,
+`question`, `praise`, `nit`; `issue` when omitted), and a ```` ```suggestion ```` block becomes a
+suggested replacement. `:w` saves, `q` cancels.
+
+Sessions are saved under `setup({ cli = { state_dir = "..." } })` if set, else
+`$REVIEWKIT_STATE_DIR`, else `$XDG_STATE_HOME/reviewkit`, else `~/.local/state/reviewkit`. Pull
+requests are checked out there too, never in your own working tree.
 
 Default keys (disable with `setup({ set_keymaps = false })`; `<Plug>(reviewkit-*)` maps stay):
 `<leader>rc` comment, `<leader>re` / `<leader>rx` edit / remove the comment here,

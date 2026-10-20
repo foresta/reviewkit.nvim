@@ -1,21 +1,19 @@
 use crate::model::{Hunk, Stats};
 
-/// The hunks of one `diff --git` block. Status, blobs and the authoritative
-/// path come from `git diff --raw` instead; `path` here only exists to join
-/// the two, so it must survive quoting and `a/` `b/` prefixes.
+/// Status, blobs and the authoritative path come from `git diff --raw`
+/// instead; `path` here only exists to join the two, so it must survive
+/// quoting and `a/` `b/` prefixes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Patch {
     pub path: String,
     pub binary: bool,
     pub stats: Stats,
-    /// Zero-context hunks, as the contract exposes them.
     pub hunks: Vec<Hunk>,
     /// The `@@` header ranges, i.e. changed lines plus the 3 lines of context
     /// git printed: exactly what GitHub accepts comments on.
     pub context_base: Vec<[u32; 2]>,
     pub context_head: Vec<[u32; 2]>,
-    /// Bytes of this block, so callers can decide `too_large` without
-    /// re-scanning.
+    /// Counted here so callers can decide `too_large` without re-scanning.
     pub bytes: usize,
 }
 
@@ -219,8 +217,6 @@ impl HunkState {
         })
     }
 
-    /// The pending change starts at the current counters; later `-` / `+`
-    /// lines only grow the counts.
     fn change(&mut self) -> &mut Change {
         self.change.get_or_insert(Change {
             first_base: self.base_line,

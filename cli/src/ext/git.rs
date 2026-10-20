@@ -133,7 +133,6 @@ impl Git for SystemGit {
     }
 }
 
-/// The subcommand after any leading `-c key=value` pairs.
 fn subcommand<'a>(args: &[&'a str]) -> Option<&'a str> {
     let mut rest = args;
     while let ["-c", _, tail @ ..] = rest {
@@ -169,9 +168,8 @@ fn failure_code(stderr: &str) -> ErrorCode {
     }
 }
 
-/// One entry of `git diff --raw`: the authoritative path and status of a
-/// change. The patch text is only mined for hunks, because its headers are
-/// shaped by user config and quoting rules.
+/// Path and status come from `--raw` rather than the patch text, whose
+/// headers are shaped by user config and quoting rules.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawChange {
     pub status: char,
@@ -181,8 +179,7 @@ pub struct RawChange {
     pub head_blob: Option<String>,
 }
 
-/// One repository as seen from its root. All paths handed in and out are
-/// relative to that root.
+/// All paths handed in and out are relative to the repository root.
 pub struct Repository<'a> {
     git: &'a dyn Git,
     root: PathBuf,
@@ -301,8 +298,6 @@ impl<'a> Repository<'a> {
         Ok(text(&self.run(&args)?))
     }
 
-    /// Zero-context hunks between two blob ids, used to follow a comment's
-    /// line across a change of the file it sits in.
     pub fn diff_blobs(&self, old: &str, new: &str) -> Result<Vec<crate::model::Hunk>> {
         let out = self.run(&[
             "diff",
@@ -332,7 +327,7 @@ impl<'a> Repository<'a> {
             .collect())
     }
 
-    /// Tracked files only: whether the working tree differs from HEAD.
+    /// Untracked files do not count.
     pub fn is_dirty(&self) -> Result<bool> {
         let out = self.run(&["status", "--porcelain", "--untracked-files=no"])?;
         Ok(!out.is_empty())
@@ -449,8 +444,6 @@ impl<'a> Repository<'a> {
         Ok(Self::at(git, mirror.to_path_buf()))
     }
 
-    /// An empty bare repository pointing at the remote, for when no local
-    /// checkout of that repository is at hand to seed from.
     pub fn init_bare(git: &'a dyn Git, mirror: &Path, remote_url: &str) -> Result<Self> {
         let staging = staging_dir(mirror);
         let _ = std::fs::remove_dir_all(&staging);
@@ -470,7 +463,6 @@ impl<'a> Repository<'a> {
         self.fetch_with(&[], remote, refspecs)
     }
 
-    /// `config` entries are passed as `-c` for this one fetch only.
     pub fn fetch_with(&self, config: &[String], remote: &str, refspecs: &[String]) -> Result<()> {
         let mut args: Vec<&str> = config.iter().flat_map(|c| ["-c", c.as_str()]).collect();
         args.extend(["fetch", "--quiet", "--no-tags", remote]);

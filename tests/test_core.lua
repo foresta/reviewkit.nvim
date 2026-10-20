@@ -246,7 +246,7 @@ T["core"]["a session file rewritten by another process is picked up"] = function
   f:write("{}")
   f:close()
   os.rename(path .. ".tmp", path)
-  child.lua("vim.wait(5000, function() return #_G.events > 0 end, 20)")
+  child.lua("vim.wait(20000, function() return #_G.events > 0 end, 20)")
   eq(helpers.event_names(child), { "ReviewDecisionChanged" })
   eq(child.lua_get("require('reviewkit.core').session().rev"), 5)
 end
@@ -285,7 +285,7 @@ T["core"]["opening another session closes the first and moves the watcher"] = fu
   f:write("{}")
   f:close()
   os.rename(path .. ".tmp", path)
-  child.lua("vim.wait(5000, function() return #_G.events > 0 end, 20)")
+  child.lua("vim.wait(20000, function() return #_G.events > 0 end, 20)")
   eq(helpers.event_names(child), { "ReviewViewedChanged" })
   eq(child.lua_get("require('reviewkit.core').session().rev"), 7)
 end
