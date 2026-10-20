@@ -601,3 +601,59 @@ fn two_pull_requests_of_one_repository_can_be_opened_at_once() {
         assert_eq!(body["ok"], true, "{body}");
     }
 }
+
+fn graphql_answers_with(gh: &FakeGh, edit: impl Fn(&mut serde_json::Value)) {
+    let mut rules: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
+    for rule in rules.iter_mut() {
+        if rule["match"][0] == "api graphql" {
+            edit(&mut rule["body"]);
+        }
+    }
+    std::fs::write(
+        gh.dir.path().join("responses.json"),
+        serde_json::Value::Array(rules).to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_pull_request_opens_when_only_an_optional_field_is_forbidden() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    graphql_answers_with(&gh, |body| {
+        body["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"] =
+            serde_json::Value::Null;
+        body["errors"] = serde_json::json!([{
+            "type": "FORBIDDEN",
+            "path": ["repository", "pullRequest", "commits", "nodes", 0, "commit", "statusCheckRollup"],
+            "message": "Resource not accessible by integration"
+        }]);
+    });
+    let body = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(body["session"]["source"]["number"], 7);
+}
+
+#[test]
+fn an_error_on_the_review_threads_still_fails_the_open() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    graphql_answers_with(&gh, |body| {
+        body["errors"] = serde_json::json!([{
+            "path": ["repository", "pullRequest", "reviewThreads"],
+            "message": "Something went wrong"
+        }]);
+    });
+    let out = reviewkit(&state, &remote, &gh)
+        .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+}

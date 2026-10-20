@@ -1086,3 +1086,49 @@ fn a_comment_written_into_an_interrupted_review_body_is_not_sent_again() {
     assert_eq!(body["data"]["sent"][0]["comment_id"], outside.as_str());
     assert!(body["session"]["comments"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn an_interrupted_submit_is_not_reconciled_from_a_partial_answer() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let cid = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "maybe posted"}),
+    );
+    pending(
+        &state,
+        serde_json::json!({
+            "at": "2026-01-01T00:00:00Z",
+            "comments": [ { "id": cid, "path": "keep.txt", "side": "head", "line": 3, "body": "maybe posted" } ]
+        }),
+    );
+    let mut rules: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
+    for rule in rules.iter_mut() {
+        if rule["match"][0] == "api graphql" {
+            rule["body"]["errors"] = serde_json::json!([{
+                "path": ["repository", "pullRequest", "reviews"],
+                "message": "Resource not accessible"
+            }]);
+        }
+    }
+    std::fs::write(
+        gh.dir.path().join("responses.json"),
+        serde_json::Value::Array(rules).to_string(),
+    )
+    .unwrap();
+    let out = reviewkit(&state, &remote, &gh)
+        .args(["submit", "--session", &id, "--sink", "github"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        mutation_calls(&gh).is_empty(),
+        "nothing is sent while the earlier submit is unknown"
+    );
+}
