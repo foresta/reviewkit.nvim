@@ -58,6 +58,25 @@ impl SystemGit {
     }
 }
 
+/// `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` stay: they are the user's
+/// own `git -c` settings, and the ones that change output are pinned per
+/// command anyway.
+const INHERITED_REPOSITORY_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_QUARANTINE_PATH",
+    "GIT_LITERAL_PATHSPECS",
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
+];
+
 impl Git for SystemGit {
     fn run(&self, cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
         log::debug!("git {}", args.join(" "));
@@ -66,6 +85,9 @@ impl Git for SystemGit {
             // Paths with non-ASCII bytes would otherwise come back quoted and
             // escaped in diff headers.
             .args(["-c", "core.quotepath=false"])
+            // An editor's or desktop's askpass would open a dialog and wait
+            // with a lock held, like the terminal prompts turned off below.
+            .args(["-c", "core.askPass="])
             .args(args)
             .current_dir(cwd)
             .env("LC_ALL", "C")
@@ -75,9 +97,34 @@ impl Git for SystemGit {
             // one would hang while holding a lock.
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
+            .env_remove("GIT_ASKPASS")
+            .env_remove("SSH_ASKPASS")
+            .env("SSH_ASKPASS_REQUIRE", "never")
+            // The watcher refreshes often; a status that takes index.lock
+            // makes the user's own `git add` fail at random.
+            .env("GIT_OPTIONAL_LOCKS", "0")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Set by a hook or a commit editor that started Neovim; they would
+        // point every command (and the mirror's `remote set-url`) at another
+        // repository, or change how the paths given are matched.
+        for var in INHERITED_REPOSITORY_ENV {
+            command.env_remove(var);
+        }
+        // ssh asks for host keys and passphrases on /dev/tty, over the
+        // editor's screen and while a lock is held; without a controlling
+        // terminal it fails instead. The user's ssh command is kept.
+        #[cfg(unix)]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
         let mut child = command
             .spawn()
             .map_err(|err| Error::tool("git", ErrorCode::EToolMissing, format!("cannot run git: {err}")))?;
@@ -93,6 +140,12 @@ impl Git for SystemGit {
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 Ok(None) => {
+                    // The whole process group: ssh and credential helpers would
+                    // otherwise outlive the git that was given up on.
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                    }
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(Error::tool(
