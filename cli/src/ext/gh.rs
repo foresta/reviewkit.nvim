@@ -386,7 +386,10 @@ pub fn pr_details(gh: &dyn Gh, repo: &RepoRef, number: u64, fetched_at: String) 
         // A nulled field bubbles up to its nearest nullable parent while the
         // error points at the leaf, so missing threads are checked directly.
         if !pr["reviewThreads"].is_object() {
-            let message = optional.first().and_then(|e| e["message"].as_str()).unwrap_or("no review threads");
+            let message = optional
+                .first()
+                .and_then(|e| e["message"].as_str())
+                .unwrap_or("no review threads");
             return Err(graphql_error(message));
         }
         if info.is_none() {
