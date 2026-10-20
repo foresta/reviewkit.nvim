@@ -150,8 +150,8 @@ function M.run(args, opts, cb)
   end)
 end
 
---- Synchronous variant for :checkhealth and scripts; never call it from a
---- UI event handler.
+--- Synchronous variant for :checkhealth, scripts and command-line
+--- completion; keep the timeout short where the user is waiting on it.
 ---@param args string[]
 ---@param opts? { stdin?: string|table, cwd?: string, timeout?: integer }
 ---@return reviewkit.Envelope? envelope
@@ -167,12 +167,22 @@ function M.run_sync(args, opts)
   if state_dir then
     vim.list_extend(argv, { "--state-dir", state_dir })
   end
+  if opts.cwd then
+    vim.list_extend(argv, { "--cwd", opts.cwd })
+  end
   vim.list_extend(argv, args)
   local stdin = opts.stdin
   if type(stdin) == "table" then
     stdin = vim.json.encode(stdin)
   end
-  local res = vim.system(argv, { text = true, stdin = stdin, env = tool_env(), timeout = opts.timeout or 30000 }):wait()
+  local res = vim
+    .system(argv, {
+      text = true,
+      stdin = stdin,
+      env = tool_env(),
+      timeout = opts.timeout or 30000,
+    })
+    :wait()
   return decode(res)
 end
 

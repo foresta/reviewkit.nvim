@@ -195,6 +195,95 @@ T["orchestrator"]["closing with unsent comments asks first, and keeps the sessio
   wait_notice("review closed")
 end
 
+T["orchestrator"][":Review without arguments shows the usage"] = function()
+  child.cmd("Review")
+  eq(child.lua_get("_G.notices[#_G.notices].msg"):find("usage: :Review", 1, true) ~= nil, true)
+end
+
+T["orchestrator"][":Review resume completes pull request ids, which are readable"] = function()
+  helpers.respond(dir, {
+    {
+      match = { "session list" },
+      body = {
+        ok = true,
+        data = {
+          { id = "local/abc/0123", kind = "local", title = "main..worktree", comments = 0, updated_at = "t" },
+          { id = "pr/github.com/o/r/7", kind = "pr", title = "Add k", comments = 1, updated_at = "t" },
+          { kind = "pr" },
+        },
+      },
+    },
+  })
+  eq(child.lua_get("vim.fn.getcompletion('Review resume ', 'cmdline')"), { "pr/github.com/o/r/7" })
+end
+
+T["orchestrator"][":Review resume without an id lists sessions by what they compare"] = function()
+  helpers.respond(dir, {
+    {
+      match = { "session list" },
+      body = {
+        ok = true,
+        data = {
+          {
+            id = "local/abc/0123",
+            kind = "local",
+            repo_root = "/work/proj",
+            title = "main..worktree",
+            comments = 2,
+            updated_at = "2026-10-20T01:02:03Z",
+          },
+        },
+      },
+    },
+  })
+  child.lua([[vim.ui.select = function(items, opts) _G.shown = opts.format_item(items[1]) end]])
+  child.cmd("Review resume")
+  child.lua("vim.wait(5000, function() return _G.shown ~= nil end, 20)")
+  eq(child.lua_get("_G.shown"):find("proj  main..worktree", 1, true) ~= nil, true)
+end
+
+T["orchestrator"]["<Plug> maps exist at plugin load without loading the orchestrator"] = function()
+  eq(child.lua_get("vim.fn.maparg('<Plug>(reviewkit-comment)', 'n') ~= ''"), true)
+  eq(child.lua_get("package.loaded['reviewkit.orchestrator'] == nil"), true)
+end
+
+T["orchestrator"]["a PR refresh reloads worktree buffers whose files changed"] = function()
+  local function pr(etag)
+    return helpers.session({
+      id = "pr/github.com/o/r/7",
+      source = {
+        kind = "pr",
+        number = 7,
+        url = "u",
+        title = "Add k",
+        author = "alice",
+        state = "OPEN",
+        head_ref = "f",
+        base_ref = "main",
+        base_oid = string.rep("b", 40),
+        node_id = "PR_1",
+        worktree = worktree,
+      },
+      repo = { root = worktree },
+      head = { ref = "f", sha = string.rep("c", 40), dirty = false },
+      etags = { targets = etag },
+    })
+  end
+  helpers.respond(dir, {
+    { match = { "session open --pr 7" }, body = { ok = true, data = vim.NIL, session = pr("t1") } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = pr("t2") } },
+  })
+  child.cmd("Review pr 7")
+  wait_notice("#7 Add k")
+  child.cmd("tabnew " .. worktree .. "/src/a.rs")
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]"), "l1")
+  vim.fn.writefile({ "rewritten" }, worktree .. "/src/a.rs")
+  child.lua("vim.uv.fs_utime(vim.fn.expand('%:p'), os.time() + 5, os.time() + 5)")
+  child.cmd("Review refresh")
+  child.lua("vim.wait(5000, function() return vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] == 'rewritten' end, 20)")
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]"), "rewritten")
+end
+
 T["orchestrator"]["commands without a session only notify"] = function()
   child.cmd("ReviewSubmit")
   child.cmd("ReviewClose")

@@ -166,6 +166,15 @@ pub struct SessionSummary {
     pub updated_at: String,
 }
 
+/// A merge-base base is kept as `A...`, which already carries its dots.
+fn comparison_label(base: &str, head: &str) -> String {
+    if base.ends_with("...") {
+        format!("{base}{head}")
+    } else {
+        format!("{base}..{head}")
+    }
+}
+
 impl Session {
     /// `rev`, `state_path` and `etags` are placeholders here: only the store
     /// may set them, on save.
@@ -199,9 +208,12 @@ impl Session {
             id: self.id.clone(),
             kind: self.source.kind().to_string(),
             repo_root: self.repo.root.clone(),
+            // Local ids are hashes; the comparison is what tells them apart.
             title: match &self.source {
                 Source::Pr { title, .. } => Some(title.clone()),
-                Source::Local { .. } => None,
+                Source::Local {
+                    base_spec, head_spec, ..
+                } => Some(comparison_label(base_spec, head_spec)),
             },
             comments: self.comments.len(),
             decision: self.decision.is_some(),
@@ -215,6 +227,13 @@ mod tests {
     use super::*;
     use crate::error::{Error, ErrorCode};
     use crate::model::*;
+
+    #[test]
+    fn a_local_title_reads_as_git_range_notation() {
+        assert_eq!(comparison_label("HEAD~1", "worktree"), "HEAD~1..worktree");
+        assert_eq!(comparison_label("main...", "worktree"), "main...worktree");
+        assert_eq!(comparison_label("main...", "feature"), "main...feature");
+    }
 
     /// Every enum variant appears at least once, so the snapshot pins the
     /// wire spelling of the whole contract.

@@ -300,7 +300,7 @@ lua/reviewkit/
   view/diff.lua       タブ・左右ウィンドウ・次 / 前の移動。base 側は file base で取得した読み取り専用バッファ。
                       左右の位置合わせと色付けは Neovim の diff モード（diffthis）。hunk 間の移動とコメント可否は Target から
   view/annotate.lua   extmark の注釈（stale は薄く）
-  view/queue.lua      一覧（quickfix 既定、float も可）
+  view/queue.lua      一覧（quickfix）
   view/input.lua      入力窓
   view/thread.lua     カーソル行のスレッドを float で表示。r で返信（reply_to 付きコメント）、R で resolve の切り替え
   orchestrator.lua    :Review の配線、worktree の監視、既定キーマップ
@@ -346,7 +346,6 @@ require("reviewkit").setup({
   cli = { path = nil, dev = false },
   tools = { git = nil, gh = nil, herdr = nil },   -- REVIEWKIT_* として CLI に渡す
   set_keymaps = true,
-  view = { queue = "quickfix" },                  -- "quickfix" | "float"
   sinks = {
     herdr = { agent_type = "claude", header = nil, match_foreground_cwd = true },   -- HerdrOptions として渡す
     github = { confirm = true },                    -- :ReviewSubmit github は送る内容を見せて確認する
