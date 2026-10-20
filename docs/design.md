@@ -298,7 +298,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
 
   | 経路 | 途中で落ちる | 2 回実行 | 相手が応答しない |
   |---|---|---|---|
-  | github | pending が残り、次の github submit が照合してから送る | 照合で送信済みと分かったものは送らない。GitHub へ sent 済みは `delivered` で skip | `outcome = unknown`、再試行不可。pending を次回照合 |
+  | github | pending が残り、次の github submit が照合してから送る。照合が済むまで、pending に載ったコメントの編集・削除と、decision を運んだ pending があるときの decision の変更は E_CONFLICT（照合が送ったときの本文で探すため、変えると送信済みを見失い二重に投稿する）。`comment clear` も pending に載ったコメントはキューに残す（照合はキューの中を探す） | 照合で送信済みと分かったものは送らない。GitHub へ sent 済みは `delivered` で skip | `outcome = unknown`、再試行不可。pending を次回照合 |
   | herdr | 送信後・保存前に落ちると記録が無く再送しうる（エージェント宛てで公開されない） | 自分へ sent 済みのコメントと decision は送らない | 全体失敗、`outcome = unknown`。印は試行分だけ |
   | 選択送信（comment_ids） | github は選んだ分だけの COMMENT review を送り、pending には decision を運ばないと記録する（照合しても decision は消さない） | 送った分は消費されてキューに無く、その id は落とされる。全部落ちれば nothing to submit | 経路ごとの規則と同じ |
   | Lua sink（submit apply） | 送信後・apply 前に落ちると記録されず再送しうる（sink の責任） | 消費済みはキューに無い。`version` / `decision_version` が違うものは記録しない | sink の責任 |
