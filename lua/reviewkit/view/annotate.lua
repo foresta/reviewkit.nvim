@@ -64,7 +64,13 @@ function M.refresh(buf)
   for _, c in ipairs(session.comments) do
     if c.path == path and c.side == side and c.line <= last and not c.reply_to then
       local hl = c.stale and "Comment" or "DiagnosticInfo"
-      local text = (c.kind == "issue" and "●" or ("● " .. c.kind)) .. (c.stale and " (stale)" or "")
+      local first = c.body:match("^[^\n]*") or ""
+      if vim.fn.strchars(first) > 40 then
+        first = vim.fn.strcharpart(first, 0, 40) .. "…"
+      end
+      local text = (c.kind == "issue" and "●" or ("● " .. c.kind))
+        .. (c.stale and " (stale)" or "")
+        .. (first ~= "" and (" " .. first) or "")
       pcall(vim.api.nvim_buf_set_extmark, buf, ns, c.line - 1, 0, {
         sign_text = "●",
         sign_hl_group = hl,

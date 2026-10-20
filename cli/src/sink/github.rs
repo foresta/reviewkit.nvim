@@ -72,7 +72,12 @@ fn event_name(event: DecisionEvent) -> &'static str {
 
 /// GitHub renders a suggestion only from a fenced block of that language.
 fn body_with_suggestion(comment: &Comment) -> String {
-    match comment.suggestion.as_deref().filter(|s| !s.trim().is_empty()) {
+    // An empty suggestion is GitHub's way to propose deleting the lines,
+    // so it still gets its (empty) fence.
+    match comment.suggestion.as_deref() {
+        Some(suggestion) if suggestion.trim().is_empty() => {
+            format!("{}\n\n```suggestion\n```", comment.body.trim_end())
+        }
         Some(suggestion) => format!(
             "{}\n\n```suggestion\n{}\n```",
             comment.body.trim_end(),
@@ -678,6 +683,15 @@ mod tests {
             (plan.replies[0].alias.as_str(), plan.replies[0].comment_id.as_str()),
             ("reply0", "c_5")
         );
+    }
+
+    #[test]
+    fn an_empty_suggestion_is_sent_as_an_empty_fence() {
+        let mut s = pr_session();
+        s.comments[0].suggestion = Some(String::new());
+        assert!(body_with_suggestion(&s.comments[0]).ends_with("```suggestion\n```"));
+        s.comments[0].suggestion = None;
+        assert!(!body_with_suggestion(&s.comments[0]).contains("```"));
     }
 
     #[test]

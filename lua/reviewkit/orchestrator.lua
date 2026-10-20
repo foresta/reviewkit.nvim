@@ -356,8 +356,62 @@ local function split_kind(body)
   return body, "issue"
 end
 
---- Comment on the cursor line or the visual range of the current buffer.
+--- The fence is parsed out rather than kept in the body so an agent gets
+--- the replacement as such, and GitHub gets exactly one fence.
+---@param text string
+---@return string body
+---@return string? suggestion
+local function split_suggestion(text)
+  local before, inner, after = text:match("^(.-)```suggestion[ \t\r]*\n(.-)\r?\n?```(.*)$")
+  if not inner then
+    return text, nil
+  end
+  local body = vim.trim(vim.trim(before or "") .. "\n" .. vim.trim(after or ""))
+  return body, inner
+end
+
+---@param text string
+---@return string body
+---@return string kind
+---@return string? suggestion
+local function compose(text)
+  local body, kind = split_kind(text)
+  local rest, suggestion = split_suggestion(body)
+  return rest, kind, suggestion
+end
+
+---@param comment reviewkit.Comment
+---@return string[]
+local function render(comment)
+  local first = comment.kind ~= "issue" and (comment.kind .. ": ") or ""
+  local lines = vim.split(first .. comment.body, "\n", { plain = true })
+  if comment.suggestion then
+    table.insert(lines, "```suggestion")
+    -- An empty suggestion deletes the lines; a blank line inside the fence
+    -- would turn it into "replace with an empty line".
+    if comment.suggestion ~= "" then
+      vim.list_extend(lines, vim.split(comment.suggestion, "\n", { plain = true }))
+    end
+    table.insert(lines, "```")
+  end
+  return lines
+end
+
 ---@param opts? { range?: boolean, line1?: integer, line2?: integer }
+---@return integer line
+---@return integer? start_line
+local function cursor_range(opts)
+  opts = opts or {}
+  local ranged = opts.range and opts.line1 and opts.line2
+  local line = ranged and math.max(opts.line1, opts.line2) or vim.api.nvim_win_get_cursor(0)[1]
+  local start_line = ranged and math.min(opts.line1, opts.line2) or nil
+  if start_line == line then
+    start_line = nil
+  end
+  return line, start_line
+end
+
+---@param opts? { range?: boolean, line1?: integer, line2?: integer, suggest?: boolean }
 function M.comment(opts)
   opts = opts or {}
   local buf = vim.api.nvim_get_current_buf()
@@ -368,25 +422,32 @@ function M.comment(opts)
   if require("reviewkit.view.diff").is_placeholder(buf) then
     return notify("this side has no file to comment on")
   end
-  local ranged = opts.range and opts.line1 and opts.line2
-  local line = ranged and math.max(opts.line1, opts.line2) or vim.api.nvim_win_get_cursor(0)[1]
-  local start_line = ranged and math.min(opts.line1, opts.line2) or nil
-  if start_line == line then
-    start_line = nil
+  if opts.suggest and side == "base" then
+    return notify("a suggestion replaces head lines; comment on the head side")
   end
+  local line, start_line = cursor_range(opts)
   local where = start_line and ("%s:%d-%d"):format(path, start_line, line) or ("%s:%d"):format(path, line)
   if side == "base" then
     where = where .. " (base)"
   end
   local outside = not core.is_commentable(path, side, line)
+    or (start_line ~= nil and not core.is_commentable(path, side, start_line))
+  local lines = nil
+  if opts.suggest then
+    lines = { "", "```suggestion" }
+    vim.list_extend(lines, vim.api.nvim_buf_get_lines(buf, (start_line or line) - 1, line, false))
+    table.insert(lines, "```")
+  end
   require("reviewkit.view.input").open({
     title = "Comment " .. where .. (outside and " (outside the diff; agent only)" or ""),
+    lines = lines,
+    start_insert = true,
     footer = " :w save · q cancel · first line `nit:` sets the kind ",
     on_save = function(text)
       if vim.trim(text) == "" then
         return
       end
-      local body, kind = split_kind(text)
+      local body, kind, suggestion = compose(text)
       core.add_comment({
         path = path,
         side = side,
@@ -394,6 +455,7 @@ function M.comment(opts)
         start_line = start_line,
         kind = kind,
         body = body,
+        suggestion = suggestion,
       }, function(err)
         if err then
           return notify_error(err)
@@ -404,7 +466,6 @@ function M.comment(opts)
   })
 end
 
---- Edit the body of the comment under the cursor.
 function M.edit_comment()
   local buf = vim.api.nvim_get_current_buf()
   local comment = require("reviewkit.view.annotate").comment_at(buf, vim.api.nvim_win_get_cursor(0)[1])
@@ -413,15 +474,63 @@ function M.edit_comment()
   end
   require("reviewkit.view.input").open({
     title = ("Edit %s:%d"):format(comment.path, comment.line),
-    lines = vim.split(comment.body, "\n"),
+    lines = render(comment),
     on_save = function(text)
-      core.update_comment(comment.id, { body = text }, function(err)
+      local body, kind, suggestion = compose(text)
+      core.update_comment(comment.id, { body = body, kind = kind, suggestion = suggestion or vim.NIL }, function(err)
         if err then
           notify_error(err)
         end
       end)
     end,
   })
+end
+
+--- Stale comments are offered first: re-anchoring them is what this is for.
+---@param opts? { range?: boolean, line1?: integer, line2?: integer }
+function M.move_comment(opts)
+  local buf = vim.api.nvim_get_current_buf()
+  local path, side = location(buf)
+  if not path then
+    return
+  end
+  if require("reviewkit.view.diff").is_placeholder(buf) then
+    return notify("this side has no file to move a comment to")
+  end
+  local line, start_line = cursor_range(opts)
+  local candidates = vim.tbl_filter(function(c)
+    return c.path == path and c.side == side and not c.reply_to
+  end, core.comments())
+  table.sort(candidates, function(a, b)
+    if a.stale ~= b.stale then
+      return a.stale
+    end
+    return a.line < b.line
+  end)
+  if #candidates == 0 then
+    return notify("no comment on this file to move")
+  end
+  local function move(c)
+    core.update_comment(c.id, { line = line, start_line = start_line or vim.NIL }, function(err)
+      if err then
+        return notify_error(err)
+      end
+      notify(("moved to %s:%d"):format(path, line))
+    end)
+  end
+  if #candidates == 1 then
+    return move(candidates[1])
+  end
+  vim.ui.select(candidates, {
+    prompt = "Move which comment here",
+    format_item = function(c)
+      return ("%s:%d%s %s"):format(c.path, c.line, c.stale and " (stale)" or "", (c.body:match("^[^\n]*") or ""))
+    end,
+  }, function(choice)
+    if choice then
+      move(choice)
+    end
+  end)
 end
 
 function M.remove_comment()
@@ -621,6 +730,10 @@ end
 local maps = {
   { "n", "<leader>rc", "comment", "reviewkit: comment on this line" },
   { "x", "<leader>rc", "comment_range", "reviewkit: comment on the selection" },
+  { "n", "<leader>rS", "suggest", "reviewkit: suggest a replacement for this line" },
+  { "x", "<leader>rS", "suggest_range", "reviewkit: suggest a replacement for the selection" },
+  { "n", "<leader>rm", "move_comment", "reviewkit: move a comment of this file here" },
+  { "x", "<leader>rm", "move_comment_range", "reviewkit: move a comment of this file to the selection" },
   { "n", "<leader>re", "edit_comment", "reviewkit: edit the comment here" },
   { "n", "<leader>rx", "remove_comment", "reviewkit: remove the comment here" },
   { "n", "<leader>rd", "decision", "reviewkit: set the decision" },
@@ -639,6 +752,20 @@ local maps = {
 local actions = {
   comment = function()
     M.comment()
+  end,
+  suggest = function()
+    M.comment({ suggest = true })
+  end,
+  suggest_range = function()
+    vim.cmd("normal! \27")
+    M.comment({ range = true, line1 = vim.fn.line("'<"), line2 = vim.fn.line("'>"), suggest = true })
+  end,
+  move_comment = function()
+    M.move_comment()
+  end,
+  move_comment_range = function()
+    vim.cmd("normal! \27")
+    M.move_comment({ range = true, line1 = vim.fn.line("'<"), line2 = vim.fn.line("'>") })
   end,
   comment_range = function()
     -- Leave visual mode first so '< and '> are set.

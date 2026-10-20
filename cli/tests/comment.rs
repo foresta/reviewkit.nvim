@@ -574,3 +574,44 @@ fn a_reply_needs_no_line_that_still_exists() {
     );
     assert!(!line_comment.status.success());
 }
+
+#[test]
+fn a_comment_needs_a_body_or_a_suggestion() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let id = open(&state, &repo);
+    let blank = add(
+        &state,
+        &repo,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "  \n"}),
+    );
+    assert_eq!(blank.status.code(), Some(2));
+    let only_suggestion = json(&add(
+        &state,
+        &repo,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "", "suggestion": "c"}),
+    ));
+    let cid = only_suggestion["data"]["id"].as_str().unwrap().to_string();
+    let emptied = reviewkit(&state, &repo)
+        .args(["comment", "update", "--session", &id, "--id", &cid])
+        .write_stdin(r#"{"suggestion": null}"#)
+        .output()
+        .unwrap();
+    assert_eq!(emptied.status.code(), Some(2));
+}
+
+#[test]
+fn an_empty_suggestion_proposes_deleting_the_lines() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let id = open(&state, &repo);
+    let body = json(&add(
+        &state,
+        &repo,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "", "suggestion": ""}),
+    ));
+    assert_eq!(body["session"]["comments"][0]["suggestion"], "");
+}
