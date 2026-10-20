@@ -292,7 +292,7 @@
         "type": "object"
       },
       "Commentable": {
-        "description": "Whether GitHub would accept the comment. Comments outside the diff are\nstill queued (D4); the sink decides what to skip.",
+        "description": "Whether GitHub would accept the comment; `reason` says why not, which\nmay also be independent of the host (stale, binary, delivered). Comments\noutside the diff are still queued (D4); the sink decides what to skip.\nNamed after GitHub rather than a neutral `in_diff` because the ranges,\nthis flag and `outside_diff` all follow GitHub's rule; a second hosting\nsink needs per-destination ranges and reasons, a version bump anyway.",
         "properties": {
           "github": {
             "type": "boolean"
