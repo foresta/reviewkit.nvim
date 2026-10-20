@@ -32,6 +32,7 @@ pub fn build(repo: &Repository<'_>, base_sha: &str, head: Option<&str>) -> Resul
             }
         }
     }
+    mark_large_sides(repo, base_sha, head, &mut targets);
     if head.is_none() {
         let unhashed: Vec<usize> = targets
             .iter()
@@ -48,6 +49,46 @@ pub fn build(repo: &Repository<'_>, base_sha: &str, head: Option<&str>) -> Resul
         target.id = format!("t_{}", i + 1);
     }
     Ok(targets)
+}
+
+/// A one-line change to a large file has a small patch; showing its hunk
+/// against a side `file base` refuses to read would diff the whole file as
+/// added, so either side being large makes the Target too large.
+fn mark_large_sides(repo: &Repository<'_>, base_sha: &str, head: Option<&str>, targets: &mut [Target]) {
+    let limit = TOO_LARGE_BYTES as u64;
+    let base_path = |t: &Target| t.old_path.clone().unwrap_or_else(|| t.path.clone());
+    let tracked = |t: &&mut Target| t.status != TargetStatus::Untracked && !t.too_large;
+    let base_paths: Vec<String> = targets
+        .iter_mut()
+        .filter(tracked)
+        .filter(|t| t.base_blob.is_some())
+        .map(|t| base_path(t))
+        .collect();
+    let base_sizes = repo.blob_sizes(base_sha, &base_paths);
+    let head_sizes = match head {
+        Some(head) => {
+            let paths: Vec<String> = targets
+                .iter_mut()
+                .filter(tracked)
+                .filter(|t| t.status != TargetStatus::Deleted)
+                .map(|t| t.path.clone())
+                .collect();
+            repo.blob_sizes(head, &paths)
+        }
+        None => HashMap::new(),
+    };
+    for target in targets.iter_mut().filter(tracked) {
+        let base_large = base_sizes.get(&base_path(target)).is_some_and(|s| *s > limit);
+        let head_large = target.status != TargetStatus::Deleted
+            && match head {
+                Some(_) => head_sizes.get(&target.path).is_some_and(|s| *s > limit),
+                None => std::fs::symlink_metadata(repo.root().join(&target.path)).is_ok_and(|m| m.len() > limit),
+            };
+        if base_large || head_large {
+            target.too_large = true;
+            target.hunks.clear();
+        }
+    }
 }
 
 /// A typechange (symlink → file) is printed as two blocks for one path;

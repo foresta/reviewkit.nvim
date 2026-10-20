@@ -630,3 +630,54 @@ fn a_large_untracked_file_is_only_sniffed() {
     assert_eq!(big["commentable"]["head"], serde_json::json!([]));
     assert!(big["head_blob"].is_string());
 }
+
+#[test]
+fn a_large_file_with_a_small_change_is_too_large_on_both_sides_alike() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let big = "line\n".repeat(300_000);
+    repo.write("lock.json", &big);
+    repo.git(&["add", "lock.json"]);
+    repo.git(&["commit", "-q", "-m", "big file"]);
+    repo.write("lock.json", &format!("{big}one more\n"));
+    let body = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let id = body["session"]["id"].as_str().unwrap().to_string();
+    let lock = target(&body["session"], "lock.json");
+    assert_eq!(lock["too_large"], true, "{lock}");
+    assert_eq!(lock["hunks"], serde_json::json!([]));
+    let base = json(
+        &reviewkit(&state, &repo)
+            .args(["file", "base", "--session", &id, "--path", "lock.json"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(base["data"]["too_large"], true);
+    assert!(base["data"]["lines"].is_null());
+}
+
+#[test]
+fn a_large_file_whose_name_looks_like_pathspec_magic_is_still_sized() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let big = "line\n".repeat(300_000);
+    repo.write(":big", &big);
+    repo.git(&["add", "--", ":(literal):big"]);
+    repo.git(&["commit", "-q", "-m", "big file"]);
+    repo.git(&["checkout", "-q", "-b", "next"]);
+    repo.write(":big", &format!("{big}one more\n"));
+    repo.git(&["commit", "-q", "-am", "one line"]);
+    let body = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD~1", "--head", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let big = target(&body["session"], ":big");
+    assert_eq!(big["too_large"], true, "{big}");
+    assert_eq!(big["hunks"], serde_json::json!([]));
+}
