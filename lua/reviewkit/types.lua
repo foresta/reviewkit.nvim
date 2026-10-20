@@ -65,8 +65,12 @@ M.SCHEMA_VERSION = 1
 ---@field start_line? integer|vim.NIL
 ---@field suggestion? string|vim.NIL
 
---- Whether GitHub would accept the comment. Comments outside the diff are
---- still queued (D4); the sink decides what to skip.
+--- Whether GitHub would accept the comment; `reason` says why not, which
+--- may also be independent of the host (stale, binary, delivered). Comments
+--- outside the diff are still queued (D4); the sink decides what to skip.
+--- Named after GitHub rather than a neutral `in_diff` because the ranges,
+--- this flag and `outside_diff` all follow GitHub's rule; a second hosting
+--- sink needs per-destination ranges and reasons, a version bump anyway.
 ---@class reviewkit.Commentable
 ---@field github boolean
 ---@field reason? reviewkit.Reason

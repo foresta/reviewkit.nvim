@@ -126,6 +126,13 @@ Comment {
                             -- 作業ツリー側は head_sha が null。代わりに blob（git hash-object）で固定する
   stale: bool
   commentable: { github: bool, reason: Reason|null }
+                            -- 行に置けるかの判定（Target.commentable の範囲、この github と reason の
+                            -- outside_diff）は全体が GitHub の規則（差分の行と前後 3 行）。ホスティング先が
+                            -- GitHub だけなので、規則を 1 つに揃えている。herdr と clipboard は範囲の制約を持たず、
+                            -- view が local セッションで示す範囲も GitHub の目安（範囲外のコメントも積める、D4）。
+                            -- 名前を中立にしないのは、別のホスティング先を足すときに範囲・可否・reason を
+                            -- 送り先ごとに持つ構造へ作り直す必要があり（schema_version を上げる契約の変更）、
+                            -- そのとき今の値が GitHub のものだと読めるようにするため
   last_error: { sink, code, message, at } | null
   deliveries: { sink, at, mode: "sent" | "staged" | "copied", url?, consumed }[]   -- consumed: この配送でキューを出た
   created_at, updated_at
