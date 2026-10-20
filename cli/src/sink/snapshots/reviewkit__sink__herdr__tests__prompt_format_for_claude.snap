@@ -12,6 +12,10 @@ Handle the empty case.
 2. @src/b.rs#L8-L10 (nit) [refers to the base version of the file; the line may have shifted since the comment was written]
 Rename to `count`.
 It reads better.
+Base lines it refers to:
+```
+let count = 1;
+```
 Suggested replacement:
 ```
 let count = 0;

@@ -96,6 +96,9 @@ fn reference(comment: &Comment, agent_type: AgentType) -> String {
     }
 }
 
+/// A wide base range would otherwise flood the agent's prompt.
+const MAX_QUOTED_LINES: usize = 40;
+
 /// A comment the agent already received is not sent again; text that was
 /// only staged in its input may have been discarded there, so it is.
 fn to_send(session: &Session) -> Vec<&Comment> {
@@ -165,6 +168,19 @@ pub fn format_prompt(session: &Session, opts: &SubmitOptions) -> String {
                 head.push_str(&format!(" [{}]", notes.join("; ")));
             }
             let mut block = vec![head, c.body.trim_end().to_string()];
+            // The agent only has the current files; the base lines a comment
+            // is about exist nowhere it can read, so they travel with it.
+            if c.side == Side::Base && c.reply_to.is_none() && !c.anchor.context.lines.is_empty() {
+                let lines = &c.anchor.context.lines;
+                let shown = lines.len().min(MAX_QUOTED_LINES);
+                let quoted = lines[..shown].join("\n");
+                let fence = fence_for(&quoted);
+                let more = match lines.len() - shown {
+                    0 => String::new(),
+                    n => format!("\n({n} more lines)"),
+                };
+                block.push(format!("Base lines it refers to:\n{fence}\n{quoted}\n{fence}{more}"));
+            }
             if c.suggestion.as_deref().is_some_and(|s| s.trim().is_empty()) {
                 block.push("Suggested change: delete these lines.".to_string());
             } else if let Some(suggestion) = c.suggestion.as_deref() {
@@ -410,6 +426,7 @@ mod tests {
         s.comments[1].side = Side::Base;
         s.comments[1].stale = true;
         s.comments[1].suggestion = Some("let count = 0;".into());
+        s.comments[1].anchor.context.lines = vec!["let count = 1;".into()];
         s.decision = Some(Decision {
             event: DecisionEvent::RequestChanges,
             body: "Two things before merge.".into(),
