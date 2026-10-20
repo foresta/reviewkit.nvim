@@ -32,7 +32,7 @@ end, {
   nargs = "?",
   desc = "reviewkit: send the queue through a sink (default: herdr)",
   complete = function()
-    return { "herdr", "github", "clipboard" }
+    return require("reviewkit.core").sink_names()
   end,
 })
 

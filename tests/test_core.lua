@@ -185,6 +185,42 @@ T["core"]["a registered Lua sink is applied through submit apply"] = function()
   eq(vim.json.decode(last.stdin).sink, "clip")
 end
 
+T["core"]["sinks merges the CLI's list with registered Lua sinks, Lua winning"] = function()
+  helpers.respond(dir, {
+    {
+      match = { "sink list" },
+      body = {
+        ok = true,
+        data = {
+          { name = "herdr", available = true, reason = vim.NIL, runtime = "cli" },
+          { name = "github", available = false, reason = "gh is not installed", runtime = "cli" },
+        },
+      },
+    },
+  })
+  child.lua([[
+    local core = require('reviewkit.core')
+    core.register_sink('github', { submit = function() end })
+    core.register_sink('clip', {
+      submit = function() end,
+      available = function() return false, 'no clipboard' end,
+    })
+    core.sinks(function(err, list) _G.finish(err, list) end)
+  ]])
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err, nil)
+  local by_name = {}
+  for _, s in ipairs(d.results[1]) do
+    by_name[s.name] = s
+  end
+  eq(by_name.herdr.runtime, "cli")
+  eq(by_name.github.runtime, "lua")
+  eq(by_name.github.available, true)
+  eq(by_name.clip.available, false)
+  eq(by_name.clip.reason, "no clipboard")
+  eq(child.lua_get("require('reviewkit.core').sink_names()"), { "clip", "github", "herdr" })
+end
+
 T["core"]["a session file rewritten by another process is picked up"] = function()
   local state_dir = helpers.fake_dir()
   local session_dir = state_dir .. "/sessions/local/abc/HEAD..worktree"

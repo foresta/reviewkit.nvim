@@ -39,7 +39,7 @@ pub struct RawOutput {
 pub fn classify_failure(what: &str, out: &RawOutput) -> Error {
     let text = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if text.contains("gh auth login") || text.contains("not logged into") {
-        return Error::new(ErrorCode::EGhAuth, format!("gh is not logged in: {text}")).hint("run `gh auth login`");
+        return Error::tool("gh", ErrorCode::EAuth, format!("gh is not logged in: {text}")).hint("run `gh auth login`");
     }
     if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&out.stdout)
         && let Some(message) = body["errors"][0]["message"].as_str()
@@ -51,7 +51,7 @@ pub fn classify_failure(what: &str, out: &RawOutput) -> Error {
     } else {
         text
     };
-    let err = Error::new(ErrorCode::EGh, format!("gh {what} failed: {detail}"));
+    let err = Error::tool("gh", ErrorCode::ETool, format!("gh {what} failed: {detail}"));
     if looks_transient(&detail) { err.retryable() } else { err }
 }
 
@@ -59,10 +59,10 @@ pub fn classify_failure(what: &str, out: &RawOutput) -> Error {
 /// gets its own code so the client can say what to do about it.
 pub fn graphql_error(message: &str) -> Error {
     if message.to_ascii_lowercase().contains("pending review") {
-        return Error::new(ErrorCode::EGhPendingReview, format!("GraphQL: {message}"))
+        return Error::tool("gh", ErrorCode::EPendingReview, format!("GraphQL: {message}"))
             .hint("submit or discard the pending review on GitHub first");
     }
-    Error::new(ErrorCode::EGh, format!("GraphQL: {message}"))
+    Error::tool("gh", ErrorCode::ETool, format!("GraphQL: {message}"))
 }
 
 pub struct SystemGh {
@@ -77,7 +77,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 impl SystemGh {
     pub fn new(path: Option<&Path>) -> Result<Self> {
         let path = path.filter(|p| p.is_file()).ok_or_else(|| {
-            Error::new(ErrorCode::EGhMissing, "gh is not installed or not on PATH")
+            Error::tool("gh", ErrorCode::EToolMissing, "gh is not installed or not on PATH")
                 .hint("install the GitHub CLI or set REVIEWKIT_GH")
         })?;
         let timeout = env_non_empty("REVIEWKIT_GH_TIMEOUT_MS")
@@ -101,7 +101,7 @@ impl Gh for SystemGh {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| Error::new(ErrorCode::EGhMissing, format!("cannot run gh: {err}")))?;
+            .map_err(|err| Error::tool("gh", ErrorCode::EToolMissing, format!("cannot run gh: {err}")))?;
         if let (Some(body), Some(mut pipe)) = (stdin, child.stdin.take()) {
             let body = body.to_string();
             std::thread::spawn(move || {
@@ -118,13 +118,14 @@ impl Gh for SystemGh {
                 Ok(None) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(Error::new(
-                        ErrorCode::EGh,
+                    return Err(Error::tool(
+                        "gh",
+                        ErrorCode::ETool,
                         format!("gh {what} did not finish within {:?}", self.timeout),
                     )
                     .retryable());
                 }
-                Err(err) => return Err(Error::new(ErrorCode::EGh, format!("gh {what}: {err}"))),
+                Err(err) => return Err(Error::tool("gh", ErrorCode::ETool, format!("gh {what}: {err}"))),
             }
         };
         Ok(RawOutput {
@@ -247,15 +248,21 @@ pub fn pr_meta(gh: &dyn Gh, repo: &RepoRef, number: u64) -> Result<PrMeta> {
         ],
         None,
     )?;
-    let view: PrView = serde_json::from_slice(&out)
-        .map_err(|err| Error::new(ErrorCode::EGh, format!("unexpected output from gh pr view: {err}")))?;
+    let view: PrView = serde_json::from_slice(&out).map_err(|err| {
+        Error::tool(
+            "gh",
+            ErrorCode::ETool,
+            format!("unexpected output from gh pr view: {err}"),
+        )
+    })?;
     let state = match view.state.as_str() {
         "OPEN" => PrState::Open,
         "CLOSED" => PrState::Closed,
         "MERGED" => PrState::Merged,
         other => {
-            return Err(Error::new(
-                ErrorCode::EGh,
+            return Err(Error::tool(
+                "gh",
+                ErrorCode::ETool,
                 format!("unknown pull request state {other:?}"),
             ));
         }
@@ -323,7 +330,11 @@ pub fn graphql(gh: &dyn Gh, host: &str, query: &str, variables: serde_json::Valu
             data: body["data"].take(),
             errors: body["errors"].as_array().cloned().unwrap_or_default(),
         }),
-        _ if out.success => Err(Error::new(ErrorCode::EGh, "unexpected output from gh api graphql")),
+        _ if out.success => Err(Error::tool(
+            "gh",
+            ErrorCode::ETool,
+            "unexpected output from gh api graphql",
+        )),
         _ => Err(classify_failure("api graphql", &out)),
     }
 }
@@ -381,7 +392,11 @@ pub fn pr_details(gh: &dyn Gh, repo: &RepoRef, number: u64, fetched_at: String) 
             if let Some(message) = optional.first().and_then(|e| e["message"].as_str()) {
                 return Err(graphql_error(message));
             }
-            return Err(Error::new(ErrorCode::EGh, format!("pull request #{number} not found")));
+            return Err(Error::tool(
+                "gh",
+                ErrorCode::ETool,
+                format!("pull request #{number} not found"),
+            ));
         }
         // A nulled field bubbles up to its nearest nullable parent while the
         // error points at the leaf, so missing threads are checked directly.

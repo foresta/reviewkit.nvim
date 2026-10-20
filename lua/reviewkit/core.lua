@@ -15,6 +15,7 @@ local M = {}
 
 ---@class reviewkit.LuaSink
 ---@field submit fun(session: reviewkit.Session, opts: table, cb: fun(err: reviewkit.Error?, result: reviewkit.SinkResult?))
+---@field available? fun(): boolean, string?
 
 local state = {
   session = nil, ---@type reviewkit.Session?
@@ -22,6 +23,7 @@ local state = {
   debounce = nil, ---@type uv.uv_timer_t?
   watched_id = nil, ---@type string?
   sinks = {}, ---@type table<string, reviewkit.LuaSink>
+  sink_list = nil, ---@type reviewkit.SinkInfo[]?
 }
 
 local WATCH_DEBOUNCE_MS = 150
@@ -449,6 +451,52 @@ function M.register_sink(name, impl)
   state.sinks[name] = impl
 end
 
+--- The CLI's sinks and the ones registered here. A registered sink shadows
+--- a built-in one of the same name, as it does in `submit`. A failed
+--- `sink list` still yields the registered sinks, with the error.
+---@param cb fun(err: reviewkit.Error?, sinks: reviewkit.SinkInfo[])
+function M.sinks(cb)
+  cli.call({ "sink", "list" }, {}, function(err, envelope)
+    local list = {}
+    for _, info in ipairs(not err and envelope and envelope.data or {}) do
+      if not state.sinks[info.name] then
+        table.insert(list, info)
+      end
+    end
+    local names = vim.tbl_keys(state.sinks)
+    table.sort(names)
+    for _, name in ipairs(names) do
+      local impl = state.sinks[name]
+      local ok, reason = true, nil
+      if impl.available then
+        ok, reason = impl.available()
+      end
+      table.insert(list, { name = name, available = ok ~= false, reason = reason, runtime = "lua" })
+    end
+    state.sink_list = list
+    cb(err, list)
+  end)
+end
+
+--- Names for completion, from the last `sinks` call and the registered
+--- sinks; synchronous, so it never waits on the CLI. Before any `sinks`
+--- call the CLI's names are unknown, and the ones it has always had stand in.
+---@return string[]
+function M.sink_names()
+  local seen, names = {}, {}
+  for _, info in ipairs(state.sink_list or { { name = "herdr" }, { name = "github" } }) do
+    seen[info.name] = true
+    table.insert(names, info.name)
+  end
+  for name in pairs(state.sinks) do
+    if not seen[name] then
+      table.insert(names, name)
+    end
+  end
+  table.sort(names)
+  return names
+end
+
 ---@param sink string
 ---@param opts? table
 ---@param cb fun(err: reviewkit.Error?, result: reviewkit.SinkResult?, session: reviewkit.Session?)
@@ -552,6 +600,7 @@ function M._reset()
   stop_watching()
   state.session = nil
   state.sinks = {}
+  state.sink_list = nil
 end
 
 return M

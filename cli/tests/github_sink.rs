@@ -218,13 +218,10 @@ fn a_whole_review_failure_keeps_the_queue_and_names_a_pending_review() {
         "one entry per inline comment"
     );
     assert!(body["data"]["failed"][0]["comment_id"].is_string());
-    assert_eq!(body["data"]["failed"][0]["error"]["code"], "E_GH_PENDING_REVIEW");
+    assert_eq!(body["data"]["failed"][0]["error"]["code"], "E_PENDING_REVIEW");
     assert_eq!(body["data"]["decision"], "failed");
     assert_eq!(body["session"]["comments"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        body["session"]["comments"][0]["last_error"]["code"],
-        "E_GH_PENDING_REVIEW"
-    );
+    assert_eq!(body["session"]["comments"][0]["last_error"]["code"], "E_PENDING_REVIEW");
     assert!(body["session"]["decision"].is_object());
 }
 
@@ -268,7 +265,7 @@ fn a_failed_reply_is_reported_alone_while_the_review_goes_through() {
     );
     assert_eq!(body["data"]["sent"][0]["comment_id"], inline);
     assert_eq!(body["data"]["failed"][0]["comment_id"], reply);
-    assert_eq!(body["data"]["failed"][0]["error"]["code"], "E_GH");
+    assert_eq!(body["data"]["failed"][0]["error"]["code"], "E_TOOL");
     assert_eq!(body["session"]["comments"].as_array().unwrap().len(), 1);
     assert_eq!(body["session"]["comments"][0]["id"], reply);
     let message = body["session"]["comments"][0]["last_error"]["message"]
@@ -601,7 +598,7 @@ fn a_review_failure_marks_each_inline_comment_even_when_a_reply_succeeds() {
     let comments = body["session"]["comments"].as_array().unwrap();
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0]["id"], inline);
-    assert_eq!(comments[0]["last_error"]["code"], "E_GH");
+    assert_eq!(comments[0]["last_error"]["code"], "E_TOOL");
 }
 
 #[test]
@@ -650,7 +647,7 @@ fn a_recovery_survives_a_follow_up_send_that_fails() {
         .output()
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(body["error"]["code"], "E_GH");
+    assert_eq!(body["error"]["code"], "E_TOOL");
     let listed = json(
         &reviewkit(&state, &remote, &gh)
             .args(["comment", "list", "--session", &id])

@@ -321,7 +321,7 @@ mod tests {
             },
             last_error: Some(LastError {
                 sink: "github".into(),
-                code: ErrorCode::EGh,
+                code: ErrorCode::ETool,
                 message: "boom".into(),
                 at: at.clone(),
             }),
@@ -392,7 +392,7 @@ mod tests {
                 }],
                 failed: vec![Failed {
                     comment_id: None,
-                    error: Error::new(ErrorCode::EHerdr, "pane gone"),
+                    error: Error::new(ErrorCode::ETool, "pane gone"),
                 }],
                 skipped: vec![Skipped {
                     comment_id: "c_2".into(),

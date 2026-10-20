@@ -107,10 +107,14 @@ M.SCHEMA_VERSION = 1
 ---@field hint? string
 ---@field message string
 ---@field retryable? boolean
+---@field tool? string The external tool that failed ("gh", "herdr"), for the tool codes.
 
---- Codes are only ever added, never renamed. No per-variant docs: they would
---- turn the JSON Schema into a `oneOf` instead of one `enum` list.
----@alias reviewkit.ErrorCode "E_USAGE"|"E_INVALID"|"E_NOT_COMMENTABLE"|"E_NO_SESSION"|"E_NO_COMMENT"|"E_NO_TARGET"|"E_NO_THREAD"|"E_GIT"|"E_GH"|"E_GH_AUTH"|"E_GH_MISSING"|"E_GH_PENDING_REVIEW"|"E_HERDR"|"E_HERDR_MISSING"|"E_AMBIGUOUS"|"E_CONFLICT"|"E_LOCKED"|"E_SCHEMA_VERSION"|"E_INTERNAL"
+--- From the first release on, codes are only ever added, never renamed.
+--- They name what went wrong, not which tool: `Error.tool` says that, so a
+--- new sink or source adds no codes. The aliases read states saved before
+--- the codes were generic. No per-variant docs: they would turn the JSON
+--- Schema into a `oneOf` instead of one `enum` list.
+---@alias reviewkit.ErrorCode "E_USAGE"|"E_INVALID"|"E_NOT_COMMENTABLE"|"E_NO_SESSION"|"E_NO_COMMENT"|"E_NO_TARGET"|"E_NO_THREAD"|"E_GIT"|"E_TOOL"|"E_TOOL_MISSING"|"E_AUTH"|"E_PENDING_REVIEW"|"E_AMBIGUOUS"|"E_CONFLICT"|"E_LOCKED"|"E_SCHEMA_VERSION"|"E_INTERNAL"
 
 --- One hash per section, so a client can tell which sections changed
 --- without diffing the whole session.
@@ -127,6 +131,8 @@ M.SCHEMA_VERSION = 1
 ---@field comment_id? string
 ---@field error reviewkit.Error
 
+---@class reviewkit.GithubOptions
+
 ---@class reviewkit.HeadRef
 ---@field dirty boolean
 ---@field ref? string
@@ -136,6 +142,13 @@ M.SCHEMA_VERSION = 1
 ---@field gh_auth? boolean `null` rather than `false` when gh is missing, so "not installed" and "not logged in" stay distinguishable.
 ---@field state_dir reviewkit.StateDirStatus
 ---@field tools reviewkit.ToolsStatus
+
+---@class reviewkit.HerdrOptions
+---@field agent_type? reviewkit.AgentType
+---@field header? string
+---@field match_foreground_cwd? boolean
+---@field stage? boolean
+---@field target? string A pane id (`SinkTarget.id`); without it the pane is found by cwd.
 
 --- Zero-context hunk. When a count is 0 the start is the line *before* the
 --- change, exactly as git prints it (0 means before the first line).
@@ -239,6 +252,7 @@ M.SCHEMA_VERSION = 1
 ---@field available boolean
 ---@field name string
 ---@field reason? string
+---@field runtime reviewkit.SinkRuntime
 
 --- Also the stdin of `submit apply`: a Lua sink fills `sink`, `sent`,
 --- `failed`, `skipped`, `thread_actions` and `decision`; `at` and `summary`
@@ -256,11 +270,15 @@ M.SCHEMA_VERSION = 1
 ---@field thread_actions? reviewkit.ThreadActionResult[]
 ---@field url? string
 
+--- `cli` sinks are built into this binary and `submit --sink` sends; `lua`
+--- sinks are registered in the client and report through `submit apply`.
+---@alias reviewkit.SinkRuntime "cli"|"lua"
+
 --- A destination a sink can send to, for a picker (`sink targets`, and the
 --- candidates of `E_AMBIGUOUS`).
 ---@class reviewkit.SinkTarget
 ---@field cwd? string
----@field id string What `SubmitOptions.target` takes.
+---@field id string What `HerdrOptions.target` takes.
 ---@field name? string
 ---@field status? string
 ---@field title? string
@@ -302,13 +320,11 @@ M.SCHEMA_VERSION = 1
 
 ---@alias reviewkit.SubjectType "line"|"file"
 
+--- `consume` is the only key every sink shares; the rest of the object is
+--- the chosen sink's own options (`HerdrOptions`, `GithubOptions`), kept
+--- flat so a client can pass one table per sink as it is.
 ---@class reviewkit.SubmitOptions
----@field agent_type? reviewkit.AgentType
 ---@field consume? boolean Whether delivered comments leave the queue. By default only the session kind's own destination consumes them; github always does, since keeping posted comments would post them again.
----@field header? string
----@field match_foreground_cwd? boolean
----@field stage? boolean
----@field target? string
 
 --- What a submit would do, in the same shape for every sink. Comments are
 --- named by id; a client finds their path and text in its session.

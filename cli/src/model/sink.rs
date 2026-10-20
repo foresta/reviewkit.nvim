@@ -5,8 +5,30 @@ use super::Reason;
 use super::session::ThreadActionKind;
 use crate::error::Error;
 
+/// `consume` is the only key every sink shares; the rest of the object is
+/// the chosen sink's own options (`HerdrOptions`, `GithubOptions`), kept
+/// flat so a client can pass one table per sink as it is.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SubmitOptions {
+    /// Whether delivered comments leave the queue. By default only the
+    /// session kind's own destination consumes them; github always does,
+    /// since keeping posted comments would post them again.
+    #[serde(default)]
+    pub consume: Option<bool>,
+    #[serde(flatten)]
+    pub sink: serde_json::Map<String, serde_json::Value>,
+}
+
+impl SubmitOptions {
+    pub fn sink_options<T: serde::de::DeserializeOwned>(&self) -> crate::error::Result<T> {
+        serde_json::from_value(serde_json::Value::Object(self.sink.clone()))
+            .map_err(|e| crate::error::Error::invalid(format!("invalid sink options: {e}")))
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct HerdrOptions {
+    /// A pane id (`SinkTarget.id`); without it the pane is found by cwd.
     #[serde(default)]
     pub target: Option<String>,
     #[serde(default)]
@@ -17,12 +39,10 @@ pub struct SubmitOptions {
     pub stage: Option<bool>,
     #[serde(default)]
     pub match_foreground_cwd: Option<bool>,
-    /// Whether delivered comments leave the queue. By default only the
-    /// session kind's own destination consumes them; github always does,
-    /// since keeping posted comments would post them again.
-    #[serde(default)]
-    pub consume: Option<bool>,
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct GithubOptions {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -145,7 +165,7 @@ pub struct PreviewReply {
 /// candidates of `E_AMBIGUOUS`).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SinkTarget {
-    /// What `SubmitOptions.target` takes.
+    /// What `HerdrOptions.target` takes.
     pub id: String,
     pub name: Option<String>,
     pub status: Option<String>,

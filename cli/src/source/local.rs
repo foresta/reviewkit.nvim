@@ -2,7 +2,8 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::core::{anchor, time, viewed};
+use crate::core::refresh::{self, SourceSnapshot};
+use crate::core::time;
 use crate::error::{Error, Result};
 use crate::ext::git::{Repository, parse_remote_url};
 use crate::model::{HeadRef, Repo, RevRef, Session, Source};
@@ -116,9 +117,13 @@ fn new_session(id: String, repo: &Repository<'_>, spec: &LocalSpec) -> Session {
     )
 }
 
-/// Re-runs the diff, rebuilds `targets`, `base` and `head`, then follows
-/// every comment across whatever changed on its side.
 pub fn refresh(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
+    let snapshot = fetch(session, repo)?;
+    refresh::apply(session, snapshot, repo.git())
+}
+
+/// Re-runs the diff for the session's specs.
+pub fn fetch(session: &Session, repo: &Repository<'_>) -> Result<SourceSnapshot> {
     let Source::Local {
         base_spec, head_spec, ..
     } = &session.source
@@ -132,18 +137,20 @@ pub fn refresh(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
     let head_sha = head_spec.as_deref().map(|spec| repo.resolve_commit(spec)).transpose()?;
     let targets = targets::build(repo, &base_sha, head_sha.as_deref())?;
 
-    session.base = RevRef {
-        r#ref: Some(base_spec),
-        sha: base_sha,
-    };
-    session.head = HeadRef {
-        r#ref: head_spec,
-        dirty: head_sha.is_none() && repo.is_dirty()?,
-        sha: head_sha,
-    };
-    session.targets = targets;
-    viewed::refresh_flags(session);
-    anchor::reanchor(session, repo)
+    Ok(SourceSnapshot {
+        source: session.source.clone(),
+        base: RevRef {
+            r#ref: Some(base_spec),
+            sha: base_sha,
+        },
+        head: HeadRef {
+            r#ref: head_spec,
+            dirty: head_sha.is_none() && repo.is_dirty()?,
+            sha: head_sha,
+        },
+        targets,
+        threads: vec![],
+    })
 }
 
 #[cfg(test)]

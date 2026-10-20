@@ -486,8 +486,9 @@ pub fn reconcile_pending(
     };
     let details = gh::pr_details(gh, repo, *number, time::now())?;
     if details.incomplete {
-        return Err(Error::new(
-            ErrorCode::EGh,
+        return Err(Error::tool(
+            "gh",
+            ErrorCode::ETool,
             "cannot check what an interrupted submit already posted: GitHub returned only part of the pull request",
         )
         .retryable()
@@ -695,7 +696,8 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
                 decision = DecisionStatus::Sent;
             }
         } else {
-            let error = error_for("review").unwrap_or_else(|| Error::new(ErrorCode::EGh, "the review was not created"));
+            let error = error_for("review")
+                .unwrap_or_else(|| Error::tool("gh", ErrorCode::ETool, "the review was not created"));
             if session.decision.is_some() {
                 decision = DecisionStatus::Failed;
             }
@@ -728,7 +730,7 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
             failed.push(Failed {
                 comment_id: Some(reply.comment_id.clone()),
                 error: error_for(&reply.alias)
-                    .unwrap_or_else(|| Error::new(ErrorCode::EGh, "the reply was not created")),
+                    .unwrap_or_else(|| Error::tool("gh", ErrorCode::ETool, "the reply was not created")),
             });
         }
     }
@@ -743,7 +745,7 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
             } else {
                 Some(
                     error_for(&action.alias)
-                        .unwrap_or_else(|| Error::new(ErrorCode::EGh, "the thread was not updated")),
+                        .unwrap_or_else(|| Error::tool("gh", ErrorCode::ETool, "the thread was not updated")),
                 )
             },
         });
@@ -768,6 +770,104 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
                 .collect(),
         ),
     })
+}
+
+pub struct GithubSink;
+
+fn repo_ref_of(session: &Session) -> Result<RepoRef> {
+    match (&session.repo.host, &session.repo.owner, &session.repo.name) {
+        (Some(host), Some(owner), Some(name)) => Ok(RepoRef {
+            host: host.clone(),
+            owner: owner.clone(),
+            name: name.clone(),
+        }),
+        _ => Err(Error::invalid("the github sink needs a pull request session")),
+    }
+}
+
+impl super::Sink for GithubSink {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
+    fn info(&self, ctx: &crate::context::Context) -> super::SinkInfo {
+        super::tool_info(NAME, ctx.tools.gh.as_deref(), "gh")
+    }
+
+    /// GitHub keeps what it was sent and this sink resends the whole queue,
+    /// so keeping its comments would post them twice.
+    fn consumes(&self, _source: &Source, _requested: Option<bool>) -> bool {
+        true
+    }
+
+    /// The preview does not reconcile an interrupted submit; it may list
+    /// comments the real submit will find already posted.
+    fn preview(
+        &self,
+        _ctx: &crate::context::Context,
+        session: &Session,
+        _opts: &crate::model::SubmitOptions,
+    ) -> Result<SubmitPreview> {
+        preview(session)
+    }
+
+    fn submit(
+        &self,
+        ctx: &crate::context::Context,
+        store: &crate::store::Store,
+        id: &str,
+        opts: &crate::model::SubmitOptions,
+    ) -> Result<(Session, SinkResult)> {
+        let _: crate::model::GithubOptions = opts.sink_options()?;
+        let gh = gh::SystemGh::new(ctx.tools.gh.as_deref())?;
+        let session_dir = store.state_dir().session_dir(id)?;
+        let consume = true; // Self::consumes: GitHub always consumes.
+        // Phase 1: an interrupted earlier submit is reconciled and saved
+        // on its own, so its record can go before a new one is written.
+        let pending = pending_path(&session_dir);
+        let mut recovered = None;
+        if pending.exists() {
+            let (_, found) = store.update(id, |s| {
+                let repo = repo_ref_of(s)?;
+                let found = reconcile_pending(s, &gh, &repo, &session_dir)?;
+                if let Some(found) = &found {
+                    crate::core::apply::apply(s, found.clone(), consume)?;
+                }
+                Ok(found)
+            })?;
+            let _ = std::fs::remove_file(&pending);
+            recovered = found;
+        }
+        // Phase 2: the lock is held across the request. The answer is
+        // matched to comments by id, and a concurrent update or remove of
+        // a planned comment (or a decision change) would otherwise be
+        // lost or cleared by it. Other commands see E_LOCKED meanwhile.
+        let outcome = store.update(id, |s| {
+            let repo = repo_ref_of(s)?;
+            let mut result = submit(s, &gh, &repo, &session_dir)?;
+            if let Some(recovered) = &recovered {
+                result.sent.splice(0..0, recovered.sent.clone());
+                if recovered.decision == DecisionStatus::Sent {
+                    result.decision = DecisionStatus::Sent;
+                }
+            }
+            crate::core::apply::apply(s, result, consume)
+        });
+        let (session, result) = match (outcome, recovered) {
+            // Everything was already on GitHub: the recovery is the result.
+            (Err(err), Some(mut recovered)) if is_nothing_to_submit(&err) => {
+                recovered.summary = crate::core::apply::summary(&recovered);
+                (store.load(id)?, recovered)
+            }
+            (outcome, _) => outcome?,
+        };
+        // Removed only after the result was saved: a crash before this
+        // leaves the record for the next submit to reconcile.
+        let _ = std::fs::remove_file(&pending);
+        let mut session = session;
+        session.pending_submit = pending.exists();
+        Ok((session, result))
+    }
 }
 
 #[cfg(test)]

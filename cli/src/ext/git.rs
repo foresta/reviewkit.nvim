@@ -150,6 +150,10 @@ impl<'a> Repository<'a> {
         Ok(Self { git, root })
     }
 
+    pub fn git(&self) -> &'a dyn Git {
+        self.git
+    }
+
     pub fn at(git: &'a dyn Git, root: PathBuf) -> Self {
         Self { git, root }
     }

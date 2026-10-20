@@ -21,7 +21,7 @@ stdout は常に 1 つの JSON オブジェクト。stderr はログ。panic 等
 
 ```json
 { "ok": true,  "data": <コマンド固有 | null>, "session": <Session。変更系コマンドでは常に> }
-{ "ok": false, "error": { "code": "E_GH_AUTH", "message": "...", "hint": "run gh auth login", "retryable": false, "details": {} } }
+{ "ok": false, "error": { "code": "E_AUTH", "message": "...", "hint": "run gh auth login", "tool": "gh", "retryable": false, "details": {} } }
 ```
 
 Lua は `error.code` で分岐する。`details` は常にオブジェクト（無ければ `{}`）、`hint` は無ければ省略。終了コードはシェル利用者とテスト向け。
@@ -32,7 +32,7 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
 | 1 | 引数誤り | `E_USAGE` |
 | 2 | 検証 | `E_INVALID`、`E_NOT_COMMENTABLE` |
 | 3 | 不在 | `E_NO_SESSION`、`E_NO_COMMENT`、`E_NO_TARGET`、`E_NO_THREAD` |
-| 4 | 外部ツール | `E_GIT`、`E_GH`、`E_GH_AUTH`、`E_GH_MISSING`、`E_GH_PENDING_REVIEW`、`E_HERDR`、`E_HERDR_MISSING`、`E_AMBIGUOUS` |
+| 4 | 外部ツール | `E_GIT`、`E_TOOL`、`E_TOOL_MISSING`、`E_AUTH`、`E_PENDING_REVIEW`、`E_AMBIGUOUS` |
 | 5 | 競合 | `E_CONFLICT`、`E_LOCKED` |
 | 6 | 契約不一致 | `E_SCHEMA_VERSION`（保存済み session.json が古い版のとき） |
 | 70 | 内部 | `E_INTERNAL` |
@@ -42,7 +42,10 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
   `path` と行、`blob/<sha>/path#L..` のリンク、本文を書いて送る（`SubmitPreview.body_comment_ids`）。stale だけは `skipped`。
   issue 以外の kind は本文の先頭に `**nit:**` のように付ける
 - `E_AMBIGUOUS` は `details.candidates` に候補（`SinkTarget[]`）を載せる。cwd に一致する agent が 0 件なら全 agent を候補にする
-- `E_GH_PENDING_REVIEW` は GitHub 側に pending review が残っていて `addPullRequestReview` が通らないとき
+- コードは「何が起きたか」を表し、ツール名を含めない。どのツールかは `error.tool`（"gh" / "herdr"）で示すので、
+  sink や source を足してもコードは増えない。最初のリリース以降、コードは追加だけで改名しない。`E_GIT` は core が
+  直接依存する git のために残す
+- `E_PENDING_REVIEW` は GitHub 側に pending review が残っていて `addPullRequestReview` が通らないとき
 - `E_SCHEMA_VERSION` は CLI が古い session.json を読んだとき。CLI と `types.lua` の版違いは Lua が `version` で検出する
 
 共通フラグ: `--state-dir`（既定 `$REVIEWKIT_STATE_DIR` > `$XDG_STATE_HOME/reviewkit` > `~/.local/state/reviewkit`）、
@@ -132,14 +135,18 @@ PrInfo {                    -- 表示しないが保持する PR の付帯情報
   fetched_at
 }
 
-SubmitOptions {             -- submit の stdin（省略可）
-  target?: string           -- herdr の pane_id
+SubmitOptions {             -- submit の stdin（省略可）。sink 固有の項目を同じ階層に並べる
+  consume?: bool            -- 送れたコメントをキューから消すか。既定は sink が決める（Sink::consumes）。共通の予約語はこれだけ
+  ...HerdrOptions | GithubOptions
+}
+HerdrOptions {
+  target?: string           -- SinkTarget.id（pane）。無ければ cwd で探す
   agent_type?: "claude" | "plain"
   header?: string
-  stage?: bool              -- herdr: 送信せず入力欄に置くだけ（pane send-text）
+  stage?: bool              -- 送信せず入力欄に置くだけ（pane send-text）
   match_foreground_cwd?: bool
-  consume?: bool            -- 送れたコメントをキューから消すか。既定は local の herdr だけ。github は常に消す
 }
+GithubOptions {}
 
 SinkResult {
   sink   at   url: string|null
@@ -159,6 +166,8 @@ SinkResult {
 - SinkResult の適用（D4）: `sent` のコメントには `deliveries` に `{ sink, at, mode, url? }` を足す。キューから消して
   `Session.history` へ移す（消費する）のは、`SinkResult.mode = sent` かつ sink がセッション種類の主な送り先
   （PR = github、local = herdr。`SubmitOptions.consume` で上書き。github は二重投稿を避けるため常に消費）のときだけ。
+  判断は各 sink の `Sink::consumes` が持ち、core は sink の名前を知らない。`submit apply`（Lua の sink）は消費しない。
+  Lua の sink が外部へ投稿して `mode = sent` を返しても消費しないので、再送すると同じ内容が再び送られる。
   送れたコメントの `last_error` は消し、全体失敗の印はその sink へ送り済みのコメントと `attempted` 外のコメントには付けない。
   `sent[].version` がコメントの今の `updated_at` と違う（送信中に編集された）ものは送れなかった扱いでキューに残し、結果からも外す。herdr の stage は `staged`、clipboard は
   `copied` で、消費しない。herdr は自分へ `sent` 済みのコメントを再送しない。本文・suggestion・kind を変えると `deliveries` は消える。
@@ -204,7 +213,7 @@ reviewkit comment list   --session ID [--path P]                     -> data: Co
 reviewkit decision set   --session ID (stdin: DecisionInput)  -> session
 reviewkit decision clear --session ID                    -> session
 
-reviewkit sink list                                      -> data: { name, available, reason }[]
+reviewkit sink list                                      -> data: SinkInfo[]   { name, available, reason, runtime: "cli" }
 reviewkit sink targets --sink herdr [--cwd]              -> data: SinkTarget[]   picker 用
 reviewkit submit --session ID --sink github|herdr [--dry-run] [--options -]
                                                          -> data: SinkResult（dry-run は data.preview: SubmitPreview）, session
@@ -220,7 +229,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   返信・スレッド操作・Decision の event、まとめて送る本文（review の body / herdr のプロンプト）と送り先を添える。
   path や行はクライアントが自分の Session から引く。sink が実際に送るリクエスト（GraphQL / herdr の引数）は
   `raw` に入るが契約外で、sink の実装に合わせて予告なく変わる
-- `SinkTarget { id, name?, status?, cwd?, title? }` は送り先の候補。`id` を `SubmitOptions.target` に渡す。
+- `SinkTarget { id, name?, status?, cwd?, title? }` は送り先の候補。`id` を `HerdrOptions.target` に渡す。
   `sink targets` は agent の無い pane も含めて全 pane を返す（stage は任意の pane に送れる）。
   `E_AMBIGUOUS` の `details.candidates` は agent が動いている pane だけ
 - `submit` は送信前の失敗（未認証、pane 未解決）だけ `ok: false`。リクエストを送った後は部分失敗でも `ok: true` と SinkResult
@@ -307,7 +316,9 @@ core.set_viewed(path, on, cb)
 core.resolve_thread(id, resolved, cb) / core.refresh_threads(cb) / core.pending_thread_action(id)
 core.pr_info(cb)               -- PrInfo。表示は持たないが取り出せる
 core.submit(sink, opts, cb)  -- Rust 側 sink は submit。Lua 登録 sink は impl.submit(session, opts, cb) の結果を submit apply に渡す
-core.register_sink(name, impl)
+core.register_sink(name, impl)  -- impl = { submit, available? }。available() は boolean, reason? を返す
+core.sinks(cb)               -- sink list と登録済みの Lua sink（runtime = "lua"）をマージ。同名は Lua を優先
+core.sink_names()            -- 最後の sinks() と登録済みの名前。:ReviewSubmit の補完用（同期）
 core.on(event, fn)           -- User autocmd の薄い包み
 ```
 
@@ -327,7 +338,7 @@ require("reviewkit").setup({
   set_keymaps = true,
   view = { queue = "quickfix" },                  -- "quickfix" | "float"
   sinks = {
-    herdr = { agent_type = "claude", header = nil, match_foreground_cwd = true },   -- SubmitOptions に詰める
+    herdr = { agent_type = "claude", header = nil, match_foreground_cwd = true },   -- HerdrOptions として渡す
     github = { confirm = true },                    -- :ReviewSubmit github は送る内容を見せて確認する
     clipboard = { register = "+" },
   },

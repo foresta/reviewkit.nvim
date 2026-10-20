@@ -28,8 +28,12 @@ impl SystemHerdr {
     /// than as a failed run, so the hint points at installation.
     pub fn new(path: Option<&Path>) -> Result<Self> {
         let path = path.filter(|p| p.is_file()).ok_or_else(|| {
-            Error::new(ErrorCode::EHerdrMissing, "herdr is not installed or not on PATH")
-                .hint("install herdr or set REVIEWKIT_HERDR")
+            Error::tool(
+                "herdr",
+                ErrorCode::EToolMissing,
+                "herdr is not installed or not on PATH",
+            )
+            .hint("install herdr or set REVIEWKIT_HERDR")
         })?;
         // Clamped so a stray `0` cannot make every call time out instantly.
         let timeout = env_non_empty("REVIEWKIT_HERDR_TIMEOUT_MS")
@@ -56,7 +60,7 @@ impl Herdr for SystemHerdr {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|err| {
-                Error::new(ErrorCode::EHerdrMissing, format!("cannot run herdr: {err}"))
+                Error::tool("herdr", ErrorCode::EToolMissing, format!("cannot run herdr: {err}"))
                     .hint("check that REVIEWKIT_HERDR points at an executable")
             })?;
         // Pipes are drained on threads so a large `agent list` cannot fill
@@ -71,13 +75,14 @@ impl Herdr for SystemHerdr {
                 Ok(None) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(Error::new(
-                        ErrorCode::EHerdr,
+                    return Err(Error::tool(
+                        "herdr",
+                        ErrorCode::ETool,
                         format!("herdr {what} did not finish within {:?}", self.timeout),
                     )
                     .retryable());
                 }
-                Err(err) => return Err(Error::new(ErrorCode::EHerdr, format!("herdr {what}: {err}"))),
+                Err(err) => return Err(Error::tool("herdr", ErrorCode::ETool, format!("herdr {what}: {err}"))),
             }
         };
         let stdout = stdout.join().unwrap_or_default();
@@ -89,7 +94,7 @@ impl Herdr for SystemHerdr {
             } else {
                 stderr
             };
-            return Err(Error::new(ErrorCode::EHerdr, format!("herdr {what} failed: {detail}")).retryable());
+            return Err(Error::tool("herdr", ErrorCode::ETool, format!("herdr {what} failed: {detail}")).retryable());
         }
         Ok(stdout)
     }
@@ -160,8 +165,9 @@ struct Panes {
 pub fn agents(herdr: &dyn Herdr) -> Result<Vec<Agent>> {
     let out = herdr.run(&["agent", "list"])?;
     let parsed: Envelope<Agents> = serde_json::from_slice(&out).map_err(|err| {
-        Error::new(
-            ErrorCode::EHerdr,
+        Error::tool(
+            "herdr",
+            ErrorCode::ETool,
             format!("unexpected output from herdr agent list: {err}"),
         )
     })?;
@@ -171,8 +177,9 @@ pub fn agents(herdr: &dyn Herdr) -> Result<Vec<Agent>> {
 pub fn panes(herdr: &dyn Herdr) -> Result<Vec<Pane>> {
     let out = herdr.run(&["pane", "list"])?;
     let parsed: Envelope<Panes> = serde_json::from_slice(&out).map_err(|err| {
-        Error::new(
-            ErrorCode::EHerdr,
+        Error::tool(
+            "herdr",
+            ErrorCode::ETool,
             format!("unexpected output from herdr pane list: {err}"),
         )
     })?;
