@@ -34,7 +34,7 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
 | 3 | 不在 | `E_NO_SESSION`、`E_NO_COMMENT`、`E_NO_TARGET`、`E_NO_THREAD` |
 | 4 | 外部ツール | `E_GIT`、`E_TOOL`、`E_TOOL_MISSING`、`E_AUTH`、`E_PENDING_REVIEW`、`E_AMBIGUOUS` |
 | 5 | 競合 | `E_CONFLICT`、`E_LOCKED` |
-| 6 | 契約不一致 | `E_SCHEMA_VERSION`（保存済み session.json が古い版のとき） |
+| 6 | 契約不一致 | `E_SCHEMA_VERSION`（保存済み session.json を移行できないとき） |
 | 70 | 内部 | `E_INTERNAL` |
 
 - `E_NOT_COMMENTABLE` は「行がファイルの範囲外」か「path がリポジトリに無い」ときだけ。diff 外や targets 外の path への
@@ -46,7 +46,8 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
   sink や source を足してもコードは増えない。最初のリリース以降、コードは追加だけで改名しない。`E_GIT` は core が
   直接依存する git のために残す
 - `E_PENDING_REVIEW` は GitHub 側に pending review が残っていて `addPullRequestReview` が通らないとき
-- `E_SCHEMA_VERSION` は CLI が古い session.json を読んだとき。CLI と `types.lua` の版違いは Lua が `version` で検出する
+- `E_SCHEMA_VERSION` は CLI が移行できない session.json を読んだとき（移行の手順が無い古い版、または新しい版）。
+  古い版でも移行の手順があれば読むときに移行するので、このエラーにはならない。CLI と `types.lua` の版違いは Lua が `version` で検出する
 
 共通フラグ: `--state-dir`（既定 `$REVIEWKIT_STATE_DIR` > `$XDG_STATE_HOME/reviewkit` > `~/.local/state/reviewkit`）、
 `--cwd`、`--log-level`、`--log-file`。ツールのパスは `REVIEWKIT_GIT` / `REVIEWKIT_GH` / `REVIEWKIT_HERDR` で上書きできる

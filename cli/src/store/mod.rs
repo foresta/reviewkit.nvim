@@ -295,6 +295,37 @@ fn newer_writer(path: &Path, writer: &Writer) -> Error {
     }))
 }
 
+type Migration = fn(&mut serde_json::Value) -> Result<()>;
+
+/// `MIGRATIONS[n - 1]` turns a version-n session into version n+1 as it is
+/// read, so bumping SCHEMA_VERSION never strands the comments a user has
+/// queued. A bump without its step fails `every_schema_version_has_a_migration`.
+const MIGRATIONS: &[Migration] = &[];
+
+/// Ok(false) when no chain of steps reaches this version.
+fn migrate(raw: &mut serde_json::Value, found: u64, steps: &[Migration]) -> Result<bool> {
+    migrate_to(raw, found, u64::from(SCHEMA_VERSION), steps)
+}
+
+fn migrate_to(raw: &mut serde_json::Value, found: u64, target: u64, steps: &[Migration]) -> Result<bool> {
+    if found == 0 || found >= target {
+        return Ok(found == target);
+    }
+    for version in found..target {
+        let Some(step) = steps.get(version as usize - 1) else {
+            return Ok(false);
+        };
+        step(raw)?;
+    }
+    raw["schema_version"] = serde_json::json!(target);
+    // SCHEMA_REVISION counts within one version; an old version's writer
+    // compared against it would look newer and lock the session.
+    if let Some(map) = raw.as_object_mut() {
+        map.remove(WRITER_KEY);
+    }
+    Ok(true)
+}
+
 /// The writer is returned only when it is newer than this CLI: the session
 /// may then be shown but must not be written back.
 fn read_session(path: &Path, id: &str) -> Result<(Session, Option<Writer>)> {
@@ -305,10 +336,10 @@ fn read_session(path: &Path, id: &str) -> Result<(Session, Option<Writer>)> {
     };
     // The version is checked on the raw value first: a mismatched file would
     // otherwise surface as a confusing field-level parse error.
-    let raw: serde_json::Value =
+    let mut raw: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|err| corrupt(path, format!("not JSON: {err}")))?;
     let found = raw.get("schema_version").and_then(|v| v.as_u64()).unwrap_or(0);
-    if found != u64::from(SCHEMA_VERSION) {
+    if !migrate(&mut raw, found, MIGRATIONS)? {
         let newer = found > u64::from(SCHEMA_VERSION);
         // Purging is only advice for a file this CLI has outgrown; for a newer
         // one it would throw away comments a newer CLI can still read.
@@ -597,6 +628,46 @@ mod tests {
             assert_eq!(err.details["direction"], direction);
             assert_eq!(err.hint.as_deref().unwrap_or("").contains("--purge"), purge);
         }
+    }
+
+    #[test]
+    fn every_schema_version_has_a_migration() {
+        assert_eq!(MIGRATIONS.len() as u32, SCHEMA_VERSION - 1);
+    }
+
+    #[test]
+    fn an_older_session_is_migrated_step_by_step_on_read() {
+        fn add_note(raw: &mut serde_json::Value) -> Result<()> {
+            raw["note"] = serde_json::json!("migrated");
+            Ok(())
+        }
+        let steps: Vec<Migration> = vec![add_note; SCHEMA_VERSION as usize];
+        let mut raw = serde_json::json!({ "schema_version": 0 });
+        assert!(!migrate(&mut raw, 0, &steps).unwrap(), "no version 0 to start from");
+        if SCHEMA_VERSION > 1 {
+            let mut raw = serde_json::json!({ "schema_version": 1 });
+            assert!(migrate(&mut raw, 1, &steps).unwrap());
+            assert_eq!(raw["schema_version"], SCHEMA_VERSION);
+            assert_eq!(raw["note"], "migrated");
+            let mut raw = serde_json::json!({ "schema_version": 1 });
+            assert!(!migrate(&mut raw, 1, &[]).unwrap(), "a missing step is not skipped");
+        }
+        if SCHEMA_VERSION > 1 {
+            let mut raw = serde_json::json!({ "schema_version": 1, "_writer": { "revision": 999 } });
+            assert!(migrate(&mut raw, 1, &steps).unwrap());
+            assert!(raw.get("_writer").is_none(), "an old writer must not look newer");
+        }
+        let mut raw = serde_json::json!({ "schema_version": 1, "_writer": { "revision": 999 } });
+        fn identity(_: &mut serde_json::Value) -> Result<()> {
+            Ok(())
+        }
+        assert!(migrate_to(&mut raw, 1, 2, &[identity]).unwrap());
+        assert_eq!(raw["schema_version"], 2);
+        assert!(raw.get("_writer").is_none(), "an old writer must not look newer");
+        let mut current = serde_json::json!({ "schema_version": SCHEMA_VERSION });
+        assert!(migrate(&mut current, u64::from(SCHEMA_VERSION), &[]).unwrap());
+        let mut newer = serde_json::json!({});
+        assert!(!migrate(&mut newer, u64::from(SCHEMA_VERSION) + 1, &steps).unwrap());
     }
 
     /// Changing what a session persists needs SCHEMA_REVISION + 1 and a new

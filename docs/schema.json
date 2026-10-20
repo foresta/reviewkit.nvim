@@ -1,0 +1,1897 @@
+{
+  "schema": {
+    "$defs": {
+      "AgentType": {
+        "enum": [
+          "claude",
+          "plain"
+        ],
+        "type": "string"
+      },
+      "Anchor": {
+        "description": "Where the comment was made, kept so a later refresh can tell whether the\nline moved. `head_sha` is `null` on a working tree; `blob` pins it then.",
+        "properties": {
+          "base_sha": {
+            "type": "string"
+          },
+          "blob": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context": {
+            "$ref": "#/$defs/AnchorContext"
+          },
+          "head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "base_sha",
+          "context"
+        ],
+        "type": "object"
+      },
+      "AnchorContext": {
+        "properties": {
+          "after": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "before": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "before",
+          "lines",
+          "after"
+        ],
+        "type": "object"
+      },
+      "Check": {
+        "properties": {
+          "conclusion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Comment": {
+        "properties": {
+          "anchor": {
+            "$ref": "#/$defs/Anchor"
+          },
+          "body": {
+            "type": "string"
+          },
+          "commentable": {
+            "$ref": "#/$defs/Commentable"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "deliveries": {
+            "default": [],
+            "description": "Where this text already went. Cleared when the body or suggestion\nchanges: a delivery of the old text says nothing about the new one.",
+            "items": {
+              "$ref": "#/$defs/Delivery"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/CommentKind"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LastError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "reply_to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "side": {
+            "$ref": "#/$defs/Side"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "start_line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "suggestion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "side",
+          "line",
+          "kind",
+          "body",
+          "anchor",
+          "stale",
+          "commentable",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "CommentInput": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/CommentKind",
+            "default": "issue"
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "reply_to": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "side": {
+            "$ref": "#/$defs/Side"
+          },
+          "start_line": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "suggestion": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "side",
+          "line",
+          "body"
+        ],
+        "type": "object"
+      },
+      "CommentKind": {
+        "enum": [
+          "issue",
+          "suggestion",
+          "question",
+          "praise",
+          "nit"
+        ],
+        "type": "string"
+      },
+      "CommentPatch": {
+        "description": "Omitted = unchanged, `null` = cleared, value = set. Plain `Option` cannot\ntell omitted from `null`, so the clearable fields are `Option<Option<T>>`.",
+        "properties": {
+          "body": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CommentKind"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "line": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "start_line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "suggestion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Commentable": {
+        "description": "Whether GitHub would accept the comment. Comments outside the diff are\nstill queued (D4); the sink decides what to skip.",
+        "properties": {
+          "github": {
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "github"
+        ],
+        "type": "object"
+      },
+      "CommentableRanges": {
+        "description": "Closed 1-based line ranges, merged and clipped to the file, per side.",
+        "properties": {
+          "base": {
+            "items": {
+              "items": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "head": {
+            "items": {
+              "items": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "base",
+          "head"
+        ],
+        "type": "object"
+      },
+      "Decision": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "event": {
+            "$ref": "#/$defs/DecisionEvent"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "body",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "DecisionEvent": {
+        "description": "1:1 with GitHub's PullRequestReviewEvent, lowercased.",
+        "enum": [
+          "approve",
+          "request_changes",
+          "comment"
+        ],
+        "type": "string"
+      },
+      "DecisionInput": {
+        "description": "stdin of `decision set`; core adds `updated_at`.",
+        "properties": {
+          "body": {
+            "default": "",
+            "type": "string"
+          },
+          "event": {
+            "$ref": "#/$defs/DecisionEvent"
+          }
+        },
+        "required": [
+          "event"
+        ],
+        "type": "object"
+      },
+      "DecisionStatus": {
+        "enum": [
+          "sent",
+          "failed",
+          "skipped",
+          "not_applicable"
+        ],
+        "type": "string"
+      },
+      "Delivery": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/$defs/DeliveryMode"
+          },
+          "sink": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sink",
+          "at",
+          "mode"
+        ],
+        "type": "object"
+      },
+      "DeliveryMode": {
+        "description": "`staged` text was only typed into an agent's input and may be thrown\naway there; `copied` only reached a register. Neither consumes a comment.",
+        "enum": [
+          "sent",
+          "staged",
+          "copied"
+        ],
+        "type": "string"
+      },
+      "Error": {
+        "properties": {
+          "code": {
+            "$ref": "#/$defs/ErrorCode"
+          },
+          "details": {
+            "default": {},
+            "description": "Always an object, so callers can index it without a null check."
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "type": "boolean"
+          },
+          "tool": {
+            "description": "The external tool that failed (\"gh\", \"herdr\"), for the tool codes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ErrorCode": {
+        "description": "From the first release on, codes are only ever added, never renamed.\nThey name what went wrong, not which tool: `Error.tool` says that, so a\nnew sink or source adds no codes. The aliases read states saved before\nthe codes were generic. No per-variant docs: they would turn the JSON\nSchema into a `oneOf` instead of one `enum` list.",
+        "enum": [
+          "E_USAGE",
+          "E_INVALID",
+          "E_NOT_COMMENTABLE",
+          "E_NO_SESSION",
+          "E_NO_COMMENT",
+          "E_NO_TARGET",
+          "E_NO_THREAD",
+          "E_GIT",
+          "E_TOOL",
+          "E_TOOL_MISSING",
+          "E_AUTH",
+          "E_PENDING_REVIEW",
+          "E_AMBIGUOUS",
+          "E_CONFLICT",
+          "E_LOCKED",
+          "E_SCHEMA_VERSION",
+          "E_INTERNAL"
+        ],
+        "type": "string"
+      },
+      "Etags": {
+        "description": "One hash per section, so a client can tell which sections changed\nwithout diffing the whole session.",
+        "properties": {
+          "comments": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "string"
+          },
+          "thread_actions": {
+            "type": "string"
+          },
+          "threads": {
+            "type": "string"
+          },
+          "viewed": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "targets",
+          "comments",
+          "decision",
+          "threads",
+          "thread_actions",
+          "viewed"
+        ],
+        "type": "object"
+      },
+      "Failed": {
+        "description": "`comment_id` is `null` when the whole review failed rather than one comment.",
+        "properties": {
+          "comment_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "$ref": "#/$defs/Error"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "GithubOptions": {
+        "type": "object"
+      },
+      "HeadRef": {
+        "properties": {
+          "dirty": {
+            "type": "boolean"
+          },
+          "ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "description": "`null` for a working tree: there is no commit to pin, comments anchor\nto blobs instead.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "dirty"
+        ],
+        "type": "object"
+      },
+      "HealthInfo": {
+        "properties": {
+          "gh_auth": {
+            "description": "`null` rather than `false` when gh is missing, so \"not installed\" and\n\"not logged in\" stay distinguishable.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "state_dir": {
+            "$ref": "#/$defs/StateDirStatus"
+          },
+          "tools": {
+            "$ref": "#/$defs/ToolsStatus"
+          }
+        },
+        "required": [
+          "tools",
+          "state_dir"
+        ],
+        "type": "object"
+      },
+      "HerdrOptions": {
+        "properties": {
+          "agent_type": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AgentType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "header": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "match_foreground_cwd": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "stage": {
+            "default": null,
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "target": {
+            "default": null,
+            "description": "A pane id (`SinkTarget.id`); without it the pane is found by cwd.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "Hunk": {
+        "description": "Zero-context hunk. When a count is 0 the start is the line *before* the\nchange, exactly as git prints it (0 means before the first line).",
+        "properties": {
+          "base_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "base_start": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "head_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "head_start": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "base_start",
+          "base_count",
+          "head_start",
+          "head_count"
+        ],
+        "type": "object"
+      },
+      "LastError": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "code": {
+            "$ref": "#/$defs/ErrorCode"
+          },
+          "message": {
+            "type": "string"
+          },
+          "sink": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sink",
+          "code",
+          "message",
+          "at"
+        ],
+        "type": "object"
+      },
+      "LastSubmit": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/$defs/SinkResult"
+          },
+          "sink": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sink",
+          "at",
+          "result"
+        ],
+        "type": "object"
+      },
+      "PrInfo": {
+        "description": "Kept in `pr.json`, not in the session, so the envelope stays small.",
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/$defs/Check"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "fetched_at": {
+            "type": "string"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/$defs/TimelineItem"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "body",
+          "author",
+          "url",
+          "created_at",
+          "updated_at",
+          "timeline",
+          "checks",
+          "fetched_at"
+        ],
+        "type": "object"
+      },
+      "PrState": {
+        "description": "GitHub's own spelling, so sink-github passes it through unchanged.",
+        "enum": [
+          "OPEN",
+          "CLOSED",
+          "MERGED"
+        ],
+        "type": "string"
+      },
+      "PreviewReply": {
+        "properties": {
+          "comment_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "comment_id",
+          "thread_id"
+        ],
+        "type": "object"
+      },
+      "Range": {
+        "properties": {
+          "end": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
+      "Reason": {
+        "enum": [
+          "outside_diff",
+          "stale",
+          "binary",
+          "not_supported"
+        ],
+        "type": "string"
+      },
+      "Repo": {
+        "properties": {
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remote_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "type": "object"
+      },
+      "RevRef": {
+        "properties": {
+          "ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha"
+        ],
+        "type": "object"
+      },
+      "SendStatus": {
+        "enum": [
+          "sent",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "Sent": {
+        "properties": {
+          "comment_id": {
+            "type": "string"
+          },
+          "remote_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The comment's `updated_at` when its text was handed to the sink. A\ncomment edited since then was not what got delivered.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "comment_id"
+        ],
+        "type": "object"
+      },
+      "Session": {
+        "properties": {
+          "base": {
+            "$ref": "#/$defs/RevRef"
+          },
+          "comments": {
+            "items": {
+              "$ref": "#/$defs/Comment"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Decision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "etags": {
+            "$ref": "#/$defs/Etags"
+          },
+          "head": {
+            "$ref": "#/$defs/HeadRef"
+          },
+          "history": {
+            "default": [],
+            "description": "Comments that left the queue, with their deliveries, so a consumed\ncomment can still be looked up instead of being gone.",
+            "items": {
+              "$ref": "#/$defs/Comment"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_submit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LastSubmit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending_submit": {
+            "default": false,
+            "description": "Derived from the state dir on every read rather than stored: a crash\nbetween sending and saving is exactly when the stored value is wrong.",
+            "type": "boolean"
+          },
+          "repo": {
+            "$ref": "#/$defs/Repo"
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/$defs/Source"
+          },
+          "state_path": {
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/$defs/Target"
+            },
+            "type": "array"
+          },
+          "thread_actions": {
+            "items": {
+              "$ref": "#/$defs/ThreadAction"
+            },
+            "type": "array"
+          },
+          "threads": {
+            "items": {
+              "$ref": "#/$defs/Thread"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "viewed": {
+            "additionalProperties": {
+              "$ref": "#/$defs/Viewed"
+            },
+            "description": "Keyed by path. A `BTreeMap` so the JSON (and therefore the etag) has a\nstable key order.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "rev",
+          "state_path",
+          "repo",
+          "source",
+          "base",
+          "head",
+          "targets",
+          "comments",
+          "threads",
+          "thread_actions",
+          "viewed",
+          "etags",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "SessionSummary": {
+        "properties": {
+          "comments": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "decision": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "repo_root": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "repo_root",
+          "comments",
+          "decision",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "Side": {
+        "description": "base / head is the vocabulary of the whole contract; GitHub's LEFT / RIGHT\nexists only inside sink-github.",
+        "enum": [
+          "base",
+          "head"
+        ],
+        "type": "string"
+      },
+      "SinkInfo": {
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime": {
+            "$ref": "#/$defs/SinkRuntime"
+          }
+        },
+        "required": [
+          "name",
+          "available",
+          "runtime"
+        ],
+        "type": "object"
+      },
+      "SinkResult": {
+        "description": "Also the stdin of `submit apply`: a Lua sink fills `sink`, `sent`,\n`failed`, `skipped`, `thread_actions` and `decision`; `at` and `summary`\ndefault to empty and are filled by core.",
+        "properties": {
+          "at": {
+            "default": "",
+            "type": "string"
+          },
+          "attempted": {
+            "description": "`None` means every queued comment; given, a whole failure marks only\nthese, so comments added while the sink was sending stay unmarked.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "decision": {
+            "$ref": "#/$defs/DecisionStatus"
+          },
+          "failed": {
+            "items": {
+              "$ref": "#/$defs/Failed"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/$defs/DeliveryMode",
+            "default": "sent"
+          },
+          "sent": {
+            "items": {
+              "$ref": "#/$defs/Sent"
+            },
+            "type": "array"
+          },
+          "sink": {
+            "type": "string"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/Skipped"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "default": "",
+            "type": "string"
+          },
+          "thread_actions": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/ThreadActionResult"
+            },
+            "type": "array"
+          },
+          "url": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "sink",
+          "sent",
+          "failed",
+          "skipped",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "SinkRuntime": {
+        "description": "`cli` sinks are built into this binary and `submit --sink` sends; `lua`\nsinks are registered in the client and report through `submit apply`.",
+        "enum": [
+          "cli",
+          "lua"
+        ],
+        "type": "string"
+      },
+      "SinkTarget": {
+        "description": "A destination a sink can send to, for a picker (`sink targets`, and the\ncandidates of `E_AMBIGUOUS`).",
+        "properties": {
+          "cwd": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "What `HerdrOptions.target` takes.",
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "Skipped": {
+        "properties": {
+          "comment_id": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/$defs/Reason"
+          }
+        },
+        "required": [
+          "comment_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "Source": {
+        "oneOf": [
+          {
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "base_oid": {
+                "type": "string"
+              },
+              "base_ref": {
+                "type": "string"
+              },
+              "head_ref": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "pr",
+                "type": "string"
+              },
+              "node_id": {
+                "type": "string"
+              },
+              "number": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/PrState"
+              },
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "worktree": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "number",
+              "url",
+              "title",
+              "author",
+              "state",
+              "head_ref",
+              "base_ref",
+              "base_oid",
+              "node_id",
+              "worktree"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base_spec": {
+                "type": "string"
+              },
+              "head_spec": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "local",
+                "type": "string"
+              },
+              "worktree": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "base_spec",
+              "head_spec",
+              "worktree"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "StateDirStatus": {
+        "description": "The directory is created when missing, so `writable` reflects what a\nsession would actually get.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "writable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "writable"
+        ],
+        "type": "object"
+      },
+      "Stats": {
+        "properties": {
+          "added": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "removed": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "added",
+          "removed"
+        ],
+        "type": "object"
+      },
+      "SubjectType": {
+        "enum": [
+          "line",
+          "file"
+        ],
+        "type": "string"
+      },
+      "SubmitOptions": {
+        "additionalProperties": true,
+        "description": "`consume` is the only key every sink shares; the rest of the object is\nthe chosen sink's own options (`HerdrOptions`, `GithubOptions`), kept\nflat so a client can pass one table per sink as it is.",
+        "properties": {
+          "consume": {
+            "default": null,
+            "description": "Whether delivered comments leave the queue. By default only the\nsession kind's own destination consumes them; github always does,\nsince keeping posted comments would post them again.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SubmitPreview": {
+        "description": "What a submit would do, in the same shape for every sink. Comments are\nnamed by id; a client finds their path and text in its session.",
+        "properties": {
+          "body_comment_ids": {
+            "description": "Comments written into `text` because the destination cannot place\nthem on a line.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "comment_ids": {
+            "description": "Comments placed on their lines.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DecisionEvent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The review event that will be posted, also when it is implied (a\ngithub review of comments without a Decision is a `comment`)."
+          },
+          "mode": {
+            "$ref": "#/$defs/DeliveryMode"
+          },
+          "raw": {
+            "additionalProperties": true,
+            "description": "The sink's own request, for debugging. Not part of the contract: it\nchanges whenever the sink's transport does.",
+            "type": "object"
+          },
+          "replies": {
+            "items": {
+              "$ref": "#/$defs/PreviewReply"
+            },
+            "type": "array"
+          },
+          "sink": {
+            "type": "string"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/Skipped"
+            },
+            "type": "array"
+          },
+          "target": {
+            "description": "Where it goes when the sink picks a destination (a herdr pane).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "The text sent as a whole: the review body (github) or the prompt (herdr).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thread_actions": {
+            "items": {
+              "$ref": "#/$defs/ThreadAction"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sink",
+          "comment_ids",
+          "body_comment_ids",
+          "skipped",
+          "replies",
+          "thread_actions",
+          "mode",
+          "raw"
+        ],
+        "type": "object"
+      },
+      "Target": {
+        "properties": {
+          "base_blob": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "binary": {
+            "type": "boolean"
+          },
+          "commentable": {
+            "$ref": "#/$defs/CommentableRanges"
+          },
+          "head_blob": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hunks": {
+            "items": {
+              "$ref": "#/$defs/Hunk"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "old_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "range": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Range"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "$ref": "#/$defs/TargetReason"
+          },
+          "stats": {
+            "$ref": "#/$defs/Stats"
+          },
+          "status": {
+            "$ref": "#/$defs/TargetStatus"
+          },
+          "too_large": {
+            "type": "boolean"
+          },
+          "viewed": {
+            "description": "Derived: `Session.viewed[path].blob == head_blob`. Stored so clients\nnever recompute it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "status",
+          "reason",
+          "binary",
+          "too_large",
+          "viewed",
+          "stats",
+          "hunks",
+          "commentable"
+        ],
+        "type": "object"
+      },
+      "TargetReason": {
+        "enum": [
+          "changed",
+          "thread",
+          "impact"
+        ],
+        "type": "string"
+      },
+      "TargetStatus": {
+        "description": "git's own status letters spelled out, so `git diff --name-status` maps 1:1.",
+        "enum": [
+          "modified",
+          "added",
+          "deleted",
+          "renamed",
+          "copied",
+          "type",
+          "untracked"
+        ],
+        "type": "string"
+      },
+      "Thread": {
+        "properties": {
+          "comments": {
+            "items": {
+              "$ref": "#/$defs/ThreadComment"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "line": {
+            "description": "`null` for file-level threads and for outdated ones, where GitHub no\nlonger reports a line.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "original_line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "outdated": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "resolved": {
+            "type": "boolean"
+          },
+          "side": {
+            "$ref": "#/$defs/Side"
+          },
+          "start_line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "start_side": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Side"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject_type": {
+            "$ref": "#/$defs/SubjectType"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "subject_type",
+          "side",
+          "resolved",
+          "outdated",
+          "comments"
+        ],
+        "type": "object"
+      },
+      "ThreadAction": {
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/ThreadActionKind"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "action"
+        ],
+        "type": "object"
+      },
+      "ThreadActionKind": {
+        "enum": [
+          "resolve",
+          "unresolve"
+        ],
+        "type": "string"
+      },
+      "ThreadActionResult": {
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/ThreadActionKind"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Error"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/$defs/SendStatus"
+          },
+          "thread_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "action",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ThreadComment": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "author",
+          "body",
+          "created_at",
+          "url"
+        ],
+        "type": "object"
+      },
+      "TimelineItem": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/TimelineKind"
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "author",
+          "created_at",
+          "url"
+        ],
+        "type": "object"
+      },
+      "TimelineKind": {
+        "enum": [
+          "comment",
+          "review",
+          "commit",
+          "event"
+        ],
+        "type": "string"
+      },
+      "ToolStatus": {
+        "properties": {
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ToolsStatus": {
+        "properties": {
+          "gh": {
+            "$ref": "#/$defs/ToolStatus"
+          },
+          "git": {
+            "$ref": "#/$defs/ToolStatus"
+          },
+          "herdr": {
+            "$ref": "#/$defs/ToolStatus"
+          }
+        },
+        "required": [
+          "git",
+          "gh",
+          "herdr"
+        ],
+        "type": "object"
+      },
+      "VersionInfo": {
+        "properties": {
+          "schema_version": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "schema_version"
+        ],
+        "type": "object"
+      },
+      "Viewed": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "blob": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "blob",
+          "at"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Root of the JSON Schema. It only exists so that one `schema_for!` call\nemits every contract type under `$defs`.",
+    "properties": {
+      "comment_input": {
+        "$ref": "#/$defs/CommentInput"
+      },
+      "comment_patch": {
+        "$ref": "#/$defs/CommentPatch"
+      },
+      "decision_input": {
+        "$ref": "#/$defs/DecisionInput"
+      },
+      "error": {
+        "$ref": "#/$defs/Error"
+      },
+      "github_options": {
+        "$ref": "#/$defs/GithubOptions"
+      },
+      "health": {
+        "$ref": "#/$defs/HealthInfo"
+      },
+      "herdr_options": {
+        "$ref": "#/$defs/HerdrOptions"
+      },
+      "pr_info": {
+        "$ref": "#/$defs/PrInfo"
+      },
+      "session": {
+        "$ref": "#/$defs/Session"
+      },
+      "session_summary": {
+        "$ref": "#/$defs/SessionSummary"
+      },
+      "sink_info": {
+        "$ref": "#/$defs/SinkInfo"
+      },
+      "sink_result": {
+        "$ref": "#/$defs/SinkResult"
+      },
+      "sink_target": {
+        "$ref": "#/$defs/SinkTarget"
+      },
+      "submit_options": {
+        "$ref": "#/$defs/SubmitOptions"
+      },
+      "submit_preview": {
+        "$ref": "#/$defs/SubmitPreview"
+      },
+      "version": {
+        "$ref": "#/$defs/VersionInfo"
+      }
+    },
+    "required": [
+      "version",
+      "health",
+      "error",
+      "session",
+      "session_summary",
+      "comment_input",
+      "comment_patch",
+      "decision_input",
+      "pr_info",
+      "submit_options",
+      "herdr_options",
+      "github_options",
+      "sink_result",
+      "sink_info",
+      "submit_preview",
+      "sink_target"
+    ],
+    "title": "Contract",
+    "type": "object"
+  },
+  "schema_version": 1
+}

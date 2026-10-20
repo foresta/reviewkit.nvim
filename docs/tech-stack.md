@@ -82,7 +82,7 @@ reviewkit.nvim/
   tests/                    mini.test、fixtures/bin/reviewkit（stub）
   scripts/                  minimal_init.lua、run_tests.lua、install.lua、gen-types.lua
   docs/
-  Makefile                  deps / build / test-rust / test-lua / test-integration / test / check / fmt / gen-types / dist
+  Makefile                  deps / build / test-rust / test-lua / test-integration / test / check / fmt / gen-types / gen-schema / dist
   .github/workflows/        ci.yml、release.yml
 ```
 
@@ -110,6 +110,17 @@ reviewkit.nvim/
 - `:ReviewInstall` と `:checkhealth reviewkit`（解決したパス、`version`、`schema_version` の一致、git / gh / herdr の有無、state dir の書き込み可否）
 - **契約バージョン**: CLI の `version` が `schema_version` を返す。Lua は最初の呼び出しで `types.lua` の
   `SCHEMA_VERSION` と照合し、不一致なら止めて checkhealth に誘導する。同じ `schema_version` 内の変更は追加のみ
+- **契約の互換検査**: 契約の JSON Schema を `docs/schema.json` にコミットし、`cargo test`（`cli/tests/schema.rs`）が
+  現在の Schema と比べる。契約には入力と出力の両方があるので、既存のフィールドは型・必須かどうか・制約
+  （format、上限下限、`additionalProperties`）を変えられない。同じ `schema_version` のまま、型・フィールド・enum 値・
+  variant を消す、既存のフィールドを変える、必須のフィールドを足す、のどれかがあると落ちる。足すフィールドは
+  `#[serde(default)]` か `Option` にする（古いクライアントは送らず、古い session.json には無い）。任意のフィールド・
+  enum 値・variant の追加は通り、
+  `make gen-schema` で `docs/schema.json` を更新する。比較の基準はブランチ上の `docs/schema.json` なので、その差分は
+  PR のレビューで見る
+- **セッションの移行**: `SCHEMA_VERSION` を上げるときは、`store::MIGRATIONS` に「旧版の session.json（JSON の値）を
+  1 版進める」関数を 1 つ足す。読むときに古い版から順に適用するので、版を上げても未送信のコメントは残る。
+  足し忘れはテスト（`every_schema_version_has_a_migration`）が落とす
 - **書いた版の記録**: session.json のトップレベルに契約外のキー `_writer`（`revision`、`version`、`exe`）を書く。`SCHEMA_REVISION` は
   永続化する型にフィールドや enum 値を足すたびに +1 する（Session の Schema のハッシュをテストで固定し、上げ忘れを落とす）。
   自分より新しい revision が書いたセッションは、読めれば `session get` / `list` で返すが書き戻さない（`E_SCHEMA_VERSION`、
