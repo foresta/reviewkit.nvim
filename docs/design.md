@@ -241,7 +241,7 @@ reviewkit session open --pr <number|url> [--cwd]
 reviewkit session open --local [--base REV] [--head REV|worktree] [--cwd]
                                                          -> session   既存があれば再開して refresh。--base A... は A と head の
                                                                       merge-base（refresh ごとに求め直す）。A...B で --head を省くと head = B。
-                                                                      A..B は base = A、head = B（空の側は HEAD）
+                                                                      A..B は base = A、head = B（空の側は HEAD）。両側を書いた base と --head の併用は E_INVALID
 reviewkit session open --session ID                      -> session   再開
 reviewkit session get     --session ID                   -> session
 reviewkit session list    [--cwd]                        -> data: SessionSummary[]
@@ -323,15 +323,17 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   フックやコミットエディタから起動した Neovim が持つ）と pathspec の解釈を変える変数を外し、`GIT_OPTIONAL_LOCKS=0` で
   `status` が index.lock を取らないようにし（利用者の `git add` / `commit` と衝突しない）、制御端末を持たない新しいセッションで
   動かす（ssh のホスト鍵やパスフレーズの確認が端末に出て、ロックを持ったまま待つことがない。確認が要る接続は失敗する）。
-  askpass（`GIT_ASKPASS`、`SSH_ASKPASS`、`core.askPass`）も使わない（エディタやデスクトップの入力窓が出て同じく待つため）。
+  askpass（`GIT_ASKPASS`、`SSH_ASKPASS`、`core.askPass`）も使わず、`DISPLAY` も外す（エディタやデスクトップの入力窓が出て
+  同じく待つため。古い OpenSSH は `SSH_ASKPASS_REQUIRE` を知らず、DISPLAY があれば既定の askpass を出す）。
   timeout で打ち切るときはセッションのプロセスグループごと止める
 - PR の実体化は `<state-dir>/repos/<key>/mirror.git`（bare。ローカルからの clone でオブジェクトはハードリンク）と
   `<state-dir>/repos/<key>/pr/<n>/`（worktree）。2 回目以降は同じ worktree を使い回し、head が同じなら fetch しない。
   利用者の checkout から mirror を作るのは、同じリポジトリで、浅い clone でも部分 clone でもないときだけ（欠けた履歴や blob を
   mirror に持ち込むと merge-base や読み出しが失敗する）。作るのに失敗したら空の mirror から fetch する。
   浅い・部分 clone から作られた既存の mirror（`shallow` や `*.promisor` がある）は作り直す。
-  base は open な PR ならブランチ、閉じた PR なら GitHub が記録した base の commit を id で取る（マージ後に base ブランチが
-  消されていることが多い）。その commit が取れなければ（force-push で消えた）ブランチで取り直す。
+  base は open / closed を問わず GitHub が記録した base の commit を id で取る（マージ後や retarget 前に base ブランチが
+  消されていることがある）。リモートにその commit や参照が無いと git が答えたときだけ（force-push で消えた）ブランチで取り直す
+  （ネットワークの失敗で取り直しても同じく失敗するため）。
   ユーザーのリポジトリには何も書かない
 - 複数 Neovim で同じ Session を開いたとき、Lua は常に返ってきた Session でキャッシュを置き換える
   （コメント単位の last-writer-wins）。他インスタンスの変更は `state_path` の `vim.uv.new_fs_event`

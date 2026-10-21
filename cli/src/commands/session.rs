@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use crate::context::Context;
 use crate::envelope::Response;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::ext::gh::{self, SystemGh};
 use crate::ext::git::{Repository, SystemGit};
 use crate::model::{SessionSummary, Source};
@@ -167,7 +167,15 @@ fn open(ctx: &Context, store: &Store, args: OpenArgs) -> Result<Response> {
         pr::open(store, &src, &repo_ref, number)?
     } else {
         let repo = Repository::discover(&git, &ctx.cwd)?;
-        let spec = LocalSpec::new(args.base.unwrap_or_else(|| "HEAD".to_string()), args.head);
+        let base = args.base.unwrap_or_else(|| "HEAD".to_string());
+        let names_both = match base.split_once("...") {
+            Some((_, right)) => !right.is_empty(),
+            None => base.contains(".."),
+        };
+        if names_both && args.head.is_some() {
+            return Err(Error::invalid(format!("{base} already names both sides; drop --head")));
+        }
+        let spec = LocalSpec::new(base, args.head);
         local::open(store, &repo, &spec)?
     };
     Response::with_session(serde_json::Value::Null, &session)

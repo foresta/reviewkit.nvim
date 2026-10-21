@@ -99,6 +99,9 @@ impl Git for SystemGit {
             .env("GCM_INTERACTIVE", "never")
             .env_remove("GIT_ASKPASS")
             .env_remove("SSH_ASKPASS")
+            // OpenSSH before 8.4 ignores SSH_ASKPASS_REQUIRE and starts its
+            // default askpass whenever there is a display and no terminal.
+            .env_remove("DISPLAY")
             .env("SSH_ASKPASS_REQUIRE", "never")
             // The watcher refreshes often; a status that takes index.lock
             // makes the user's own `git add` fail at random.
@@ -498,9 +501,11 @@ impl<'a> Repository<'a> {
             .unwrap_or(false)
     }
 
+    /// The `shallow` file rather than `--is-shallow-repository`, which git
+    /// before 2.15 does not know and would answer as "not shallow".
     pub fn is_shallow(&self) -> bool {
-        self.run(&["rev-parse", "--is-shallow-repository"])
-            .is_ok_and(|out| text(&out).trim_end() == "true")
+        self.run(&["rev-parse", "--git-path", "shallow"])
+            .is_ok_and(|out| self.root.join(text(&out).trim_end()).exists())
     }
 
     /// A partial clone lacks blobs it fetches on demand from its promisor;
