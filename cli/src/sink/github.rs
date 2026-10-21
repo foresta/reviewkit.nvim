@@ -678,10 +678,13 @@ pub fn reconcile_pending(
         )));
     }
     let mine = |author: &str| viewer.is_empty() || author == viewer;
+    // Another sink may have consumed the comment since the attempt; it is
+    // still the comment GitHub got, and restoring it would post it again.
     let unchanged = |id: &str, body: &str| {
         session
             .comments
             .iter()
+            .chain(session.history.iter())
             .any(|c| c.id == id && same_text(&body_with_suggestion(c), body))
     };
     let marked = |id: &str| {
@@ -774,6 +777,7 @@ pub fn reconcile_pending(
             let unchanged = session
                 .comments
                 .iter()
+                .chain(session.history.iter())
                 .any(|c| c.id == b.id && same_text(&github_text(c, false), &b.text));
             if unchanged {
                 sent.push(Sent {

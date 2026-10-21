@@ -26,9 +26,9 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
         sent.version.as_deref().is_some_and(|v| v != comment.updated_at)
     };
     // An edit while the sink was sending means the delivered text is not
-    // the comment's text any more: it stays queued as if not sent.
-    // Entries for comments no longer queued (recovered and applied earlier)
-    // are kept as reported.
+    // the comment's text any more: it is recorded as not sent, wherever the
+    // comment is now. Entries for comments in neither the queue nor the
+    // history are kept as reported.
     let edited: Vec<String> = result
         .sent
         .iter()
@@ -36,6 +36,7 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
             session
                 .comments
                 .iter()
+                .chain(session.history.iter())
                 .find(|c| c.id == s.comment_id)
                 .is_some_and(|c| edited_meanwhile(c, s))
         })
@@ -48,7 +49,14 @@ pub fn apply(session: &mut Session, mut result: SinkResult, consume: bool) -> Re
         result.summary = summary(&result);
     }
     for sent in &result.sent {
-        if let Some(comment) = session.comments.iter_mut().find(|c| c.id == sent.comment_id) {
+        // A comment that already left the queue (another sink consumed it)
+        // still gets the delivery, so the history knows where it went.
+        let found = session
+            .comments
+            .iter_mut()
+            .chain(session.history.iter_mut())
+            .find(|c| c.id == sent.comment_id);
+        if let Some(comment) = found {
             comment.last_error = None;
             if !recorded(&comment.deliveries, &result) {
                 comment.deliveries.push(Delivery {
@@ -334,6 +342,49 @@ mod tests {
         apply(&mut session, once, false).unwrap();
         assert_eq!(session.comments[0].deliveries.len(), 1);
         assert_eq!(session.decision.as_ref().unwrap().deliveries.len(), 1);
+    }
+
+    #[test]
+    fn an_old_version_delivered_to_a_comment_now_in_the_history_records_nothing() {
+        let mut session = crate::model::Session::new(
+            "local/x/HEAD..worktree".into(),
+            crate::model::Repo {
+                root: std::path::PathBuf::from("/repo"),
+                host: None,
+                owner: None,
+                name: None,
+                remote_url: None,
+            },
+            crate::model::Source::Local {
+                base_spec: "HEAD".into(),
+                head_spec: "worktree".into(),
+                worktree: std::path::PathBuf::from("/repo"),
+            },
+            crate::model::RevRef {
+                r#ref: Some("HEAD".into()),
+                sha: "a".repeat(40),
+            },
+            crate::model::HeadRef {
+                r#ref: None,
+                sha: None,
+                dirty: false,
+            },
+            "t".into(),
+        );
+        session.history.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "c_1", "path": "a", "side": "head", "line": 1, "kind": "issue",
+                "body": "v2", "anchor": { "base_sha": "a", "head_sha": null, "blob": null,
+                    "context": { "before": [], "lines": [], "after": [] } },
+                "stale": false, "commentable": { "github": true, "reason": null },
+                "created_at": "t", "updated_at": "v2-time"
+            }))
+            .unwrap(),
+        );
+        let mut late = result(&["c_1"], &[], &[], DecisionStatus::NotApplicable);
+        late.sent[0].version = Some("v1-time".into());
+        apply(&mut session, late, true).unwrap();
+        assert!(session.history[0].deliveries.is_empty(), "v2 never reached that sink");
     }
 
     #[test]

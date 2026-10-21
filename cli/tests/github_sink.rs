@@ -2180,3 +2180,105 @@ fn a_token_that_cannot_read_the_viewer_still_reconciles_by_marker() {
     assert_eq!(body["data"]["sent"][0]["comment_id"], posted, "{body}");
     assert_eq!(mutation_calls(&gh).len(), 1);
 }
+
+#[test]
+fn a_comment_an_agent_consumed_after_a_cut_off_github_submit_is_not_posted_twice() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let cid = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "both ways"}),
+    );
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let landed = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let herdr_dir = tempfile::tempdir().unwrap();
+    let to_agent = json(
+        &reviewkit(&state, &remote, &gh)
+            .env("REVIEWKIT_HERDR", common::fixture_bin("herdr"))
+            .env("FAKE_HERDR_DIR", herdr_dir.path())
+            .args(["submit", "--session", &id, "--sink", "herdr", "--options", "-"])
+            .write_stdin(r#"{"target": "w1:p1", "consume": true}"#)
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        to_agent["session"]["comments"].as_array().unwrap().is_empty(),
+        "{to_agent}"
+    );
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", &landed)]),
+        serde_json::json!([]),
+    );
+    submit_github(&state, &remote, &gh, &id);
+    let restored: serde_json::Value = serde_json::from_slice(
+        &reviewkit(&state, &remote, &gh)
+            .args(["history", "restore", "--session", &id, "--id", &cid])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(restored["error"]["code"], "E_INVALID", "GitHub has it: {restored}");
+    assert_eq!(mutation_calls(&gh).len(), 1, "never posted a second time");
+}
+
+#[test]
+fn a_comment_outside_the_diff_an_agent_consumed_after_a_cut_off_review_is_not_posted_twice() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let cid = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 7, "body": "far, both ways"}),
+    );
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let review_body = mutation_calls(&gh)[0]["variables"]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let herdr_dir = tempfile::tempdir().unwrap();
+    json(
+        &reviewkit(&state, &remote, &gh)
+            .env("REVIEWKIT_HERDR", common::fixture_bin("herdr"))
+            .env("FAKE_HERDR_DIR", herdr_dir.path())
+            .args(["submit", "--session", &id, "--sink", "herdr", "--options", "-"])
+            .write_stdin(r#"{"target": "w1:p1", "consume": true}"#)
+            .output()
+            .unwrap(),
+    );
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([]),
+        serde_json::json!([
+            { "state": "COMMENTED", "body": review_body, "submittedAt": "2999-01-01T00:00:00Z", "url": "r", "author": {"login": "me"} }
+        ]),
+    );
+    submit_github(&state, &remote, &gh, &id);
+    let restored: serde_json::Value = serde_json::from_slice(
+        &reviewkit(&state, &remote, &gh)
+            .args(["history", "restore", "--session", &id, "--id", &cid])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(restored["error"]["code"], "E_INVALID", "GitHub has it: {restored}");
+    assert_eq!(mutation_calls(&gh).len(), 1);
+}
