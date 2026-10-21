@@ -312,7 +312,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
 - 保存先は `<state-dir>/sessions/<id>/session.json`。PR の付帯情報（conversation、checks）は同じディレクトリの `pr.json` に分け、
   Session の封筒を重くしない。変更系は advisory lock → 読む → 適用 → `rev += 1` → temp + rename。
   ロックはプロセス終了で解放される。CLI のロック待ちは短く（2 秒）、Lua の `cli.call` が `E_LOCKED` を間隔を空けて数回再試行する。
-  PR の refresh（gh と git fetch）はロックの外で取得し、ロックの中では読み直したセッションに当てるだけにする。
+  PR の open と refresh（gh と git fetch）はロックの外（fetch.lock の中）で取得し、ロックの中では読み直したセッションに当てるだけにする。
+  初回の open も同じで、取得が済んでからロックの中でセッションを作る（取得に失敗したら作りかけのディレクトリを消す）。
   送信はロックを持ったまま行う（送信中の編集を失わないため。版の照合で外せるようになるまで）。持つのは github の送信
   （中断した送信の照合で gh から PR を取り直す段も含む。gh の呼び出しごとに timeout があり、それが送信の間続く）と herdr の送信（`agent prompt` / `pane send-text`）。
   その間の変更系（コメントの追加・編集、decision）は再試行の後に `E_LOCKED`（hint で送信中の可能性を示す）で失敗する。

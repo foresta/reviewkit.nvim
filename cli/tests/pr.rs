@@ -433,6 +433,72 @@ fn a_pull_request_refresh_does_not_lock_out_other_commands_while_it_fetches() {
 }
 
 #[test]
+fn reopening_a_pull_request_does_not_lock_out_other_commands_while_it_fetches() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+            .output()
+            .unwrap(),
+    );
+    let mut rules: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
+    for rule in rules.iter_mut() {
+        rule["sleep"] = serde_json::json!(4);
+    }
+    std::fs::write(
+        gh.dir.path().join("responses.json"),
+        serde_json::Value::Array(rules).to_string(),
+    )
+    .unwrap();
+
+    let calls_before = gh.calls().len();
+    let mut reopen = std::process::Command::new(assert_cmd::cargo::cargo_bin("reviewkit"))
+        .envs(
+            reviewkit(&state, &remote, &gh)
+                .get_envs()
+                .filter_map(|(k, v)| v.map(|v| (k.to_owned(), v.to_owned()))),
+        )
+        .args(["--state-dir", state.path().to_str().unwrap()])
+        .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The GraphQL query reads the threads, the part of a fetch that comes
+    // after the checkout.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !gh.calls()[calls_before..]
+        .iter()
+        .any(|call| call["args"].to_string().contains("graphql"))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the reopen never queried the threads"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        reopen.try_wait().unwrap().is_none(),
+        "the reopen must still be fetching"
+    );
+    let decided = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["decision", "set", "--session", "pr/github.com/o/r/7"])
+            .write_stdin(r#"{"event":"comment","body":"meanwhile"}"#)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(decided["session"]["decision"]["body"], "meanwhile");
+
+    let reopened = reopen.wait_with_output().unwrap();
+    assert!(reopened.status.success());
+    let after: serde_json::Value = serde_json::from_slice(&reopened.stdout).unwrap();
+    assert_eq!(after["session"]["decision"]["body"], "meanwhile");
+}
+
+#[test]
 fn a_deleted_mirror_is_recreated_on_reopen() {
     let state = tempfile::tempdir().unwrap();
     let remote = Remote::new();

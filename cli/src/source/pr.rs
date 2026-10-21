@@ -57,20 +57,21 @@ pub fn open(store: &Store, src: &PrSource<'_>, repo_ref: &RepoRef, number: u64) 
     let meta = gh::pr_meta(src.gh, repo_ref, number)?;
     let repo_ref = &canonical(repo_ref, &meta);
     let id = session_id(repo_ref, number);
-    let create = |meta: &PrMeta| {
-        store.open_or_create(
-            &id,
-            || Ok(new_session(id.clone(), src, repo_ref, meta)),
-            |session| refresh_with(session, src, store, Some(meta.clone())),
-        )
-    };
-    // Reopening shares the PR worktree with any refresh that is running; the
-    // PR is read again once that refresh is done, so it is not applied stale.
-    let (session, ()) = if store.exists(&id) {
-        store.with_fetch_lock(&id, || create(&gh::pr_meta(src.gh, repo_ref, number)?))?
-    } else {
-        create(&meta)?
-    };
+    // Fetched under the fetch lock only, as `session refresh` does: the
+    // session lock is held just to apply what was fetched, so other commands
+    // are not failed with E_LOCKED while GitHub and git are slow.
+    let (session, ()) = store.with_new_fetch_lock(&id, || {
+        // A reopen may have waited for another fetch; the PR is read again
+        // so what that fetch saw is not applied stale.
+        let meta = if store.exists(&id) {
+            gh::pr_meta(src.gh, repo_ref, number)?
+        } else {
+            meta
+        };
+        let draft = new_session(id.clone(), src, repo_ref, &meta);
+        let snapshot = fetch(&draft, src, store, Some(meta))?;
+        store.open_or_create(&id, || Ok(draft), |s| refresh::apply(s, snapshot, src.git))
+    })?;
     Ok(session)
 }
 
@@ -116,15 +117,6 @@ fn new_session(id: String, src: &PrSource<'_>, repo_ref: &RepoRef, meta: &PrMeta
         },
         time::now(),
     )
-}
-
-pub fn refresh(session: &mut Session, src: &PrSource<'_>, store: &Store) -> Result<()> {
-    refresh_with(session, src, store, None)
-}
-
-fn refresh_with(session: &mut Session, src: &PrSource<'_>, store: &Store, meta: Option<PrMeta>) -> Result<()> {
-    let snapshot = fetch(session, src, store, meta)?;
-    refresh::apply(session, snapshot, src.git)
 }
 
 /// Gathered without the session lock so other commands are not blocked on
