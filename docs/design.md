@@ -51,7 +51,7 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
 - `E_AMBIGUOUS` は `details.candidates` に候補（`SinkTarget[]`）を載せる。cwd に一致する agent が 0 件なら全 agent を候補にする
 - コードは「何が起きたか」を表し、ツール名を含めない。どのツールかは `error.tool`（"git" / "gh" / "herdr"）で示すので、
   sink や source を足してもコードは増えない。最初のリリース以降、コードは追加だけで改名しない。`E_GIT` は「git が動いて
-  失敗した」ときに限り（core が直接依存するため残す）、git が無いときは他のツールと同じ `E_TOOL_MISSING`
+  失敗した」とき（core が直接依存するため残す）と、git を動かすチェックアウトが無いとき。git が無いときは他のツールと同じ `E_TOOL_MISSING`
 - `retryable` は「同じコマンドをそのまま再実行しても副作用が重複しない」ときだけ true。GitHub への mutation と herdr への
   送信が失敗・timeout したときは、相手に届いたかどうか分からないので false にし、`details.outcome = "unknown"` と
   確かめ方の hint を付ける。GitHub は次の submit が pending の記録と照合する（§5）。herdr には照合が無いので、
@@ -319,7 +319,9 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   その間の変更系（コメントの追加・編集、decision）は再試行の後に `E_LOCKED`（hint で送信中の可能性を示す）で失敗する。
   入力窓から保存したものが失敗したときは、Lua が入力した本文のまま入力窓を開き直し、本文を失わない。
   PR の取得はセッションごとの fetch.lock で直列にし、リポジトリごとの mirror は `mirror.lock` で守る（作成は一時ディレクトリから rename）。
-  git の fetch / clone は `REVIEWKIT_GIT_TIMEOUT_MS`（既定 120 秒）で打ち切り、認証のプロンプトは出さない。
+  git の fetch / clone は `REVIEWKIT_GIT_TIMEOUT_MS`（既定 120 秒）で打ち切り、認証のプロンプトは出さない。部分 clone（`extensions.partialClone` か `remote.<name>.promisor=true`）では
+  どのコマンドも足りない blob を取りに行きうるので、すべてのコマンドを同じ時間で打ち切る。チェックアウトが移動・削除されていれば、
+  git が無いのではなく「checkout not found」（E_GIT）として返す。
   git は呼び出し元の環境に左右されないよう、リポジトリを指す変数（`GIT_DIR`、`GIT_WORK_TREE`、`GIT_INDEX_FILE` など。
   フックやコミットエディタから起動した Neovim が持つ）と pathspec の解釈を変える変数を外し、`GIT_OPTIONAL_LOCKS=0` で
   `status` が index.lock を取らないようにし（利用者の `git add` / `commit` と衝突しない）、制御端末を持たない新しいセッションで
