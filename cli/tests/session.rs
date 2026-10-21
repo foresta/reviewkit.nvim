@@ -254,6 +254,51 @@ fn user_diff_config_and_odd_paths_do_not_break_targets() {
 }
 
 #[test]
+fn user_diff_algorithm_does_not_change_the_hunks() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    // f.rs splits differently under histogram, g.rs without the indent
+    // heuristic.
+    repo.write("f.rs", "{\n    z\n}\n");
+    repo.write("g.rs", "\n{\ny\ny\n{\n\n");
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "base"]);
+    repo.write("f.rs", "{\n{\n}\n    z\ny\n}\n");
+    repo.write("g.rs", "\n{\n    z\n{\ny\ny\n{\n{\nx\n{\n\n");
+    let opened = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local"])
+            .output()
+            .unwrap(),
+    );
+    let hunks = |session: &serde_json::Value| {
+        session["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["hunks"].clone())
+            .collect::<Vec<_>>()
+    };
+    let myers = hunks(&opened["session"]);
+    repo.git(&["config", "diff.algorithm", "histogram"]);
+    repo.git(&["config", "diff.indentHeuristic", "false"]);
+    let refreshed = json(
+        &reviewkit(&state, &repo)
+            .args([
+                "session",
+                "refresh",
+                "--session",
+                opened["session"]["id"].as_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+    );
+    let configured = hunks(&refreshed["session"]);
+    assert_eq!(myers.len(), 2);
+    assert_eq!(configured, myers);
+}
+
+#[test]
 fn mode_plus_content_is_modified_and_a_typechange_is_one_target() {
     let state = tempfile::tempdir().unwrap();
     let repo = Repo::new();
