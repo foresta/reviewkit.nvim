@@ -108,7 +108,8 @@ impl FakeGh {
         std::fs::read_to_string(self.dir.path().join("calls.jsonl"))
             .unwrap_or_default()
             .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
+            // The fake may be appending its line while a test polls.
+            .filter_map(|l| serde_json::from_str(l).ok())
             .collect()
     }
 }

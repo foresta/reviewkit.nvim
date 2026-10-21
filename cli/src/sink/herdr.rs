@@ -384,7 +384,7 @@ pub fn submit(
     opts: &HerdrOptions,
     herdr: &dyn Herdr,
     checkout_head: CheckoutHead<'_>,
-) -> Result<SinkResult> {
+) -> Result<Submitted> {
     let preview = request(session, opts, herdr, checkout_head)?;
     let outcome = if preview.stage {
         herdr::send_text(herdr, &preview.target, &preview.prompt)
@@ -447,22 +447,26 @@ pub fn submit(
             attempted: Some(to_send(session).iter().map(|c| c.id.clone()).collect()),
         },
     };
-    let mut result = result;
-    if preview.elsewhere {
-        result.summary = CHECKOUT_NOTE.into();
-    }
-    Ok(result)
+    Ok(Submitted {
+        result,
+        elsewhere: preview.elsewhere,
+    })
 }
 
-const CHECKOUT_NOTE: &str = "the agent's checkout is not at the pull request head";
+pub struct Submitted {
+    pub result: SinkResult,
+    pub elsewhere: bool,
+}
 
 /// The note is added last: the summary is otherwise derived from fields the
 /// caller may still change (a selection skips the decision).
-fn finish_summary(result: &mut SinkResult) {
-    let noted = result.summary == CHECKOUT_NOTE;
+fn finish_summary(result: &mut SinkResult, elsewhere: bool) {
     result.summary = crate::core::apply::summary(result);
-    if noted {
-        result.summary = format!("{}; {CHECKOUT_NOTE}", result.summary);
+    if elsewhere {
+        result.summary = format!(
+            "{}; the agent's checkout is not at the pull request head",
+            result.summary
+        );
     }
 }
 
@@ -538,11 +542,12 @@ impl super::Sink for HerdrSink {
         let checkout_head = checkout_head_with(ctx);
         store.update(id, |s| {
             let view = crate::core::comments::narrowed(s, opts.comment_ids.as_deref())?;
-            let mut result = submit(view.as_ref().unwrap_or(s), &options, &herdr, &checkout_head)?;
+            let Submitted { mut result, elsewhere } =
+                submit(view.as_ref().unwrap_or(s), &options, &herdr, &checkout_head)?;
             if view.is_some() && s.decision.is_some() {
                 result.decision = DecisionStatus::Skipped;
             }
-            finish_summary(&mut result);
+            finish_summary(&mut result, elsewhere);
             let consume = self.consumes(&s.source, opts.consume);
             crate::core::apply::apply(s, result, consume)
         })

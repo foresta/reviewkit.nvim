@@ -729,6 +729,25 @@ mod tests {
         }
     }
 
+    struct FailingBatch;
+
+    impl Git for FailingBatch {
+        fn run(&self, _cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
+            let paths = &args[2..];
+            if paths.len() > 1 {
+                return Err(Error::tool("git", ErrorCode::EGit, "a file vanished"));
+            }
+            Ok(format!("id-{}\n", paths[0]).into_bytes())
+        }
+    }
+
+    #[test]
+    fn a_failing_batch_is_hashed_per_path() {
+        let repo = Repository::at(&FailingBatch, PathBuf::from("/repo"));
+        let ids = repo.hash_objects(&["a".into(), "b".into()]);
+        assert_eq!(ids, vec![Some("id-a".to_string()), Some("id-b".to_string())]);
+    }
+
     #[test]
     fn a_batch_answering_too_few_lines_is_hashed_per_path_without_shifting_ids() {
         let repo = Repository::at(&ShortBatch, PathBuf::from("/repo"));

@@ -209,7 +209,7 @@ SinkResult {
   （PR = github、local = herdr。`SubmitOptions.consume` で上書き。github は二重投稿を避けるため常に消費）のときだけ。
   判断は各 sink の `Sink::consumes` が持ち、core は sink の名前を知らない。`submit apply`（Lua の sink）は `--consume` を
   付けたときだけ消費する。Lua は `LuaSink.consumes(session, requested)`（requested は `opts.consume`）があればそれで、
-  無ければ `opts.consume`（未指定は false）で決める。Lua の sink も、自分が sent で配送済みのコメントは送らない。
+  無ければ `opts.consume`（未指定は false）で決める。Lua の sink も、自分が sent で配送済みのコメントと decision は送らない（decision は `skipped` と報告する）。
   送れたコメントの `last_error` は消し、全体失敗の印はその sink へ送り済みのコメントと `attempted` 外のコメントには付けない。
   `sent[].version` がコメントの今の `updated_at` と違う（送信中に編集された）ものは送れなかった扱いでキューに残し、結果からも外す。herdr の stage は `staged`、clipboard は
   `copied` で、消費しない。herdr は自分へ `sent` 済みのコメントを再送しない。本文・suggestion・kind を変えると `deliveries` は消える。

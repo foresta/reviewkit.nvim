@@ -41,7 +41,11 @@ function M.calls(dir)
   end
   local calls = {}
   for line in f:lines() do
-    table.insert(calls, vim.json.decode(line))
+    -- The stub may be appending its line while a test polls.
+    local ok, call = pcall(vim.json.decode, line)
+    if ok then
+      table.insert(calls, call)
+    end
   end
   f:close()
   return calls
