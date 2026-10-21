@@ -881,6 +881,19 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
         }
         err.outcome_unknown("the next submit checks GitHub for what was already posted before sending")
     })?;
+    // An error naming no field (GitHub's "may be the result of a timeout")
+    // or no data at all does not say what was done; reported as failed, the
+    // next submit would post again whatever was in fact created.
+    if response.data.is_null() || response.errors.iter().any(|e| e["path"].is_null()) {
+        let message = response
+            .errors
+            .iter()
+            .find(|e| e["path"].is_null())
+            .and_then(|e| e["message"].as_str())
+            .unwrap_or("GitHub answered without data");
+        return Err(gh::graphql_error(message)
+            .outcome_unknown("the next submit checks GitHub for what was already posted before sending"));
+    }
     let at = time::now();
     let mut sent = Vec::new();
     let mut failed = Vec::new();
@@ -888,13 +901,11 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
     let mut decision = DecisionStatus::NotApplicable;
     let mut url = None;
 
-    // Errors name the failed field through `path[0]`; one without a path is
-    // the whole request failing.
     let error_for = |alias: &str| -> Option<Error> {
         response
             .errors
             .iter()
-            .find(|e| e["path"][0].as_str() == Some(alias) || e["path"].is_null())
+            .find(|e| e["path"][0].as_str() == Some(alias))
             .and_then(|e| e["message"].as_str())
             .map(gh::graphql_error)
     };

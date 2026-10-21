@@ -2282,3 +2282,39 @@ fn a_comment_outside_the_diff_an_agent_consumed_after_a_cut_off_review_is_not_po
     assert_eq!(restored["error"]["code"], "E_INVALID", "GitHub has it: {restored}");
     assert_eq!(mutation_calls(&gh).len(), 1);
 }
+
+#[test]
+fn a_timeout_reported_without_a_path_keeps_the_record_and_is_reconciled() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let cid = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "maybe posted"}),
+    );
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": null, "errors": [ { "message": "Something went wrong while executing your query. This may be the result of a timeout." } ] }),
+        1,
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["error"]["details"]["outcome"], "unknown", "{body}");
+    assert!(pending_file(&state).exists(), "kept for the next submit to reconcile");
+    let posted = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", &posted)]),
+        serde_json::json!([]),
+    );
+    let again = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(again["data"]["sent"][0]["comment_id"], cid, "{again}");
+    assert_eq!(mutation_calls(&gh).len(), 1, "not posted a second time");
+}
