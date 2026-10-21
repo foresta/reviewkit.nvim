@@ -449,6 +449,8 @@ core.submit(sink, opts, cb)  -- Rust 側 sink は submit。Lua 登録 sink は i
 core.preview(sink, opts, cb) -- submit --dry-run。cb(err, SubmitPreview)。返った Session でキャッシュも更新する
 core.register_sink(name, impl)  -- impl = { submit, available?, consumes? }。available() は boolean, reason? を返す。
                              -- consumes(session, requested) は送れたコメントをキューから消すか（既定 false）
+                             -- submit の結果で省いた sent / failed / skipped / thread_actions は空、decision は not_applicable で補う。
+                             -- decision を送った sink は decision = "sent" を返す（省くと配送が記録されず、次の送信で同じ decision をもう一度送る）
 core.sinks(cb)               -- sink list と登録済みの Lua sink（runtime = "lua"）をマージ。同名は Lua を優先
 core.sink_names()            -- 最後の sinks() と登録済みの名前。:ReviewSubmit の補完用（同期）
 core.history(cb) / core.restore(id, cb) / core.clear_delivered(sink?, cb) / core.clear_history(cb)
