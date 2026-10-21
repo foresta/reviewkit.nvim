@@ -88,8 +88,18 @@ jobs:
           subject-path: "dist/reviewkit-*"
       # A draft until every asset is up: a published release without
       # SHA256SUMS makes installers fall back to building from source.
+      # A rerun after a failed publish finds the draft already there, so it
+      # re-uploads over it instead of creating it again.
       - run: |
-          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes dist/*
+          draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          if [ "$draft" = false ]; then
+            echo "$GITHUB_REF_NAME is already published; leaving its assets alone"
+            exit 0
+          elif [ "$draft" = true ]; then
+            gh release upload "$GITHUB_REF_NAME" --clobber dist/*
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes dist/*
+          fi
           gh release edit "$GITHUB_REF_NAME" --draft=false
         env:
           GH_TOKEN: ${{ github.token }}
@@ -103,10 +113,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Read pinned tool versions
+        id: versions
+        run: make print-versions >> "$GITHUB_OUTPUT"
       - uses: rhysd/action-setup-vim@v1
         with:
           neovim: true
-          version: stable
+          version: ${{ steps.versions.outputs.nvim }}
       - name: Install from the published release
         run: |
           nvim --headless -l scripts/install.lua download | tee install.log

@@ -1064,6 +1064,31 @@ T["orchestrator"]["files of a pull request's worktree cannot be edited"] = funct
   eq(child.lua_get("vim.bo.modifiable"), false)
 end
 
+T["orchestrator"]["a worktree file loaded before the pull request opens is protected too"] = function()
+  helpers.respond(dir, github_rules())
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  eq(child.lua_get("vim.bo.modifiable"), true)
+  child.cmd("Review pr 7")
+  wait_notice("#7 Add k")
+  eq(child.lua_get("{ vim.bo.modifiable, vim.bo.readonly }"), { false, true })
+end
+
+T["orchestrator"]["a protected worktree file stays protected after a reload from disk"] = function()
+  helpers.respond(dir, github_rules())
+  child.cmd("Review pr 7")
+  wait_notice("#7 Add k")
+  local path = worktree .. "/src/a.rs"
+  child.cmd("edit " .. path)
+  local lines = vim.fn.readfile(path)
+  table.insert(lines, "// changed on disk")
+  vim.fn.writefile(lines, path)
+  -- The mtime is in whole seconds on some file systems.
+  vim.uv.fs_utime(path, os.time() + 5, os.time() + 5)
+  child.cmd("checktime")
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(0, -2, -1, false)[1]"), "// changed on disk")
+  eq(child.lua_get("{ vim.bo.modifiable, vim.bo.readonly }"), { false, true })
+end
+
 T["orchestrator"]["saving an empty comment says it was discarded and queues nothing"] = function()
   helpers.respond(dir, rules())
   child.cmd("Review diff HEAD~1")

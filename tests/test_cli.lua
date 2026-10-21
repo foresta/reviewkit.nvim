@@ -202,4 +202,15 @@ T["cli"]["health reports a missing git as an error and says what gh is for"] = f
   eq(has("pull requests"), true)
 end
 
+T["cli"]["git run by the tests and their child Neovims ignores the global and system config"] = function()
+  local outside = [[
+    (function()
+      local out = vim.system({ "git", "config", "--show-origin", "--list" }, { cwd = vim.fn.tempname():match("^(.*)/"), text = true }):wait().stdout
+      return out:match("^file:[^\t]+") or out:match("\nfile:[^\t]+") or ""
+    end)()
+  ]]
+  eq(vim.fn.luaeval(outside), "")
+  eq(child.lua_get(outside), "")
+end
+
 return T

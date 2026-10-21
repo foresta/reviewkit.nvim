@@ -214,8 +214,12 @@ T["core"]["a Lua sink may leave out what it has nothing to report for"] = functi
   ]])
   eq(child.lua_get("_G.wait_done()").err, nil)
   local calls = helpers.calls(dir)
-  local sent = vim.json.decode(calls[#calls].stdin)
-  eq({ sent.failed, sent.skipped, sent.thread_actions, sent.decision }, { {}, {}, {}, "not_applicable" })
+  local raw = calls[#calls].stdin
+  -- Decoded, an empty array and an empty object are the same table.
+  for _, key in ipairs({ "failed", "skipped", "thread_actions" }) do
+    eq(raw:find('"' .. key .. '":[]', 1, true) ~= nil, true)
+  end
+  eq(vim.json.decode(raw).decision, "not_applicable")
 end
 
 T["core"]["a delivery waiting to be recorded is drained once per change and holds back Lua sinks"] = function()
@@ -233,15 +237,10 @@ T["core"]["a delivery waiting to be recorded is drained once per change and hold
       body = { ok = true, data = vim.NIL, session = helpers.session({ pending_apply = true }) },
     },
   })
+  helpers.track(child)
   open(child)
-  child.lua("vim.wait(1500, function() return false end, 50)")
-  local drains = 0
-  for _, call in ipairs(helpers.calls(dir)) do
-    if vim.tbl_contains(call.args, "--drain") then
-      drains = drains + 1
-    end
-  end
-  eq(drains, 1)
+  helpers.wait_finished(child, "--drain", 1)
+  eq(helpers.started(child, "--drain"), 1)
   child.lua([[
     _G.delivered = false
     require('reviewkit.core').register_sink('clip', {
@@ -305,6 +304,51 @@ T["core"]["a Lua sink checks the disk for another instance's waiting delivery fi
   eq(order[1], "get")
   eq(order[#order], "apply")
   eq(vim.tbl_contains(order, "drain"), true)
+end
+
+T["core"]["a waiting delivery the drain cannot record because the session is locked refuses the Lua sink"] = function()
+  helpers.respond(dir, {
+    {
+      match = { "session open --local" },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ comments = QUEUED }) },
+    },
+    {
+      match = { "session get" },
+      body = {
+        ok = true,
+        data = vim.NIL,
+        session = helpers.session({ rev = 2, pending_apply = true, comments = QUEUED }),
+      },
+    },
+    {
+      match = { "--drain" },
+      body = {
+        ok = false,
+        error = { code = "E_LOCKED", message = "session is locked", retryable = true, details = {} },
+      },
+      exit = 5,
+    },
+  })
+  open(child)
+  child.lua([[
+    require('reviewkit.cli').LOCK_RETRY_MS = {}
+    _G.delivered = false
+    require('reviewkit.core').register_sink('clip', {
+      submit = function(_, _, cb)
+        _G.delivered = true
+        cb(nil, { sent = { { comment_id = 'c_1' } }, failed = {}, skipped = {}, decision = 'not_applicable' })
+      end,
+    })
+    require('reviewkit.core').submit('clip', {}, _G.finish)
+  ]])
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err.code, "E_CONFLICT")
+  eq(d.err.retryable, true)
+  eq(child.lua_get("_G.delivered"), false)
+  eq(#vim.tbl_filter(function(c)
+    return table.concat(c.args, " "):find("submit apply --session", 1, true) ~= nil
+      and not vim.tbl_contains(c.args, "--drain")
+  end, helpers.calls(dir)), 0)
 end
 
 T["core"]["a Lua sink is not given comments it already sent"] = function()
@@ -383,6 +427,7 @@ T["core"]["a drain that fails for another reason reports that reason and is not 
       exit = 6,
     },
   })
+  helpers.track(child)
   open(child)
   child.lua([[
     require('reviewkit.core').register_sink('clip', {
@@ -394,16 +439,8 @@ T["core"]["a drain that fails for another reason reports that reason and is not 
   ]])
   local d = child.lua_get("_G.wait_done()")
   eq(d.err.code, "E_SCHEMA_VERSION")
-  local drains = function()
-    return #vim.tbl_filter(function(c)
-      return vim.tbl_contains(c.args, "--drain")
-    end, helpers.calls(dir))
-  end
-  local seen = drains()
-  vim.wait(6000, function()
-    return drains() > seen
-  end, 100)
-  eq(drains(), seen)
+  helpers.wait_finished(child, "--drain", helpers.started(child, "--drain"))
+  eq(child.lua_get("vim.tbl_filter(function(d) return d.kind == '--drain' end, _G.deferred)"), {})
 end
 
 T["core"]["a Lua sink that has every comment and the decision is refused before it runs"] = function()
@@ -674,37 +711,33 @@ T["core"]["an older rev from the CLI is ignored and nothing fires after close"] 
     },
     { match = { "session close" }, body = { ok = true, data = { closed = true } } },
   })
+  helpers.track(child)
   open(child)
   child.lua("_G.events = {}")
   local f = assert(io.open(path .. ".tmp", "w"))
   f:write("{}")
   f:close()
-  local gets_before = #vim.tbl_filter(function(c)
-    return table.concat(c.args, " "):find("session get", 1, true) ~= nil
-  end, helpers.calls(dir))
+  local gets_before = helpers.started(child, "session get")
   os.rename(path .. ".tmp", path)
-  -- The watcher must have asked before "nothing happened" means anything.
-  eq(
-    vim.wait(20000, function()
-      return #vim.tbl_filter(function(c)
-        return table.concat(c.args, " "):find("session get", 1, true) ~= nil
-      end, helpers.calls(dir)) > gets_before
-    end, 20),
-    true
-  )
-  child.lua("vim.wait(600, function() return #_G.events > 0 end, 20)")
+  -- The watcher's answer must have been taken before "nothing happened"
+  -- means anything.
+  helpers.wait_finished(child, "session get", gets_before + 1)
   eq(helpers.event_names(child), {})
   eq(child.lua_get("require('reviewkit.core').session().rev"), 5)
 
   child.lua("require('reviewkit.core').close({}, _G.finish)")
   child.lua_get("_G.wait_done()")
   child.lua("_G.events = {}")
+  local gets_after_close = helpers.started(child, "session get")
   f = assert(io.open(path .. ".tmp", "w"))
   f:write("{}")
   f:close()
   os.rename(path .. ".tmp", path)
-  child.lua("vim.wait(600, function() return #_G.events > 0 end, 20)")
+  -- No answer to wait for: a closed session asks nothing. The window covers
+  -- the watcher's 150 ms debounce plus the file event's own delivery.
+  child.lua("vim.wait(500, function() return #_G.events > 0 end, 20)")
   eq(helpers.event_names(child), {})
+  eq(helpers.started(child, "session get"), gets_after_close)
 end
 
 T["core"]["list puts the sessions of the current repository first"] = function()

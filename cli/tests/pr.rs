@@ -244,6 +244,31 @@ fn a_dotless_origin_host_reaches_gh_and_a_failure_there_suggests_the_url() {
 }
 
 #[test]
+fn a_pull_request_missing_on_a_dotless_origin_host_does_not_blame_the_host() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    git_in(remote.clone.path(), &["remote", "set-url", "origin", "git@ghe:o/r.git"]);
+    std::fs::write(
+        gh.dir.path().join("responses.json"),
+        serde_json::json!([{ "match": ["pr view"], "exit": 1,
+            "stderr": "GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)\n" }])
+        .to_string(),
+    )
+    .unwrap();
+    let out = reviewkit(&state, &remote, &gh)
+        .args(["session", "open", "--pr", "7"])
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(body["error"]["tool"], "gh", "{body}");
+    assert!(
+        !body["error"]["hint"].as_str().unwrap_or("").contains("SSH alias"),
+        "gh reached the host and it answered: {body}"
+    );
+}
+
+#[test]
 fn close_purge_removes_the_worktree_but_keeps_the_mirror() {
     let state = tempfile::tempdir().unwrap();
     let remote = Remote::new();
@@ -747,8 +772,18 @@ fn two_pull_requests_of_one_repository_can_be_opened_at_once() {
     eight["body"]["number"] = serde_json::json!(8);
     eight["body"]["url"] = serde_json::json!("https://github.com/o/r/pull/8");
     rules.insert(0, eight);
-    for rule in rules.iter_mut() {
-        rule["sleep"] = serde_json::json!(0.5);
+    // Each open waits at its first gh call until the other has reached its
+    // own, so the two run side by side however slowly either starts.
+    let barrier = gh.dir.path().display().to_string();
+    for (rule, (me, other)) in rules.iter_mut().zip([("8", "7"), ("7", "8")]) {
+        rule["run"] = serde_json::json!([
+            "sh",
+            "-c",
+            "touch \"$0/at-$1\"; i=0; until [ -f \"$0/at-$2\" ]; do i=$((i+1)); [ $i -gt 2000 ] && exit 1; sleep 0.01; done",
+            barrier,
+            me,
+            other
+        ]);
     }
     std::fs::write(
         gh.dir.path().join("responses.json"),

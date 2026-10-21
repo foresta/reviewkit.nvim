@@ -58,8 +58,8 @@ Neovim の ABI と LuaJIT に結合せず、配布が `cargo install` かバイ�
 
 fake `gh` は引数のパターンと応答（`status` / `body` / `stderr` / `exit`）の対応表を持つスクリプトで、GitHub へは一切通信しない。
 
-git はどの段でも開発者の global / system の設定（コミット署名、hooks）を読まない（Rust は `ISOLATED_GIT`、Lua は Makefile が
-`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1` を付けて実行する）。
+git はどの段でも開発者の global / system の設定（コミット署名、hooks）を読まない（Rust は `ISOLATED_GIT`、Lua は
+`scripts/minimal_init.lua` が `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1` を設定する。Makefile を通さない実行と子 Neovim にも効く）。
 
 CI（GitHub Actions、macOS + Linux）: `cargo test`、`cargo clippy -D warnings`、`cargo fmt --check`、
 `lua-language-server --check`、`stylua --check`、`make test`。
@@ -95,7 +95,7 @@ reviewkit.nvim/
 - **バイナリ**: GitHub Releases に素のバイナリ `reviewkit-<target triple>`（macOS arm64 / x86_64、Linux x86_64 / arm64 は
   musl）と `SHA256SUMS` を置く。`.github/workflows/release.yml` がネイティブ runner の matrix で `make dist` し、タグ `vX.Y.Z`
   のときだけ公開する（PR ではビルドとスモークだけ）。リリースは draft で作り、全バイナリと `SHA256SUMS` を上げてから公開する
-  （成果物の揃わない公開リリースを導入スクリプトが拾わないため）。cargo-dist は installer / manifest が不要なので使わない。
+  （成果物の揃わない公開リリースを導入スクリプトが拾わないため）。公開に失敗した後の再実行は、残った draft に asset を上書きでアップロードしてから公開する。公開済みのリリースには触らない（公開中の asset を一時的に欠けさせないため）。cargo-dist は installer / manifest が不要なので使わない。
   `cargo install --git https://github.com/foresta/reviewkit.nvim reviewkit` も可
 - **バージョンの規約**: `[workspace.package] version` はリリースの commit でだけ `X.Y.Z` にし、そこにタグを打ち、直後に次の
   `X.Y.Z-dev` に上げる。release.yml はタグと version の一致と、pre-release でないことを検査する
@@ -107,7 +107,7 @@ reviewkit.nvim/
   - curl で `SHA256SUMS` と asset を取り、sha256（`sha256sum` → `shasum` → `openssl`）を照合し、`version` を実行して
     schema_version（安定版は crate version も）が一致するものだけを `<plugin>/bin/.reviewkit.<pid>.<rand>` から rename で置く。
     実行中のバイナリを上書きしないため（macOS では SIGKILL になる）
-  - 取得できなければ cargo でビルドする。両方駄目なら、両方の理由と手で置く場所を返す
+  - 取得できなければ cargo でビルドする。できたバイナリの場所は `--message-format=json-render-diagnostics` の `compiler-artifact` から読む（利用者の `build.target` / `CARGO_BUILD_TARGET` で `target/<triple>/release` に出ても拾うため）。両方駄目なら、両方の理由と手で置く場所を返す
   - 既存の `bin/reviewkit` が目標に合っていれば何もしない（`-dev` は版が同じでも中身が古い可能性があるので、cargo があれば毎回ビルドし直す。cargo が無ければ、より古いはずの latest で置き換えずに残す）
   - lazy.nvim: `build = function() require("reviewkit.install").ensure() end`
   - dein: `build = "nvim --headless -l scripts/install.lua"`、`hook_add` で `setup()`
