@@ -234,6 +234,32 @@ local function attach()
       end
     end
   end, group)
+  -- reviewkit's own checkout of the pull request: an edit would shift the
+  -- lines against the commit, and the next refresh throws it away.
+  local function protect(buf)
+    local session = core.session()
+    if not session or session.source.kind ~= "pr" or vim.bo[buf].buftype ~= "" then
+      return
+    end
+    local name = vim.api.nvim_buf_get_name(buf)
+    if name ~= "" and core.relpath(name) then
+      vim.bo[buf].modifiable = false
+      vim.bo[buf].readonly = true
+    end
+  end
+  core.on("ReviewSessionOpened", function()
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_loaded(buf) then
+        protect(buf)
+      end
+    end
+  end, group)
+  vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
+    group = group,
+    callback = function(args)
+      protect(args.buf)
+    end,
+  })
   vim.api.nvim_create_autocmd({ "BufWritePost", "FocusGained" }, {
     group = group,
     callback = function(args)
@@ -352,11 +378,37 @@ local function location(buf)
     notify("no review session is open")
     return nil, "head"
   end
-  local path, side = require("reviewkit.view.diff").location(buf)
+  local diff = require("reviewkit.view.diff")
+  local path, side = diff.location(buf)
   if not path then
-    notify("this buffer is not inside the review worktree")
+    if diff.reviews_commit(core.session()) and core.relpath(vim.api.nvim_buf_get_name(buf)) then
+      notify("this review is of a commit; comment in its copy (the head side of the diff view), not the working tree")
+    else
+      notify("this buffer is not inside the review worktree")
+    end
   end
   return path, side
+end
+
+--- Comments are anchored to the file on disk; unsaved lines above the
+--- cursor, or a change on disk not yet reloaded, would put one on other text.
+---@param buf integer
+---@return boolean
+local function not_on_disk(buf)
+  if vim.b[buf].reviewkit_path ~= nil then
+    return false
+  end
+  if vim.bo[buf].modified then
+    notify("save the file first: comments are placed on the saved text")
+    return true
+  end
+  local tick = vim.b[buf].changedtick
+  vim.cmd("checktime " .. buf)
+  if vim.b[buf].changedtick ~= tick then
+    notify("the file changed on disk and was reloaded; check the line and comment again")
+    return true
+  end
+  return false
 end
 
 --- `kind:` on the first line sets the kind, so one input window covers
@@ -438,6 +490,9 @@ function M.comment(opts)
   if require("reviewkit.view.diff").is_placeholder(buf) then
     return notify("this side has no file to comment on")
   end
+  if not_on_disk(buf) then
+    return
+  end
   if opts.suggest and side == "base" then
     return notify("a suggestion replaces head lines; comment on the head side")
   end
@@ -506,6 +561,9 @@ function M.move_comment(opts)
   end
   if require("reviewkit.view.diff").is_placeholder(buf) then
     return notify("this side has no file to move a comment to")
+  end
+  if not_on_disk(buf) then
+    return
   end
   local line, start_line = cursor_range(opts)
   local candidates = vim.tbl_filter(function(c)

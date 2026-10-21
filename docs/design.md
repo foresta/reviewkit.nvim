@@ -419,6 +419,10 @@ lua/reviewkit/
   install.lua         ensure()（Releases から取得して検証、合わなければ cargo build → <plugin>/bin/）
   view/diff.lua       タブ・左右ウィンドウ・次 / 前の移動。base 側は file base で取得した読み取り専用バッファ。
                       左右の位置合わせと色付けは Neovim の diff モード（diffthis）。hunk 間の移動とコメント可否は Target から
+                      コメントを置けるのはレビューしているテキストの上だけ。未保存のバッファは断る（保存された内容にアンカーするため）。
+                      head がコミットのセッションでは作業ツリーのファイルを場所として扱わず、quickfix の <CR> もコミットの写しを開く。
+                      PR の worktree のファイルは読み取り専用にする（編集はコミットとずれ、次の refresh で失われる。セッションを閉じても戻さない）。
+                      コメントの前に checktime し、ディスクで変わっていれば読み直して断る（見えている行とアンカーがずれるため）
   view/annotate.lua   extmark の注釈（stale は薄く）
   view/queue.lua      一覧（quickfix）
   view/input.lua      入力窓

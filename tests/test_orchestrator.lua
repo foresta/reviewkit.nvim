@@ -856,6 +856,31 @@ T["orchestrator"]["saving twice before the input window closes saves once"] = fu
   eq(child.lua_get("_G.saves"), 1)
 end
 
+T["orchestrator"]["a comment on an unsaved buffer is refused"] = function()
+  helpers.respond(dir, rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, 0, false, { 'new1', 'new2' })")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 4, 0 })")
+  child.lua("require('reviewkit.orchestrator').comment()")
+  wait_notice("save the file first")
+  eq(child.lua_get("vim.bo.buftype"), "")
+end
+
+T["orchestrator"]["a comment on a file changed on disk since it was read is refused"] = function()
+  helpers.respond(dir, rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  vim.fn.writefile({ "new1", "new2", "l1", "l2", "l3", "l4", "l5", "l6" }, worktree .. "/src/a.rs")
+  vim.uv.fs_utime(worktree .. "/src/a.rs", os.time() + 10, os.time() + 10)
+  child.lua("vim.api.nvim_win_set_cursor(0, { 4, 0 })")
+  child.lua("require('reviewkit.orchestrator').comment()")
+  wait_notice("changed on disk")
+  eq(child.lua_get("vim.bo.buftype"), "")
+end
+
 local function github_rules()
   local pr = helpers.session({
     id = "pr/github.com/o/r/7",
@@ -999,6 +1024,14 @@ T["orchestrator"]["the GitHub confirmation previews the same selection it sends"
   end
   eq(preview ~= nil, true)
   eq(stdin.comment_ids, { "c_1" })
+end
+
+T["orchestrator"]["files of a pull request's worktree cannot be edited"] = function()
+  helpers.respond(dir, github_rules())
+  child.cmd("Review pr 7")
+  wait_notice("#7 Add k")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  eq(child.lua_get("vim.bo.modifiable"), false)
 end
 
 return T

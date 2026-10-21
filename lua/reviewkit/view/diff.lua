@@ -55,7 +55,19 @@ function M.location(buf)
   if tagged then
     return tagged, vim.b[buf].reviewkit_side or "head"
   end
+  -- The working tree may hold another revision of a commit head's file;
+  -- only the commit's own copy is a place on the reviewed lines.
+  local session = core.session()
+  if session and commit_head(session) then
+    return nil, "head"
+  end
   return core.relpath(api.nvim_buf_get_name(buf)), "head"
+end
+
+---@param session reviewkit.Session?
+---@return boolean
+function M.reviews_commit(session)
+  return session ~= nil and commit_head(session)
 end
 
 --- Placeholders stand in for a side that has no file, so they carry a
@@ -611,7 +623,13 @@ function M.attach()
         return
       end
       local path = M.location(args.buf)
-      if path and path ~= state.path and core.target(path) then
+      -- A commit head's working-tree file (from :cnext, :edit) is swapped
+      -- for the commit's copy, even when it is the file already shown.
+      local worktree_of_commit = not path and M.reviews_commit(core.session())
+      if worktree_of_commit then
+        path = core.relpath(api.nvim_buf_get_name(args.buf))
+      end
+      if path and (path ~= state.path or worktree_of_commit) and core.target(path) then
         vim.schedule(function()
           M.show(path)
         end)
