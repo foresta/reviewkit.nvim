@@ -16,6 +16,7 @@ pub struct Remote {
 
 pub fn git_in(dir: &Path, args: &[&str]) -> String {
     let out = Process::new(real_git())
+        .envs(super::ISOLATED_GIT)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(dir)
@@ -124,7 +125,8 @@ pub fn reviewkit(state: &tempfile::TempDir, remote: &Remote, gh: &FakeGh) -> ass
 
 pub fn reviewkit_at(state: &tempfile::TempDir, remote: &Remote, gh: &FakeGh) -> assert_cmd::Command {
     let mut cmd = assert_cmd::Command::cargo_bin("reviewkit").unwrap();
-    cmd.env("REVIEWKIT_GIT", real_git())
+    cmd.envs(super::ISOLATED_GIT)
+        .env("REVIEWKIT_GIT", real_git())
         .env("REVIEWKIT_GH", fixture_bin("gh"))
         .env("REVIEWKIT_HERDR", "/nonexistent/herdr")
         .env("FAKE_GH_DIR", gh.dir.path())

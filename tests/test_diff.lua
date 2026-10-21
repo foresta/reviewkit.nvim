@@ -744,8 +744,7 @@ T["diff"]["a refresh that keeps the shown pair leaves the reviewer's folds alone
   child.cmd("normal! zR")
   eq(child.lua_get("vim.fn.foldclosed(1)"), -1)
   child.cmd("Review refresh")
-  wait("require('reviewkit.core').session().rev == 2")
-  child.lua("vim.wait(200)")
+  wait("require('reviewkit.core').session().rev == 2 and not require('reviewkit.view.diff')._state().showing")
   eq(child.lua_get("vim.fn.foldclosed(1)"), -1)
 end
 

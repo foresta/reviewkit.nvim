@@ -981,6 +981,12 @@ function M.clear_buffer_keymaps()
 end
 
 --- Test seam.
+---@return integer
+function M._watching()
+  return #state.watchers
+end
+
+--- Test seam.
 function M._reset()
   stop_watching()
   state.attached = false
