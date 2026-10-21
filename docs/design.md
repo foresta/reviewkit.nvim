@@ -378,6 +378,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   壊れたファイルは `applies/rejected/` に移す（他の書き込みを失敗させない）
 - gh には github.com を含め常に `repo.host` を渡す（`--hostname`、`--repo host/owner/name`）。渡さないと gh は `GH_HOST` に従い、
   GitHub Enterprise を既定にしている利用者の github.com の PR が別のホストに読み書きされる
+- gh は `CLICOLOR_FORCE` / `GH_FORCE_TTY` を外し、`NO_COLOR=1`、`GH_PROMPT_DISABLED=1` で呼ぶ。色を強制した利用者の環境では、
+  パイプ越しでも JSON に色が付いて読めなくなる
 
 ## 6. hunk・コメント可能範囲・行ずれ
 

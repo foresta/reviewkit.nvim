@@ -109,8 +109,14 @@ impl Gh for SystemGh {
     fn run_raw(&self, args: &[&str], stdin: Option<&str>) -> Result<RawOutput> {
         let what = args.iter().take(2).copied().collect::<Vec<_>>().join(" ");
         log::debug!("gh {what}");
+        // Forced colour or a forced TTY makes gh colour its JSON even into a
+        // pipe, and a forced TTY can make it prompt.
         let mut child = Command::new(&self.path)
             .args(args)
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("GH_FORCE_TTY")
+            .env("NO_COLOR", "1")
+            .env("GH_PROMPT_DISABLED", "1")
             .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

@@ -32,7 +32,7 @@ Neovim の ABI と LuaJIT に結合せず、配布が `cargo install` かバイ�
   | ログ | `log` / `env_logger` | stderr に出す。stdout は JSON 専用 |
   | テスト | `assert_cmd` / `insta` / `tempfile` | 封筒の JSON スナップショット |
 
-- **diff は git に任せる**。`git diff -U3 -M --no-color --no-ext-diff` を Session 単位で 1 回実行し、出力をパースする。
+- **diff は git に任せる**。`git diff -U3 -M --no-color --no-ext-diff --diff-algorithm=myers --indent-heuristic` を Session 単位で 1 回実行し、出力をパースする（アルゴリズムは利用者の設定に左右されないよう固定する。hunk の境界が GitHub とずれるため）。
   `@@` ヘッダから GitHub のコメント可能範囲（変更行 ±3 行）が直接得られ、hunk 内の `-` / `+` の連なりから
   0 コンテキストの `Hunk[]` を作る。rename と binary の判定も git の出力に従う。untracked は `git ls-files --others --exclude-standard` で拾う。diff クレートは入れない
 - git / gh / herdr は trait（`Git`、`Gh`、`Herdr`）越しに呼ぶ。core の単体テストはメモリ上の fake、

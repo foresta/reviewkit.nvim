@@ -330,10 +330,10 @@ impl<'a> Repository<'a> {
         parse_raw(&self.run(&args)?)
     }
 
-    /// Prefixes, blank-line form, inter-hunk context and textconv are all
-    /// pinned because the user's diff config would otherwise change the text
-    /// the parser sees (and textconv would describe a file the editor never
-    /// shows).
+    /// Prefixes, blank-line form, inter-hunk context, algorithm and textconv
+    /// are all pinned because the user's diff config would otherwise change
+    /// the text the parser sees (the algorithm moves hunk bounds away from
+    /// GitHub's, and textconv would describe a file the editor never shows).
     pub fn diff_patch(&self, base: &str, head: Option<&str>) -> Result<String> {
         let mut args = vec![
             "-c",
@@ -350,6 +350,8 @@ impl<'a> Repository<'a> {
             "--src-prefix=a/",
             "--dst-prefix=b/",
             "--inter-hunk-context=0",
+            "--diff-algorithm=myers",
+            "--indent-heuristic",
             "--no-textconv",
             "--ignore-submodules=dirty",
             "--submodule=short",
@@ -364,6 +366,8 @@ impl<'a> Repository<'a> {
             "-U0",
             "--no-color",
             "--no-ext-diff",
+            "--diff-algorithm=myers",
+            "--indent-heuristic",
             "--no-textconv",
             "--src-prefix=a/",
             "--dst-prefix=b/",

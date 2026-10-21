@@ -32,13 +32,21 @@ if fake_dir and os.path.exists(os.path.join(fake_dir, "responses.json")):
     with open(os.path.join(fake_dir, "responses.json")) as f:
         rules = json.load(f)
 
+
+def emit(text):
+    # Like gh: forcing colour colours JSON even when stdout is a pipe.
+    if os.environ.get("CLICOLOR_FORCE", "0") != "0" or os.environ.get("GH_FORCE_TTY"):
+        text = "\x1b[1;38m" + text + "\x1b[m"
+    sys.stdout.write(text)
+
+
 for rule in rules:
     if all(m in joined or m in stdin for m in rule.get("match", [])):
         time.sleep(rule.get("sleep", 0))
         if "raw" in rule:
-            sys.stdout.write(rule["raw"])
+            emit(rule["raw"])
         elif "body" in rule:
-            sys.stdout.write(json.dumps(rule["body"]))
+            emit(json.dumps(rule["body"]))
         sys.stderr.write(rule.get("stderr", ""))
         sys.exit(rule.get("exit", 0))
 

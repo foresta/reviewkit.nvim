@@ -499,6 +499,22 @@ fn reopening_a_pull_request_does_not_lock_out_other_commands_while_it_fetches() 
 }
 
 #[test]
+fn colour_forced_in_the_environment_does_not_reach_gh() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let body = json(
+        &reviewkit(&state, &remote, &gh)
+            .env("CLICOLOR_FORCE", "1")
+            .env("GH_FORCE_TTY", "1")
+            .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(body["session"]["source"]["number"], 7);
+}
+
+#[test]
 fn a_deleted_mirror_is_recreated_on_reopen() {
     let state = tempfile::tempdir().unwrap();
     let remote = Remote::new();
