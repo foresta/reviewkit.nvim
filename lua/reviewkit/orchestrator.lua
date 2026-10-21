@@ -672,7 +672,14 @@ function M.submit(sink, opts)
       end)
     end
     if err and err.code == "E_CONFLICT" and (err.details or {}).reason == "preview_changed" then
-      vim.notify("[reviewkit] the review changed after the preview; check it again", vim.log.levels.WARN)
+      local recovered = (err.details or {}).recovered or {}
+      local found = #recovered > 0
+          and (" (%d comment%s of the cut-off submit were found on GitHub)"):format(
+            #recovered,
+            #recovered == 1 and "" or "s"
+          )
+        or ""
+      vim.notify("[reviewkit] the review changed after the preview; check it again" .. found, vim.log.levels.WARN)
       local again = vim.deepcopy(opts)
       again.confirmed = nil
       again.expect_digest = nil

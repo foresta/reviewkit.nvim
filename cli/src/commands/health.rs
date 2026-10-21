@@ -36,7 +36,9 @@ fn tool_status(path: Option<&Path>) -> ToolStatus {
 }
 
 /// `gh auth token` only reads the local config, so health never waits on the
-/// network (`gh auth status` would call the API).
+/// network (`gh auth status` would call the API). It answers for gh's
+/// default host (GH_HOST, else github.com): health has no session, so it
+/// cannot know which host a review will use.
 fn gh_authenticated(gh: &Path) -> bool {
     Command::new(gh)
         .args(["auth", "token"])

@@ -830,7 +830,13 @@ function M.preview(sink, opts, cb)
     if run_err then
       return cb(run_err)
     end
-    cb(nil, envelope and envelope.data and envelope.data.preview or nil)
+    local preview = envelope and envelope.data and envelope.data.preview or nil
+    if not (envelope and envelope.session) then
+      return cb(nil, preview)
+    end
+    take_session(nil, envelope, function()
+      cb(nil, preview)
+    end)
   end)
 end
 

@@ -43,7 +43,12 @@ pub struct RawOutput {
 /// the connection.
 pub fn classify_failure(what: &str, out: &RawOutput) -> Error {
     let text = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    if text.contains("gh auth login") || text.contains("not logged into") {
+    // `gh api` reports a rejected token only as the HTTP status.
+    if text.contains("gh auth login")
+        || text.contains("not logged into")
+        || text.contains("HTTP 401")
+        || text.contains("Bad credentials")
+    {
         return Error::tool("gh", ErrorCode::EAuth, format!("gh is not logged in: {text}")).hint("run `gh auth login`");
     }
     if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&out.stdout)
@@ -242,18 +247,20 @@ struct Author {
 pub fn pr_meta(gh: &dyn Gh, repo: &RepoRef, number: u64) -> Result<PrMeta> {
     let repo_flag = repo.repo_flag();
     let number_arg = number.to_string();
-    let out = gh.run(
-        &[
-            "pr",
-            "view",
-            &number_arg,
-            "--repo",
-            &repo_flag,
-            "--json",
-            "number,url,title,author,state,headRefName,baseRefName,baseRefOid,headRefOid,id",
-        ],
-        None,
-    )?;
+    let out = gh
+        .run(
+            &[
+                "pr",
+                "view",
+                &number_arg,
+                "--repo",
+                &repo_flag,
+                "--json",
+                "number,url,title,author,state,headRefName,baseRefName,baseRefOid,headRefOid,id",
+            ],
+            None,
+        )
+        .map_err(|err| for_host(err, &repo.host))?;
     let view: PrView = serde_json::from_slice(&out).map_err(|err| {
         Error::tool(
             "gh",
@@ -339,7 +346,16 @@ pub fn graphql(gh: &dyn Gh, host: &str, query: &str, variables: serde_json::Valu
             ErrorCode::ETool,
             "unexpected output from gh api graphql",
         )),
-        _ => Err(classify_failure("api graphql", &out)),
+        _ => Err(for_host(classify_failure("api graphql", &out), host)),
+    }
+}
+
+/// gh logs in per host; a bare `gh auth login` would log into github.com.
+fn for_host(err: Error, host: &str) -> Error {
+    if err.code == ErrorCode::EAuth {
+        err.hint(format!("run `gh auth login --hostname {host}`"))
+    } else {
+        err
     }
 }
 
@@ -386,7 +402,11 @@ pub fn pr_details(gh: &dyn Gh, repo: &RepoRef, number: u64, fetched_at: String) 
         }
         for e in &optional {
             log::warn!("gh: ignoring an error in an optional field: {e}");
-            incomplete = true;
+            // A token that may not read `viewer` (a GitHub App) leaves it
+            // empty, which reconciling already handles on its own terms.
+            if e["path"][0].as_str() != Some("viewer") {
+                incomplete = true;
+            }
         }
         if let Some(login) = response.data["viewer"]["login"].as_str() {
             viewer = login.to_string();
@@ -461,16 +481,15 @@ fn is_marker(line: &str) -> bool {
     line.starts_with(MARKER_PREFIX) && line.ends_with(MARKER_SUFFIX)
 }
 
+/// Only the trailing line is ours; a marker-shaped line elsewhere (inside
+/// someone's code block) is their text.
 pub fn strip_markers(body: &str) -> String {
-    if !body.lines().any(is_marker) {
-        return body.to_string();
+    let trimmed = body.trim_end();
+    match trimmed.rsplit_once('\n') {
+        Some((rest, last)) if is_marker(last) => rest.trim_end().to_string(),
+        None if is_marker(trimmed) => String::new(),
+        _ => body.to_string(),
     }
-    body.lines()
-        .filter(|l| !is_marker(l))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim_end()
-        .to_string()
 }
 
 impl PrDetails {
@@ -640,6 +659,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_rejected_token_is_an_auth_error_with_the_host_to_log_into() {
+        let out = RawOutput {
+            success: false,
+            stdout: Vec::new(),
+            stderr: b"HTTP 401: Bad credentials (https://ghe.example.com/api/graphql)".to_vec(),
+        };
+        let err = for_host(classify_failure("api graphql", &out), "ghe.example.com");
+        assert_eq!(err.code, ErrorCode::EAuth);
+        assert!(err.hint.unwrap().contains("--hostname ghe.example.com"));
+    }
+
+    #[test]
     fn transient_detection_ignores_numbers_and_names_that_merely_contain_codes() {
         assert!(looks_transient("dial tcp: i/o timeout"));
         assert!(looks_transient("HTTP 503: Service Unavailable"));
@@ -664,6 +695,8 @@ mod tests {
             "a quoted marker is not the post's own"
         );
         assert_eq!(strip_markers(&edited), "edited");
+        let quoted = format!("look:\n```\n{m}\n```");
+        assert_eq!(strip_markers(&quoted), quoted, "only the trailing line is ours");
         assert_eq!(
             strip_markers("plain\r\n"),
             "plain\r\n",
