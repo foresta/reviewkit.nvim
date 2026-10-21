@@ -101,15 +101,33 @@ fn body_with_suggestion(comment: &Comment) -> String {
 }
 
 fn github_text(comment: &Comment, inline: bool) -> String {
+    github_text_fenced(comment, inline, super::fence_for)
+}
+
+/// Whether `posted` is this comment as some version of reviewkit sent it.
+/// Before fences grew with their content every one was three backticks; a
+/// comment interrupted then must still be recognised, or it is sent again.
+fn sent_as(comment: &Comment, inline: bool, posted: &str) -> bool {
+    same_text(&github_text(comment, inline), posted)
+        || same_text(&github_text_fenced(comment, inline, |_| "```".into()), posted)
+}
+
+fn github_text_fenced(comment: &Comment, inline: bool, fence_for: impl Fn(&str) -> String) -> String {
     let body = format!("{}{}", kind_prefix(comment), comment.body.trim_end());
     match (comment.suggestion.as_deref(), inline) {
         (None, _) => body,
         // An empty suggestion is GitHub's way to propose deleting the lines,
         // so it still gets its (empty) fence.
         (Some(s), true) if s.trim().is_empty() => format!("{body}\n\n```suggestion\n```"),
-        (Some(s), true) => format!("{body}\n\n```suggestion\n{}\n```", s.trim_end()),
+        (Some(s), true) => {
+            let fence = fence_for(s);
+            format!("{body}\n\n{fence}suggestion\n{}\n{fence}", s.trim_end())
+        }
         (Some(s), false) if s.trim().is_empty() => format!("{body}\n\nSuggested: delete these lines."),
-        (Some(s), false) => format!("{body}\n\nSuggested replacement:\n```\n{}\n```", s.trim_end()),
+        (Some(s), false) => {
+            let fence = fence_for(s);
+            format!("{body}\n\nSuggested replacement:\n{fence}\n{}\n{fence}", s.trim_end())
+        }
     }
 }
 
@@ -685,7 +703,7 @@ pub fn reconcile_pending(
             .comments
             .iter()
             .chain(session.history.iter())
-            .any(|c| c.id == id && same_text(&body_with_suggestion(c), body))
+            .any(|c| c.id == id && sent_as(c, true, body))
     };
     let marked = |id: &str| {
         let marker = comment_marker(id, &pending.at);
@@ -778,7 +796,7 @@ pub fn reconcile_pending(
                 .comments
                 .iter()
                 .chain(session.history.iter())
-                .any(|c| c.id == b.id && same_text(&github_text(c, false), &b.text));
+                .any(|c| c.id == b.id && sent_as(c, false, &b.text));
             if unchanged {
                 sent.push(Sent {
                     comment_id: b.id.clone(),
@@ -1376,6 +1394,28 @@ mod tests {
         assert!(body_with_suggestion(&s.comments[0]).ends_with("```suggestion\n```"));
         s.comments[0].suggestion = None;
         assert!(!body_with_suggestion(&s.comments[0]).contains("```"));
+    }
+
+    #[test]
+    fn a_suggestion_holding_a_fence_gets_a_longer_one() {
+        let mut s = pr_session();
+        s.comments[0].suggestion = Some("```rust\nx\n```".into());
+        assert!(
+            body_with_suggestion(&s.comments[0]).ends_with("````suggestion\n```rust\nx\n```\n````"),
+            "{}",
+            body_with_suggestion(&s.comments[0])
+        );
+    }
+
+    #[test]
+    fn a_suggestion_posted_with_the_old_three_backtick_fence_is_still_recognised() {
+        let mut s = pr_session();
+        s.comments[0].suggestion = Some("```rust\nx\n```".into());
+        let c = &s.comments[0];
+        let old = format!("{}\n\n```suggestion\n```rust\nx\n```\n```", c.body.trim_end());
+        assert!(sent_as(c, true, &old));
+        assert!(sent_as(c, true, &body_with_suggestion(c)));
+        assert!(!sent_as(c, true, "something else"));
     }
 
     #[test]

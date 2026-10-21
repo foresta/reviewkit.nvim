@@ -430,12 +430,24 @@ end
 ---@return string body
 ---@return string? suggestion
 local function split_suggestion(text)
-  local before, inner, after = text:match("^(.-)```suggestion[ \t\r]*\n(.-)\r?\n?```(.*)$")
-  if not inner then
-    return text, nil
+  local lines = vim.split(text, "\n", { plain = true })
+  for i, line in ipairs(lines) do
+    local fence = line:match("^%s*(```+)suggestion%s*$")
+    if fence then
+      -- Closed only by a fence at least as long, as in Markdown: a shorter
+      -- one is a code block inside the suggestion.
+      for j = i + 1, #lines do
+        local close = lines[j]:match("^%s*(```+)%s*$")
+        if close and #close >= #fence then
+          local before = table.concat(lines, "\n", 1, i - 1)
+          local after = table.concat(lines, "\n", j + 1)
+          return vim.trim(vim.trim(before) .. "\n" .. vim.trim(after)), table.concat(lines, "\n", i + 1, j - 1)
+        end
+      end
+      return text, nil
+    end
   end
-  local body = vim.trim(vim.trim(before or "") .. "\n" .. vim.trim(after or ""))
-  return body, inner
+  return text, nil
 end
 
 ---@param text string
@@ -454,13 +466,13 @@ local function render(comment)
   local first = comment.kind ~= "issue" and (comment.kind .. ": ") or ""
   local lines = vim.split(first .. comment.body, "\n", { plain = true })
   if comment.suggestion then
-    table.insert(lines, "```suggestion")
+    local inner = comment.suggestion ~= "" and vim.split(comment.suggestion, "\n", { plain = true }) or {}
+    local fence = require("reviewkit.fence")(inner)
+    table.insert(lines, fence .. "suggestion")
     -- An empty suggestion deletes the lines; a blank line inside the fence
     -- would turn it into "replace with an empty line".
-    if comment.suggestion ~= "" then
-      vim.list_extend(lines, vim.split(comment.suggestion, "\n", { plain = true }))
-    end
-    table.insert(lines, "```")
+    vim.list_extend(lines, inner)
+    table.insert(lines, fence)
   end
   return lines
 end
@@ -505,9 +517,11 @@ function M.comment(opts)
     or (start_line ~= nil and not core.is_commentable(path, side, start_line))
   local lines = nil
   if opts.suggest then
-    lines = { "", "```suggestion" }
-    vim.list_extend(lines, vim.api.nvim_buf_get_lines(buf, (start_line or line) - 1, line, false))
-    table.insert(lines, "```")
+    local selected = vim.api.nvim_buf_get_lines(buf, (start_line or line) - 1, line, false)
+    local fence = require("reviewkit.fence")(selected)
+    lines = { "", fence .. "suggestion" }
+    vim.list_extend(lines, selected)
+    table.insert(lines, fence)
   end
   require("reviewkit.view.input").open_keeping({
     title = "Comment " .. where .. (outside and " (outside the diff; agent only)" or ""),

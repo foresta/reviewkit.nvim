@@ -33,10 +33,12 @@ local function block(session, c, i)
   end
   local lines = { head, c.body }
   if c.suggestion and c.suggestion ~= "" then
+    local inner = vim.split(c.suggestion, "\n", { plain = true })
+    local fence = require("reviewkit.fence")(inner)
     table.insert(lines, "Suggested replacement:")
-    table.insert(lines, "```")
-    vim.list_extend(lines, vim.split(c.suggestion, "\n", { plain = true }))
-    table.insert(lines, "```")
+    table.insert(lines, fence)
+    vim.list_extend(lines, inner)
+    table.insert(lines, fence)
   end
   table.insert(lines, "")
   return lines
