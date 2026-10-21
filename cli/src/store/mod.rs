@@ -157,12 +157,25 @@ impl Store {
     /// concurrent writers from other processes are serialized by the lock
     /// rather than lost.
     pub fn update<T>(&self, id: &str, apply: impl FnOnce(&mut Session) -> Result<T>) -> Result<(Session, T)> {
+        self.update_then(id, apply, || {})
+    }
+
+    /// `after_commit` runs once the session is saved and before the lock is
+    /// released: a record that may only go once the save is done (a pending
+    /// submit) would otherwise be removed after another writer wrote its own.
+    pub fn update_then<T>(
+        &self,
+        id: &str,
+        apply: impl FnOnce(&mut Session) -> Result<T>,
+        after_commit: impl FnOnce(),
+    ) -> Result<(Session, T)> {
         self.with_lock(id, || {
             let mut session = self.load_for_write(id)?;
             let drained = self.drain_applies(&mut session, true);
             let value = apply(&mut session)?;
             self.commit(&mut session)?;
             remove_applied(&drained);
+            after_commit();
             self.mark_pending(&mut session);
             Ok((session, value))
         })
@@ -929,5 +942,26 @@ mod tests {
         store.remove("local/abc/x").unwrap();
         assert!(!store.exists("local/abc/x"));
         assert_eq!(store.remove("local/abc/x").unwrap_err().code, ErrorCode::ENoSession);
+    }
+
+    #[test]
+    fn after_commit_runs_once_saved_and_still_under_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = store(&dir);
+        writer.create(session("local/abc/x")).unwrap();
+        let other = store(&dir);
+        let mut seen = None;
+        writer
+            .update_then(
+                "local/abc/x",
+                |_| Ok(()),
+                || {
+                    let saved = other.load("local/abc/x").unwrap().rev;
+                    let locked = other.update("local/abc/x", |_| Ok(())).unwrap_err().code;
+                    seen = Some((saved, locked));
+                },
+            )
+            .unwrap();
+        assert_eq!(seen, Some((2, ErrorCode::ELocked)));
     }
 }

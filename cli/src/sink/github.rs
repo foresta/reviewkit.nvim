@@ -1092,42 +1092,67 @@ impl super::Sink for GithubSink {
         let pending = pending_path(&session_dir);
         let mut recovered = None;
         if pending.exists() {
-            let (_, found) = store.update(id, |s| {
-                let repo = repo_ref_of(s)?;
-                let found = reconcile_pending(s, &gh, &repo, &session_dir)?;
-                if let Some(found) = &found {
-                    crate::core::apply::apply(s, found.clone(), consume)?;
-                }
-                Ok(found)
-            })?;
-            let _ = std::fs::remove_file(&pending);
+            let (_, found) = store.update_then(
+                id,
+                |s| {
+                    let repo = repo_ref_of(s)?;
+                    let found = reconcile_pending(s, &gh, &repo, &session_dir)?;
+                    if let Some(found) = &found {
+                        crate::core::apply::apply(s, found.clone(), consume)?;
+                    }
+                    Ok(found)
+                },
+                || {
+                    let _ = std::fs::remove_file(&pending);
+                },
+            )?;
             recovered = found;
         }
         // Phase 2: the lock is held across the request. The answer is
         // matched to comments by id, and a concurrent update or remove of
         // a planned comment (or a decision change) would otherwise be
         // lost or cleared by it. Other commands see E_LOCKED meanwhile.
-        let outcome = store.update(id, |s| {
-            let repo = repo_ref_of(s)?;
-            let view = crate::core::comments::narrowed(s, opts.comment_ids.as_deref())?;
-            check_digest(view.as_ref().unwrap_or(s), opts.expect_digest.as_deref())?;
-            let mut result = submit(view.as_ref().unwrap_or(s), &gh, &repo, &session_dir)?;
-            if view.is_some() && s.decision.is_some() {
-                result.decision = DecisionStatus::Skipped;
-            }
-            if let Some(recovered) = &recovered {
-                result.sent.splice(0..0, recovered.sent.clone());
-                if let Some(attempted) = result.attempted.as_mut() {
-                    attempted.extend(recovered.sent.iter().map(|s| s.comment_id.clone()));
+        // Removed outside the lock, the record could be another submit's,
+        // written in between.
+        let remove_pending = || {
+            let _ = std::fs::remove_file(&pending);
+        };
+        let outcome = store.update_then(
+            id,
+            |s| {
+                // Phase 1 looked before taking the lock; a record now is
+                // another submit's whose outcome is unknown, and writing over
+                // it would send what that one may already have posted.
+                if pending.exists() {
+                    return Err(Error::new(
+                        ErrorCode::EConflict,
+                        "another GitHub submit of this session was cut off just now",
+                    )
+                    .retryable()
+                    .hint("submit again: it checks GitHub for what that one posted first"));
                 }
-                // The recovered decision was cleared in phase 1; one set since
-                // is another decision, which only this send can post.
-                if recovered.decision == DecisionStatus::Sent && s.decision.is_none() {
-                    result.decision = DecisionStatus::Sent;
+                let repo = repo_ref_of(s)?;
+                let view = crate::core::comments::narrowed(s, opts.comment_ids.as_deref())?;
+                check_digest(view.as_ref().unwrap_or(s), opts.expect_digest.as_deref())?;
+                let mut result = submit(view.as_ref().unwrap_or(s), &gh, &repo, &session_dir)?;
+                if view.is_some() && s.decision.is_some() {
+                    result.decision = DecisionStatus::Skipped;
                 }
-            }
-            crate::core::apply::apply(s, result, consume)
-        });
+                if let Some(recovered) = &recovered {
+                    result.sent.splice(0..0, recovered.sent.clone());
+                    if let Some(attempted) = result.attempted.as_mut() {
+                        attempted.extend(recovered.sent.iter().map(|s| s.comment_id.clone()));
+                    }
+                    // The recovered decision was cleared in phase 1; one set since
+                    // is another decision, which only this send can post.
+                    if recovered.decision == DecisionStatus::Sent && s.decision.is_none() {
+                        result.decision = DecisionStatus::Sent;
+                    }
+                }
+                crate::core::apply::apply(s, result, consume)
+            },
+            remove_pending,
+        );
         let (session, result) = match (outcome, recovered) {
             // Everything was already on GitHub: the recovery is the result.
             (Err(err), Some(mut recovered)) if is_nothing_to_submit(&err) => {
@@ -1151,9 +1176,6 @@ impl super::Sink for GithubSink {
             }
             (outcome, _) => outcome?,
         };
-        // Removed only after the result was saved: a crash before this
-        // leaves the record for the next submit to reconcile.
-        let _ = std::fs::remove_file(&pending);
         let mut session = session;
         session.pending_submit = pending.exists();
         Ok((session, result))
