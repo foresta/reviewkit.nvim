@@ -69,16 +69,17 @@ reviewkit.nvim/
   cli/
     Cargo.toml              package "reviewkit"、[lib] + [[bin]]
     src/main.rs             clap → commands::dispatch → 封筒 → 終了コード
-    src/{cli,envelope,store,luacats}.rs
-    src/model/              session / target / comment / decision / hunk / thread / sink_result
-    src/core/               session / comments / decision / commentable / anchor / apply（純ロジック）
-    src/source/{local,pr}.rs
+    src/{cli,context,envelope,error,logging}.rs
+    src/store/              state_dir、セッションの保存とロック、移行
+    src/model/              session / target / comment / decision / hunk / thread / sink / pr_info / health
+    src/core/               comments / commentable / anchor / apply / refresh / files / threads / viewed / etags / time（純ロジック）
+    src/source/{local,pr,targets}.rs
     src/sink/{github,herdr}.rs
-    src/ext/{git,gh,herdr,diffparse}.rs   architecture.md の lib 層（`lib.rs` と衝突するので ext）
+    src/ext/{git,gh,herdr,diffparse,tool}.rs   architecture.md の lib 層（`lib.rs` と衝突するので ext）
     src/commands/           サブコマンド 1 つにつき 1 ファイル
-    tests/                  assert_cmd、fixtures/bin/{gh,herdr}
+    tests/                  assert_cmd、fixtures/bin/{gh,git,herdr}
   lua/reviewkit/            Lua 側（design.md 参照）
-  plugin/reviewkit.lua      コマンド定義だけ。二重読み込みガード
+  plugin/reviewkit.lua      コマンドと <Plug> マップの定義だけ。二重読み込みガード
   tests/                    mini.test、fixtures/bin/reviewkit（stub）
   scripts/                  minimal_init.lua、run_tests.lua、install.lua、gen-types.lua
   docs/

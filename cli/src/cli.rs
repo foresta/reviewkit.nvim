@@ -93,7 +93,7 @@ pub enum Command {
     /// Inspect the targets of a session.
     #[command(subcommand)]
     Target(crate::commands::target::TargetCommand),
-    /// Read file contents of a session's base side.
+    /// Read file contents of a session's base or head side.
     #[command(subcommand)]
     File(crate::commands::file::FileCommand),
     /// Queue, edit and list review comments.
