@@ -615,3 +615,26 @@ fn an_empty_suggestion_proposes_deleting_the_lines() {
     ));
     assert_eq!(body["session"]["comments"][0]["suggestion"], "");
 }
+
+#[test]
+fn a_range_of_one_line_is_stored_as_a_single_line_comment() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let id = open(&state, &repo);
+    let body = json(&add(
+        &state,
+        &repo,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "start_line": 3, "body": "x"}),
+    ));
+    assert!(body["session"]["comments"][0]["start_line"].is_null());
+    let cid = body["data"]["id"].as_str().unwrap();
+    let moved = json(
+        &reviewkit(&state, &repo)
+            .args(["comment", "update", "--session", &id, "--id", cid])
+            .write_stdin(r#"{"line": 2, "start_line": 2}"#)
+            .output()
+            .unwrap(),
+    );
+    assert!(moved["session"]["comments"][0]["start_line"].is_null());
+}

@@ -764,3 +764,65 @@ fn git_runs_without_optional_locks_askpass_or_a_terminal() {
         assert_eq!(field("pgid"), field("pid"), "a session of its own: {line}");
     }
 }
+
+#[test]
+fn an_untracked_fifo_or_symlink_to_a_device_does_not_hang_a_refresh() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let fifo = repo.path().join("pipe");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::os::unix::fs::symlink("/dev/zero", repo.path().join("zero")).unwrap();
+    let mut cmd = reviewkit(&state, &repo);
+    cmd.timeout(std::time::Duration::from_secs(30));
+    let body = json(
+        &cmd.args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let paths: Vec<&str> = body["session"]["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["path"].as_str().unwrap())
+        .collect();
+    assert!(!paths.contains(&"pipe"), "{paths:?}");
+    assert!(!paths.contains(&"zero"), "{paths:?}");
+}
+
+#[test]
+fn an_untracked_symlink_to_a_file_reads_as_that_file_everywhere() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.write("real.txt", "a\nb\nc\nd\n");
+    std::os::unix::fs::symlink("real.txt", repo.path().join("link")).unwrap();
+    let body = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let id = body["session"]["id"].as_str().unwrap().to_string();
+    let link = target(&body["session"], "link");
+    assert_eq!(link["stats"]["added"], 4, "{link}");
+    assert!(
+        link["head_blob"].is_string(),
+        "hashed through the link, so viewed resets on a change: {link}"
+    );
+    let added = json(
+        &reviewkit(&state, &repo)
+            .args(["comment", "add", "--session", &id])
+            .write_stdin(r#"{"path": "link", "side": "head", "line": 3, "body": "x"}"#)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        added["session"]["comments"][0]["anchor"]["context"]["lines"],
+        serde_json::json!(["c"])
+    );
+}

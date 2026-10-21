@@ -21,8 +21,8 @@ pub use session::{
     ThreadActionKind, Viewed,
 };
 pub use sink::{
-    AgentType, DecisionStatus, Failed, GithubOptions, HerdrOptions, PreviewReply, SendStatus, Sent, SinkResult,
-    SinkTarget, Skipped, SubmitOptions, SubmitPreview, ThreadActionResult,
+    AgentType, DecisionStatus, Failed, GithubOptions, HerdrOptions, PreviewReply, SendStatus, Sent, SinkInfo,
+    SinkResult, SinkRuntime, SinkTarget, Skipped, SubmitOptions, SubmitPreview, ThreadActionResult,
 };
 pub use target::{CommentableRanges, Range, Stats, Target, TargetReason, TargetStatus};
 pub use thread::{SubjectType, Thread, ThreadComment};
@@ -67,7 +67,7 @@ pub struct Contract {
     pub herdr_options: HerdrOptions,
     pub github_options: GithubOptions,
     pub sink_result: SinkResult,
-    pub sink_info: crate::sink::SinkInfo,
+    pub sink_info: SinkInfo,
     pub submit_preview: SubmitPreview,
     pub sink_target: SinkTarget,
 }

@@ -417,7 +417,7 @@
           },
           "consumed": {
             "default": false,
-            "description": "This delivery took the comment out of the queue: it reached the\nsession's destination. Such a comment is never put back (an edit\nwould deliver it twice) and is the only kind the history drops.",
+            "description": "This delivery took the comment out of the queue. When the sink is the\nsession's final destination the comment is not put back (an edit\nwould deliver it twice); the history drops these first.",
             "type": "boolean"
           },
           "mode": {
@@ -952,7 +952,7 @@
           },
           "history": {
             "default": [],
-            "description": "Comments that left the queue, with their deliveries, so a consumed\ncomment can still be looked up instead of being gone.",
+            "description": "Comments that left the queue, with their deliveries, so a consumed\ncomment can still be looked up instead of being gone. Always empty in\na response, which would otherwise grow with every send; read it with\n`history list`.",
             "items": {
               "$ref": "#/$defs/Comment"
             },

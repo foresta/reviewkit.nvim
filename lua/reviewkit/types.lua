@@ -100,7 +100,7 @@ M.SCHEMA_REVISION = 10
 
 ---@class reviewkit.Delivery
 ---@field at string
----@field consumed? boolean This delivery took the comment out of the queue: it reached the session's destination. Such a comment is never put back (an edit would deliver it twice) and is the only kind the history drops.
+---@field consumed? boolean This delivery took the comment out of the queue. When the sink is the session's final destination the comment is not put back (an edit would deliver it twice); the history drops these first.
 ---@field mode reviewkit.DeliveryMode
 ---@field sink string
 ---@field url? string
@@ -228,7 +228,7 @@ M.SCHEMA_REVISION = 10
 ---@field decision? reviewkit.Decision
 ---@field etags reviewkit.Etags
 ---@field head reviewkit.HeadRef
----@field history? reviewkit.Comment[] Comments that left the queue, with their deliveries, so a consumed comment can still be looked up instead of being gone.
+---@field history? reviewkit.Comment[] Comments that left the queue, with their deliveries, so a consumed comment can still be looked up instead of being gone. Always empty in a response, which would otherwise grow with every send; read it with `history list`.
 ---@field id string
 ---@field last_submit? reviewkit.LastSubmit
 ---@field pending_apply? boolean A client sink's delivery waiting for the session lock to be recorded; derived like `pending_submit`.

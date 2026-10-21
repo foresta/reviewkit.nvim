@@ -24,7 +24,11 @@ pub fn build(repo: &Repository<'_>, base_sha: &str, head: Option<&str>) -> Resul
         .collect();
     if head.is_none() {
         for path in repo.untracked()? {
-            match untracked_target(repo, &path.to_string_lossy()) {
+            let Some(name) = path.to_str() else {
+                log::warn!("skipping untracked {}: the name is not UTF-8", path.to_string_lossy());
+                continue;
+            };
+            match untracked_target(repo, name) {
                 Ok(target) => push_untracked(&mut targets, target),
                 // A file that vanished or cannot be read is not worth failing
                 // the whole session for.
@@ -38,6 +42,9 @@ pub fn build(repo: &Repository<'_>, base_sha: &str, head: Option<&str>) -> Resul
             .iter()
             .enumerate()
             .filter(|(_, t)| t.head_blob.is_none() && t.status != TargetStatus::Deleted)
+            // hash-object blocks on a FIFO and reads a device forever, also
+            // through a symlink; a symlink to a file hashes as that file.
+            .filter(|(_, t)| std::fs::metadata(repo.root().join(&t.path)).is_ok_and(|m| m.is_file()))
             .map(|(i, _)| i)
             .collect();
         let paths: Vec<String> = unhashed.iter().map(|&i| targets[i].path.clone()).collect();
@@ -185,7 +192,14 @@ fn push_untracked(targets: &mut Vec<Target>, mut untracked: Target) {
 fn untracked_target(repo: &Repository<'_>, path: &str) -> Result<Target> {
     use std::io::Read;
     let full = repo.root().join(path);
-    let size = std::fs::metadata(&full)?.len();
+    // Reading a FIFO or a device (directly or through a symlink) blocks the
+    // refresh. A symlink to a file is shown as that file, the same content
+    // the view and the anchors read.
+    let meta = std::fs::metadata(&full)?;
+    if !meta.is_file() {
+        return Err(std::io::Error::other("not a regular file").into());
+    }
+    let size = meta.len();
     let too_large = size > TOO_LARGE_BYTES as u64;
     // A large untracked file (a build artifact, a log) is only sniffed: its
     // lines are never shown, so reading it whole on every refresh is waste.

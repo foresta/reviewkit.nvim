@@ -39,7 +39,11 @@ pub fn run(ctx: &Context, command: HistoryCommand) -> Result<Response> {
         HistoryCommand::Restore { session, id } => {
             let git = SystemGit::new(ctx.tools.git.as_deref())?;
             let (session, ()) = store.update(&session, |s| {
-                comments::restore(s, &id)?;
+                let source = s.source.clone();
+                // A client sink is unknown here, so it is taken as final.
+                comments::restore(s, &id, |name| {
+                    crate::sink::find(name).map_or(true, |sink| sink.consumes(&source, None))
+                })?;
                 // Its line and commentability were for the diff it left.
                 let repo = files::object_repo(&git, s);
                 anchor::reanchor(s, &repo)

@@ -765,9 +765,9 @@ function M.submit(sink, opts, cb)
         if #view.comments == 0 then
           return cb({
             code = "E_INVALID",
-            message = "nothing to submit: the selection was already sent",
+            message = "nothing to submit: the selected comments already left the queue",
             retryable = false,
-            details = {},
+            details = { empty = true },
           })
         end
         submit_lua(view, sink, lua_sink, opts, cb, decision_left == true)

@@ -404,8 +404,9 @@ fn add_thread_targets(targets: &mut Vec<Target>, threads: &[Thread], worktree: &
 fn write_pr_info(path: &Path, info: &PrInfo) -> Result<()> {
     let bytes =
         serde_json::to_vec_pretty(info).map_err(|err| Error::internal(format!("cannot serialize pr.json: {err}")))?;
-    std::fs::write(path, bytes)?;
-    Ok(())
+    // Read by `pr show` from any instance without the fetch lock: a torn
+    // write would read as corrupt.
+    store::write_atomically(path, &bytes)
 }
 
 pub fn read_pr_info(path: &Path) -> Result<Option<PrInfo>> {

@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
+use crate::env::env_non_empty;
 use crate::error::{Error, ErrorCode, Result};
 use crate::model::session::Side;
 use crate::model::{Check, PrInfo, PrState, SubjectType, Thread, ThreadComment, TimelineItem, TimelineKind};
-use crate::store::env_non_empty;
 
 /// The seam for tests: source-pr and sink-github talk to this trait, the
 /// binary talks to `SystemGh`.
@@ -110,7 +110,7 @@ impl Gh for SystemGh {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| Error::tool("gh", ErrorCode::EToolMissing, format!("cannot run gh: {err}")))?;
+            .map_err(|err| crate::ext::tool::spawn_error("gh", err))?;
         if let (Some(body), Some(mut pipe)) = (stdin, child.stdin.take()) {
             let body = body.to_string();
             std::thread::spawn(move || {
@@ -301,6 +301,7 @@ const QUERY: &str = r#"query($owner: String!, $name: String!, $number: Int!, $cu
         nodes {
           id path line startLine originalLine diffSide startDiffSide
           isResolved isOutdated subjectType
+          root: comments(first: 1) { nodes { id body createdAt url author { login } } }
           comments(last: 100) { nodes { id body createdAt url author { login } } }
         }
       }
@@ -524,10 +525,18 @@ fn thread(node: &serde_json::Value) -> Thread {
         original_line: node["originalLine"].as_u64().map(|n| n as u32),
         resolved: node["isResolved"].as_bool().unwrap_or(false),
         outdated: node["isOutdated"].as_bool().unwrap_or(false),
-        comments: node["comments"]["nodes"]
+        // `last: 100` alone loses the opening comment of a long thread, and
+        // with it what was asked.
+        comments: node["root"]["nodes"]
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|root| {
+                !node["comments"]["nodes"]
+                    .as_array()
+                    .is_some_and(|last| last.iter().any(|c| c["id"] == root["id"]))
+            })
+            .chain(node["comments"]["nodes"].as_array().into_iter().flatten())
             .map(|c| ThreadComment {
                 id: string(&c["id"]),
                 author: login(c),
@@ -716,5 +725,23 @@ mod tests {
         assert_eq!(t.line, None);
         assert!(t.outdated);
         assert_eq!(t.comments[0].author, "bob");
+    }
+
+    #[test]
+    fn a_long_thread_keeps_its_opening_comment_once() {
+        let comment = |id: &str| serde_json::json!({ "id": id, "body": id, "createdAt": "t", "url": "u", "author": { "login": "a" } });
+        let node = |root: &str, last: &[&str]| {
+            serde_json::json!({
+                "id": "PRRT_1", "path": "a", "line": 1, "diffSide": "RIGHT", "subjectType": "LINE",
+                "root": { "nodes": [ comment(root) ] },
+                "comments": { "nodes": last.iter().map(|id| comment(id)).collect::<Vec<_>>() }
+            })
+        };
+        let long = thread(&node("c1", &["c50", "c51"]));
+        let ids: Vec<&str> = long.comments.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["c1", "c50", "c51"]);
+        let short = thread(&node("c1", &["c1", "c2"]));
+        let ids: Vec<&str> = short.comments.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["c1", "c2"]);
     }
 }

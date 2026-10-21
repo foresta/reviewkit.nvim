@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::env::env_non_empty;
 use crate::error::{Error, ErrorCode, Result};
-use crate::store::env_non_empty;
 
 /// Commands that talk to a remote. Only these get a deadline: local commands
 /// on a large repository can legitimately take long, a remote that stopped
@@ -127,7 +127,7 @@ impl Git for SystemGit {
         }
         let mut child = command
             .spawn()
-            .map_err(|err| Error::tool("git", ErrorCode::EToolMissing, format!("cannot run git: {err}")))?;
+            .map_err(|err| crate::ext::tool::spawn_error("git", err))?;
         let stdout = drain(child.stdout.take());
         let stderr = drain(child.stderr.take());
         let deadline = subcommand(args)
@@ -318,6 +318,10 @@ impl<'a> Repository<'a> {
             "--abbrev=40",
             "--no-color",
             "--no-ext-diff",
+            // The same files diff_patch lists: a submodule with only local
+            // edits would otherwise be a Target with no patch.
+            "--no-textconv",
+            "--ignore-submodules=dirty",
         ];
         args.extend(Self::range_args(base, head));
         parse_raw(&self.run(&args)?)
@@ -641,14 +645,13 @@ pub fn parse_remote_url(url: &str) -> Option<(Option<String>, Option<String>, Op
 /// `:<old mode> <new mode> <old sha> <new sha> <status>[score]\0<path>\0`
 /// with a second path for R and C.
 fn parse_raw(bytes: &[u8]) -> Result<Vec<RawChange>> {
-    let mut fields = bytes
-        .split(|b| *b == 0)
-        .map(|f| String::from_utf8_lossy(f).into_owned());
+    let mut fields = bytes.split(|b| *b == 0);
     let mut changes = Vec::new();
     while let Some(meta) = fields.next() {
         if meta.is_empty() {
             continue;
         }
+        let meta = String::from_utf8_lossy(meta);
         let parts: Vec<&str> = meta.trim_start_matches(':').split(' ').collect();
         let [_, _, old_sha, new_sha, status, ..] = parts.as_slice() else {
             return Err(Error::internal(format!("unexpected git diff --raw entry: {meta:?}")));
@@ -665,6 +668,14 @@ fn parse_raw(bytes: &[u8]) -> Result<Vec<RawChange>> {
         } else {
             (None, first)
         };
+        // Paths travel as JSON strings; a lossy name would match no file.
+        let (Some(path), Ok(old_path)) = (utf8_path(path), old_path.map(|p| utf8_path(p).ok_or(())).transpose()) else {
+            log::warn!(
+                "skipping a change whose path is not UTF-8: {}",
+                String::from_utf8_lossy(path)
+            );
+            continue;
+        };
         changes.push(RawChange {
             status,
             old_path,
@@ -674,6 +685,10 @@ fn parse_raw(bytes: &[u8]) -> Result<Vec<RawChange>> {
         });
     }
     Ok(changes)
+}
+
+fn utf8_path(bytes: &[u8]) -> Option<String> {
+    std::str::from_utf8(bytes).ok().map(str::to_string)
 }
 
 fn blob(id: &str) -> Option<String> {

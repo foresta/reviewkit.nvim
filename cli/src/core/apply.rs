@@ -148,9 +148,13 @@ fn recorded(deliveries: &[Delivery], result: &SinkResult) -> bool {
 /// so without a limit the history only grows.
 pub const HISTORY_LIMIT: usize = 200;
 
-/// Oldest first. Only comments that reached their destination are dropped
-/// to stay within the limit; one merely cleared from the queue has been
-/// sent nowhere final and would be lost for good.
+/// Comments only cleared from the queue are kept up to this many: they were
+/// sent nowhere final and would be lost for good, but kept without limit
+/// they grow the session file on every clear.
+pub const CLEARED_LIMIT: usize = 1000;
+
+/// Oldest first. Comments that reached their destination go first to stay
+/// within the limit; cleared ones only past `CLEARED_LIMIT`.
 pub fn retire(history: &mut Vec<crate::model::Comment>, gone: Vec<crate::model::Comment>) {
     history.extend(gone);
     let mut excess = history.len().saturating_sub(HISTORY_LIMIT);
@@ -161,6 +165,8 @@ pub fn retire(history: &mut Vec<crate::model::Comment>, gone: Vec<crate::model::
         }
         true
     });
+    let over = history.len().saturating_sub(CLEARED_LIMIT);
+    history.drain(..over);
 }
 
 /// "3 sent, 1 skipped (outside diff), 0 failed"
@@ -262,7 +268,15 @@ mod tests {
         assert_eq!(history[1].id, "c_3", "the oldest consumed ones go");
         let mut cleared: Vec<_> = (0..HISTORY_LIMIT + 5).map(|n| comment(n, false)).collect();
         retire(&mut cleared, vec![]);
-        assert_eq!(cleared.len(), HISTORY_LIMIT + 5, "nothing unconsumed is ever dropped");
+        assert_eq!(
+            cleared.len(),
+            HISTORY_LIMIT + 5,
+            "cleared ones stay past the history limit"
+        );
+        let mut many: Vec<_> = (0..CLEARED_LIMIT + 3).map(|n| comment(n, false)).collect();
+        retire(&mut many, vec![]);
+        assert_eq!(many.len(), CLEARED_LIMIT);
+        assert_eq!(many[0].id, "c_3", "the oldest cleared ones go past their own limit");
     }
 
     #[test]

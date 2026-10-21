@@ -146,6 +146,10 @@ fn permalink(session: &Session, comment: &Comment) -> Option<String> {
     Some(format!("{repo}/blob/{sha}/{path}{lines}"))
 }
 
+/// GitHub keeps what it was sent and this sink resends the whole queue,
+/// so keeping its comments would post them twice.
+const CONSUMES: bool = true;
+
 /// GitHub's limit on a review body; checked before sending because a body
 /// over it fails the whole review on every attempt.
 const MAX_REVIEW_BODY: usize = 65_536;
@@ -834,7 +838,7 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
     let plan = plan(session, &time::now())?;
     write_pending(session, &plan, session_dir)?;
     let response = gh::graphql(gh, &repo.host, &plan.mutation, plan.variables.clone()).map_err(|err| {
-        if err.code == ErrorCode::EToolMissing {
+        if crate::ext::tool::never_started(&err) {
             return err;
         }
         err.outcome_unknown("the next submit checks GitHub for what was already posted before sending")
@@ -973,10 +977,8 @@ impl super::Sink for GithubSink {
         super::tool_info(NAME, ctx.tools.gh.as_deref(), "gh")
     }
 
-    /// GitHub keeps what it was sent and this sink resends the whole queue,
-    /// so keeping its comments would post them twice.
     fn consumes(&self, _source: &Source, _requested: Option<bool>) -> bool {
-        true
+        CONSUMES
     }
 
     /// An interrupted submit is reconciled here too, on a copy: a preview
@@ -1035,7 +1037,7 @@ impl super::Sink for GithubSink {
         let _: crate::model::GithubOptions = opts.sink_options()?;
         let gh = gh::SystemGh::new(ctx.tools.gh.as_deref())?;
         let session_dir = store.state_dir().session_dir(id)?;
-        let consume = true; // Self::consumes: GitHub always consumes.
+        let consume = CONSUMES;
         // Phase 1: an interrupted earlier submit is reconciled and saved
         // on its own, so its record can go before a new one is written.
         let pending = pending_path(&session_dir);

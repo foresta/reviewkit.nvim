@@ -34,7 +34,9 @@ pub struct Session {
     #[serde(default)]
     pub pending_apply: bool,
     /// Comments that left the queue, with their deliveries, so a consumed
-    /// comment can still be looked up instead of being gone.
+    /// comment can still be looked up instead of being gone. Always empty in
+    /// a response, which would otherwise grow with every send; read it with
+    /// `history list`.
     #[serde(default)]
     pub history: Vec<Comment>,
     pub etags: Etags,

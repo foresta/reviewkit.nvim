@@ -22,7 +22,8 @@ Rust CLI `reviewkit` と Lua の間で受け渡すデータ、CLI のサブコ�
 
 ## 2. 応答の封筒と終了コード
 
-stdout は常に 1 つの JSON オブジェクト。stderr はログ。panic 等で JSON でなかったときは Lua が `E_INTERNAL` に変換する。
+stdout は常に 1 つの JSON オブジェクト。stderr はログ。CLI の panic も `E_INTERNAL` の封筒で返す。それでも JSON でなかったとき
+（強制終了など）は Lua が `E_INTERNAL` に変換する。
 
 ```json
 { "ok": true,  "data": <コマンド固有 | null>, "session": <Session。変更系コマンドでは常に> }
@@ -92,8 +93,8 @@ Session {
   pending_apply: bool       -- Lua の sink が配送した結果が、ロックを待って記録されていない（同上）
   history: Comment[]        -- キューを出たコメント（deliveries 付き）。宛先に届いて消費されたものと、`comment clear` で
                             -- 移しただけのもの。保存はするが封筒では常に空。
-                            -- `history list` で取る。200 件を超えたら、消費済み（宛先に届いた）ものだけを古い順に捨てる。
-                            -- `comment clear` で移しただけのものは捨てない
+                            -- `history list` で取る。200 件を超えたら、消費済み（宛先に届いた）ものから古い順に捨てる。
+                            -- `comment clear` で移しただけのものは 1000 件を超えた分だけ古い順に捨てる
   etags: { targets, comments, decision, threads, thread_actions, viewed }   -- 節ごとの内容ハッシュ
   created_at, updated_at: RFC 3339
 }
@@ -238,7 +239,8 @@ reviewkit session open --pr <number|url> [--cwd]
                                                             番号は --cwd の origin のリポジトリ。URL ならそのリポジトリ（origin と違ってもよい）
 reviewkit session open --local [--base REV] [--head REV|worktree] [--cwd]
                                                          -> session   既存があれば再開して refresh。--base A... は A と head の
-                                                                      merge-base（refresh ごとに求め直す）。A...B で --head を省くと head = B
+                                                                      merge-base（refresh ごとに求め直す）。A...B で --head を省くと head = B。
+                                                                      A..B は base = A、head = B（空の側は HEAD）
 reviewkit session open --session ID                      -> session   再開
 reviewkit session get     --session ID                   -> session
 reviewkit session list    [--cwd]                        -> data: SessionSummary[]
@@ -274,9 +276,11 @@ reviewkit submit apply --session ID [--consume] (stdin: SinkResult の sent / fa
                                                          -> session   Lua 側 sink の結果を core に適用。at は CLI が付ける。ロック待ちは記録待ち（送信箱）
 reviewkit submit apply --session ID --drain              -> session   記録待ちの結果を記録するだけ（stdin を読まない）
 
-reviewkit history list    --session ID                   -> data: Comment[]   キューを出たコメント（新しい順）。200 件を超えて捨てるのは消費済みだけ
+reviewkit history list    --session ID                   -> data: Comment[]   キューを出たコメント（新しい順）。200 件を超えると消費済みから捨て、消しただけのものは 1000 件を超えた分を古い順に捨てる
 reviewkit history restore --session ID --id CID          -> session   キューの末尾へ戻す。deliveries は残す（同じ sink へは再送しない）。既にキューにあれば何もしない。
-                                                            宛先に届いて消費されたもの（Delivery.consumed）は E_INVALID（編集すると二重に届くため）。
+                                                            セッションの宛先（PR は github、local は herdr。Lua の sink も宛先とみなす）で消費されたもの
+                                                            （Delivery.consumed）は E_INVALID（編集すると二重に届くため）。宛先でない sink に
+                                                            `consume` で渡したもの（PR のコメントをエージェントへ）は戻せる
                                                             consumed を記録する前の版（revision 7 未満）が書いた history は、送信済みの配送をすべて消費済みとして読む
 reviewkit history clear   --session ID                   -> session   data: { removed }
 reviewkit comment clear   --session ID --delivered [--sink NAME] -> session   data: { moved: CID[] }
