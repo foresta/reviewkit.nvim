@@ -334,6 +334,34 @@ const QUERY: &str = r#"query($owner: String!, $name: String!, $number: Int!, $cu
 pub struct GraphqlResponse {
     pub data: serde_json::Value,
     pub errors: Vec<serde_json::Value>,
+    /// GraphQL leaves the key out only when the request never reached
+    /// execution; `data: null` may follow a mutation that already ran.
+    pub has_data: bool,
+}
+
+impl GraphqlResponse {
+    /// Rate limiting is checked before anything runs, and a parse or
+    /// validation error (located in the document, no `data`) means the
+    /// document never ran. A timeout names no location and is not this.
+    /// Only when no field has data and no error names a field: one aliased
+    /// field of a mutation can succeed while a later one is rate limited.
+    pub fn refused_before_running(&self) -> bool {
+        let nothing_ran = self
+            .data
+            .as_object()
+            .is_none_or(|fields| fields.values().all(|v| v.is_null()));
+        let unplaced = !self.errors.is_empty() && self.errors.iter().all(|e| e["path"].is_null());
+        if !nothing_ran || !unplaced {
+            return false;
+        }
+        let rate_limited = self.errors.iter().any(|e| e["type"] == "RATE_LIMITED");
+        let invalid = !self.has_data
+            && self
+                .errors
+                .iter()
+                .all(|e| e["locations"].as_array().is_some_and(|l| !l.is_empty()));
+        rate_limited || invalid
+    }
 }
 
 /// Runs one GraphQL document and returns data and errors together, because
@@ -344,6 +372,7 @@ pub fn graphql(gh: &dyn Gh, host: &str, query: &str, variables: serde_json::Valu
     let out = gh.run_raw(&args, Some(&body))?;
     match serde_json::from_slice::<serde_json::Value>(&out.stdout) {
         Ok(mut body) if body.get("data").is_some() || body.get("errors").is_some() => Ok(GraphqlResponse {
+            has_data: body.get("data").is_some(),
             data: body["data"].take(),
             errors: body["errors"].as_array().cloned().unwrap_or_default(),
         }),
@@ -483,19 +512,26 @@ pub fn has_marker(body: &str, marker: &str) -> bool {
 }
 
 fn is_marker(line: &str) -> bool {
-    let line = line.trim();
-    line.starts_with(MARKER_PREFIX) && line.ends_with(MARKER_SUFFIX)
+    let Some(hex) = line
+        .trim()
+        .strip_prefix(MARKER_PREFIX)
+        .and_then(|rest| rest.strip_suffix(MARKER_SUFFIX))
+    else {
+        return false;
+    };
+    hex.len() == 12 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Only the trailing line is ours; a marker-shaped line elsewhere (inside
-/// someone's code block) is their text.
+/// Wherever the line stands, since `has_marker` finds it anywhere too: text
+/// added after it on GitHub would otherwise show it. Only the exact shape
+/// `marker` makes is ours.
 pub fn strip_markers(body: &str) -> String {
-    let trimmed = body.trim_end();
-    match trimmed.rsplit_once('\n') {
-        Some((rest, last)) if is_marker(last) => rest.trim_end().to_string(),
-        None if is_marker(trimmed) => String::new(),
-        _ => body.to_string(),
+    let lines: Vec<&str> = body.split_inclusive('\n').collect();
+    if !lines.iter().any(|l| is_marker(l)) {
+        return body.to_string();
     }
+    let kept: String = lines.into_iter().filter(|l| !is_marker(l)).collect();
+    kept.trim_end().to_string()
 }
 
 impl PrDetails {
@@ -664,6 +700,28 @@ pub fn parse_pr_arg(arg: &str) -> Result<(u64, Option<RepoRef>)> {
 mod tests {
     use super::*;
 
+    fn response(data: serde_json::Value, errors: serde_json::Value) -> GraphqlResponse {
+        GraphqlResponse {
+            has_data: !data.is_null(),
+            data,
+            errors: errors.as_array().cloned().unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn a_rate_limit_after_one_field_succeeded_is_not_refused_before_running() {
+        let partial = response(
+            serde_json::json!({ "review": { "id": "R1" }, "reply0": null }),
+            serde_json::json!([{ "type": "RATE_LIMITED", "path": ["reply0"], "message": "slow down" }]),
+        );
+        assert!(!partial.refused_before_running());
+        let whole = response(
+            serde_json::Value::Null,
+            serde_json::json!([{ "type": "RATE_LIMITED", "message": "slow down" }]),
+        );
+        assert!(whole.refused_before_running());
+    }
+
     #[test]
     fn a_rejected_token_is_an_auth_error_with_the_host_to_log_into() {
         let out = RawOutput {
@@ -701,8 +759,11 @@ mod tests {
             "a quoted marker is not the post's own"
         );
         assert_eq!(strip_markers(&edited), "edited");
-        let quoted = format!("look:\n```\n{m}\n```");
-        assert_eq!(strip_markers(&quoted), quoted, "only the trailing line is ours");
+        let appended = format!("posted\n\n{m}\nadded on GitHub");
+        assert!(has_marker(&appended, &m));
+        assert_eq!(strip_markers(&appended), "posted\n\nadded on GitHub");
+        let lookalike = "look:\n<!-- reviewkit:not-ours -->\n> <!-- reviewkit:0123456789ab -->";
+        assert_eq!(strip_markers(lookalike), lookalike, "only our exact line is stripped");
         assert_eq!(
             strip_markers("plain\r\n"),
             "plain\r\n",

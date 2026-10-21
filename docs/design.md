@@ -46,7 +46,7 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
 
 - `E_NOT_COMMENTABLE` は「行がファイルの範囲外」か「path がリポジトリに無い」ときだけ。diff 外や targets 外の path への
   コメントは積める（D4）。その場合 `commentable.github = false` で、sink-github は review 本文の「Comments outside the diff」節に
-  `path` と行、`blob/<sha>/path#L..` のリンク、本文を書いて送る（`SubmitPreview.body_comment_ids`）。stale だけは `skipped`。
+  `path`（インラインコード。path 中のどのバッククォートの連なりより長い区切りで囲む）と行、`blob/<sha>/path#L..` のリンク、本文を書いて送る（`SubmitPreview.body_comment_ids`）。stale だけは `skipped`。
   issue 以外の kind は本文の先頭に `**nit:**` のように付ける
 - `E_AMBIGUOUS` は `details.candidates` に候補（`SinkTarget[]`）を載せる。cwd に一致する agent が 0 件なら全 agent を候補にする
 - コードは「何が起きたか」を表し、ツール名を含めない。どのツールかは `error.tool`（"git" / "gh" / "herdr"）で示すので、
@@ -347,7 +347,14 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   適用する。Lua の sink にも同じ写しを渡し、`attempted` は選んだ id にする。apply は `attempted` 外の `sent` を無視する
 - 二重送信の防止: gh を呼ぶ前に `pending_submit.json` を書く。次の GitHub への submit で残っていれば threads を取り直し、
   照合してから消す（消すのは結果を保存した後、ロックを持ったまま。外で消すと次の送信が書いた記録を消しうる）。
-  送信がロックを取った時点で記録が残っていれば（照合を見た後に別の送信が中断した）、書き換えずに再試行可の E_CONFLICT で止める。行コメントと返信の本文の末尾には、独立した行で `<!-- reviewkit:<hash> -->` を付ける。hash は
+  照合の結果は保存できたのに記録を消せなかったときは、記録のパスを hint に載せた `E_IO` で止める（`details.recovered` に
+  照合で見つかったものを載せる）。残った記録は次の送信を毎回 E_CONFLICT で止めるので、黙って続けない。
+  何も送っていないと分かる失敗では、ロックを持ったままその場で記録を消す（残すと届いていない送信のために編集が止まり続ける）。
+  該当するのは gh を起動できなかったとき（`details.not_started`）、認証で拒否されたとき（`E_AUTH`）、GitHub が実行の前に
+  拒否したとき（`type` が `RATE_LIMITED` のエラーと、`data` キーを持たず、どのエラーも文書中の位置（`locations`）を示す
+  構文・検証のエラー。GraphQL は実行に入った応答には `data` を付ける。位置を示さないタイムアウトは含めない）。
+  送信がロックを取った時点で記録が残っていれば（照合を見た後に別の送信が中断した）、書き換えずに再試行可の E_CONFLICT で止める
+  （hint に記録のパスを載せる）。行コメントと返信の本文の末尾には、独立した行で `<!-- reviewkit:<hash> -->` を付ける。hash は
   （コメントの id, 試行の時刻 `at`）から作るので、同じコメントの前の試行の投稿とも、Web UI で書いた同じ本文とも区別できる。
   照合はこの marker の一致で行い、viewer が分かっていれば投稿者が viewer であることも求める（引用で marker を写した他人の投稿を拾わない）。
   review は、運んだ行コメントのどれかが見つかれば投稿済み（review と行コメントは 1 つの mutation で作られる）。
@@ -357,14 +364,16 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   再試行可のエラーで止める（誰の投稿でも一致してしまうため）。
   照合はキューだけでなく履歴（中断の後に別の sink が消費したもの）も探し、見つかったコメントに GitHub への配送を記録する
   （記録しないと履歴から戻して二重に投稿できてしまう）。
-  marker は表示（threads、`pr.json`）に出す前に剥がし（本文の最後の行だけ。途中の同じ形の行は他人の本文）、照合は剥がす前の本文で行う。
+  marker は表示（threads、`pr.json`）に出す前に剥がし、照合は剥がす前の本文で行う。剥がすのは reviewkit の形
+  （`<!-- reviewkit:` と 16 進 12 桁と ` -->` だけの行）に限り、本文のどこにあっても剥がす（照合が行の位置を問わず marker を
+  探すのと揃える。GitHub で marker の後ろに追記された本文でも剥がれる）。
   残っている間は Session の `pending_submit` が true（ファイルの有無から毎回求める）で、Lua は開いたときに知らせる。
   記録には review が decision を運んだかも残し、運んでいない review（comment だけの送信）を照合しても decision は消さない
 - 送信の故障時の挙動（送信の経路を変えるときはここを先に直す）:
 
   | 経路 | 途中で落ちる | 2 回実行 | 相手が応答しない |
   |---|---|---|---|
-  | github | pending が残り、次の github submit が照合してから送る。照合が済むまで、pending に載ったコメントの編集・削除と、decision を運んだ pending があるときの decision の変更は E_CONFLICT（照合が送ったときの本文で探すため、変えると送信済みを見失い二重に投稿する）。`comment clear` も pending に載ったコメントはキューに残す（照合はキューの中を探す） | 照合で送信済みと分かったものは送らない。GitHub へ sent 済みは `delivered` で skip | `outcome = unknown`、再試行不可。pending を次回照合。どのフィールドの失敗かを示さないエラー（タイムアウト等）や data の無い応答も同じ扱い |
+  | github | pending が残り、次の github submit が照合してから送る。照合が済むまで、pending に載ったコメントの編集・削除と、decision を運んだ pending があるときの decision の変更は E_CONFLICT（照合が送ったときの本文で探すため、変えると送信済みを見失い二重に投稿する）。`comment clear` も pending に載ったコメントはキューに残す（照合はキューの中を探す） | 照合で送信済みと分かったものは送らない。GitHub へ sent 済みは `delivered` で skip | `outcome = unknown`、再試行不可。pending を次回照合。どのフィールドの失敗かを示さないエラー（タイムアウト等）や data の無い応答も同じ扱い。ただし実行の前に拒否されたと分かるもの（上記）は送っていないので記録を消す。path の無い `E_PENDING_REVIEW` は unknown のまま、hint は pending review の片付け方を示す |
   | herdr | 送信後・保存前に落ちると記録が無く再送しうる（エージェント宛てで公開されない） | 自分へ sent 済みのコメントと decision は送らない | 全体失敗、`outcome = unknown`。印は試行分だけ |
   | 選択送信（comment_ids） | github は選んだ分だけの COMMENT review を送り、pending には decision を運ばないと記録する（照合しても decision は消さない） | 送った分は消費されてキューに無く、その id は落とされる。全部落ちれば nothing to submit | 経路ごとの規則と同じ |
   | Lua sink（submit apply） | 送信後・apply の CLI が結果をファイルに書く前に落ちると記録されず再送しうる（sink の責任）。書いた後なら次の書き込みが記録する | 消費済みはキューに無い。`version` / `decision_version` が違うものは記録しない。Lua の sink で送る前に Lua はディスク上の Session（`session get`）を読み、記録待ちがあれば記録を試み、残れば E_CONFLICT で止める（別インスタンスの記録待ちも見える。記録が `E_LOCKED` 以外で失敗したときはそのエラーを返す） | sink の責任 |

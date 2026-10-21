@@ -646,6 +646,11 @@ fn a_recovery_survives_a_follow_up_send_that_fails() {
     assert_eq!(body["error"]["code"], "E_TOOL");
     assert_eq!(body["error"]["retryable"], false, "the review may have been posted");
     assert_eq!(body["error"]["details"]["outcome"], "unknown");
+    assert_eq!(
+        body["error"]["details"]["recovered"],
+        serde_json::json!([posted]),
+        "what the recovery found is reported with the refusal"
+    );
     let listed = json(
         &reviewkit(&state, &remote, &gh)
             .args(["comment", "list", "--session", &id])
@@ -2317,4 +2322,404 @@ fn a_timeout_reported_without_a_path_keeps_the_record_and_is_reconciled() {
     let again = submit_github(&state, &remote, &gh, &id);
     assert_eq!(again["data"]["sent"][0]["comment_id"], cid, "{again}");
     assert_eq!(mutation_calls(&gh).len(), 1, "not posted a second time");
+}
+
+fn prepend_rule(gh: &FakeGh, rule: serde_json::Value) {
+    let mut rules: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
+    rules.insert(0, rule);
+    std::fs::write(
+        gh.dir.path().join("responses.json"),
+        serde_json::Value::Array(rules).to_string(),
+    )
+    .unwrap();
+}
+
+fn spawn_reviewkit(state: &tempfile::TempDir, remote: &Remote, gh: &FakeGh, args: &[&str]) -> std::process::Child {
+    std::process::Command::new(assert_cmd::cargo::cargo_bin("reviewkit"))
+        .envs(
+            reviewkit(state, remote, gh)
+                .get_envs()
+                .filter_map(|(k, v)| v.map(|v| (k.to_owned(), v.to_owned()))),
+        )
+        .args(["--state-dir", state.path().to_str().unwrap()])
+        .arg("--cwd")
+        .arg(remote.clone.path())
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+fn queued(state: &tempfile::TempDir, remote: &Remote, gh: &FakeGh, id: &str) -> serde_json::Value {
+    json(
+        &reviewkit(state, remote, gh)
+            .args(["comment", "list", "--session", id])
+            .output()
+            .unwrap(),
+    )["data"]
+        .clone()
+}
+
+fn update_comment(state: &tempfile::TempDir, remote: &Remote, gh: &FakeGh, id: &str, cid: &str) -> serde_json::Value {
+    serde_json::from_slice(
+        &reviewkit(state, remote, gh)
+            .args(["comment", "update", "--session", id, "--id", cid])
+            .write_stdin(r#"{"body": "edited"}"#)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_gh_that_never_started_leaves_no_record_and_the_comment_stays_editable() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let cid = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "not sent"}),
+    );
+    let unrunnable = gh.dir.path().join("gh-not-executable");
+    std::fs::write(&unrunnable, "#!/bin/sh\n").unwrap();
+    let body: serde_json::Value = serde_json::from_slice(
+        &reviewkit(&state, &remote, &gh)
+            .env("REVIEWKIT_GH", &unrunnable)
+            .args(["submit", "--session", &id, "--sink", "github"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(body["error"]["details"]["not_started"], true, "{body}");
+    assert!(!pending_file(&state).exists());
+    assert_eq!(update_comment(&state, &remote, &gh, &id, &cid)["ok"], true);
+}
+
+#[test]
+fn a_rejected_token_leaves_no_record() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let cid = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "not sent"}),
+    );
+    prepend_rule(
+        &gh,
+        serde_json::json!({ "match": ["api graphql", "mutation("], "stderr": "HTTP 401: Bad credentials (https://api.github.com/graphql)", "exit": 1 }),
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["error"]["code"], "E_AUTH", "{body}");
+    assert!(!pending_file(&state).exists());
+    assert_eq!(update_comment(&state, &remote, &gh, &id, &cid)["ok"], true);
+}
+
+#[test]
+fn a_request_github_refused_before_running_it_leaves_no_record() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "not sent"}),
+    );
+    for refusal in [
+        serde_json::json!({ "data": null, "errors": [ { "type": "RATE_LIMITED", "message": "API rate limit exceeded for user ID 1." } ] }),
+        serde_json::json!({ "errors": [ { "message": "Parse error on \"}\" (RCURLY) at [1, 2]", "locations": [ { "line": 1, "column": 2 } ] } ] }),
+    ] {
+        answer_mutation(&gh, refusal.clone(), 1);
+        let body = submit_github(&state, &remote, &gh, &id);
+        assert_eq!(body["ok"], false, "{body}");
+        assert_ne!(body["error"]["details"]["outcome"], "unknown", "{refusal}: {body}");
+        assert!(!pending_file(&state).exists(), "{refusal}");
+    }
+    assert_eq!(mutation_calls(&gh).len(), 2);
+}
+
+#[test]
+fn a_pending_review_reported_without_a_path_keeps_its_hint() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "hm"}),
+    );
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": null, "errors": [ { "message": "A pending review already exists for this pull request" } ] }),
+        1,
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["error"]["code"], "E_PENDING_REVIEW", "{body}");
+    assert!(
+        body["error"]["hint"].as_str().unwrap().contains("pending review"),
+        "{body}"
+    );
+    assert_eq!(body["error"]["details"]["outcome"], "unknown");
+    assert!(pending_file(&state).exists());
+}
+
+#[test]
+fn a_record_the_recovery_could_not_remove_is_named_instead_of_blocking_every_submit() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let posted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "done"}),
+    );
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 11, "body": "new"}),
+    );
+    pending(
+        &state,
+        serde_json::json!({ "at": "2026-01-01T00:00:00Z", "comments": [ { "id": posted, "path": "keep.txt", "side": "head", "line": 3, "body": "done" } ] }),
+    );
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", "done")]),
+        serde_json::json!([]),
+    );
+    // A directory in its place cannot be removed as a file.
+    let record = pending_file(&state);
+    prepend_rule(
+        &gh,
+        serde_json::json!({ "match": ["api graphql", "reviewThreads"], "run": [
+            "sh", "-c", "if [ -f \"$0\" ]; then rm \"$0\" && mkdir \"$0\"; fi", record.to_str().unwrap()
+        ], "body": { "data": null } }),
+    );
+    // The rule above only acts; the details still come from the original rule.
+    let mut rules: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
+    let details = rules
+        .iter()
+        .find(|r| r["body"]["data"]["repository"].is_object())
+        .unwrap()["body"]
+        .clone();
+    rules[0]["body"] = details;
+    std::fs::write(
+        gh.dir.path().join("responses.json"),
+        serde_json::Value::Array(rules).to_string(),
+    )
+    .unwrap();
+
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["ok"], false, "{body}");
+    assert_ne!(body["error"]["code"], "E_CONFLICT", "{body}");
+    assert!(
+        body["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains(record.to_str().unwrap()),
+        "{body}"
+    );
+    assert_eq!(body["error"]["details"]["recovered"], serde_json::json!([posted]));
+    assert!(mutation_calls(&gh).is_empty());
+    assert_eq!(
+        queued(&state, &remote, &gh, &id).as_array().unwrap().len(),
+        1,
+        "the recovery was saved"
+    );
+}
+
+#[test]
+fn a_record_left_by_a_submit_that_ran_in_between_stops_the_send_and_is_named() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "mine"}),
+    );
+    // Holds the session as another submit sending its request would.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(state.path().join("sessions/pr/github.com/o/r/7/session.lock"))
+        .unwrap();
+    let mut lock = fd_lock::RwLock::new(lock);
+    let guard = lock.write().unwrap();
+    let submit = spawn_reviewkit(&state, &remote, &gh, &["submit", "--session", &id, "--sink", "github"]);
+    // Past its look for a record, waiting for the lock.
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    pending(
+        &state,
+        serde_json::json!({ "at": "2026-01-01T00:00:00Z", "marked": true, "comments": [] }),
+    );
+    drop(guard);
+    let out = submit.wait_with_output().unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(body["error"]["code"], "E_CONFLICT", "{body}");
+    assert_eq!(body["error"]["retryable"], true);
+    assert!(
+        body["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains(pending_file(&state).to_str().unwrap()),
+        "{body}"
+    );
+    assert!(mutation_calls(&gh).is_empty());
+}
+
+#[test]
+fn an_edit_while_a_submit_holds_the_session_is_refused_as_locked() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let cid = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "slow"}),
+    );
+    prepend_rule(
+        &gh,
+        serde_json::json!({ "match": ["api graphql", "mutation("], "sleep": 4,
+            "body": { "data": { "review": { "pullRequestReview": { "id": "PRR_1", "url": "u1" } } } } }),
+    );
+    let submit = spawn_reviewkit(&state, &remote, &gh, &["submit", "--session", &id, "--sink", "github"]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while mutation_calls(&gh).is_empty() {
+        assert!(std::time::Instant::now() < deadline, "the submit never reached gh");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let edit = update_comment(&state, &remote, &gh, &id, &cid);
+    assert_eq!(edit["error"]["code"], "E_LOCKED", "{edit}");
+    assert!(edit["error"]["hint"].as_str().unwrap().contains("submit"));
+    let out = submit.wait_with_output().unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(body["data"]["sent"][0]["comment_id"], cid, "{body}");
+}
+
+#[test]
+fn a_review_created_alongside_an_error_without_a_path_is_left_to_the_reconcile() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let cid = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "landed"}),
+    );
+    answer_mutation(
+        &gh,
+        serde_json::json!({ "data": { "review": { "pullRequestReview": { "id": "PRR_1", "url": "u1" } } },
+            "errors": [ { "message": "Something went wrong while executing your query." } ] }),
+        1,
+    );
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["error"]["details"]["outcome"], "unknown", "{body}");
+    assert!(pending_file(&state).exists());
+    assert_eq!(
+        queued(&state, &remote, &gh, &id)[0]["last_error"],
+        serde_json::Value::Null
+    );
+    let posted = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", &posted)]),
+        serde_json::json!([]),
+    );
+    let again = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(again["data"]["sent"][0]["comment_id"], cid, "{again}");
+    assert_eq!(mutation_calls(&gh).len(), 1);
+}
+
+#[test]
+fn a_cut_off_first_submit_marks_no_comment_as_failed() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "maybe"}),
+    );
+    interrupt_next_submit(&gh);
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["error"]["details"]["outcome"], "unknown", "{body}");
+    let listed = queued(&state, &remote, &gh, &id);
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["last_error"], serde_json::Value::Null);
+}
+
+#[test]
+fn a_confirmed_recovery_that_another_instance_recorded_first_reports_it_as_done() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let posted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "all of it"}),
+    );
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let landed = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", &landed)]),
+        serde_json::json!([]),
+    );
+    let preview = preview_github(&state, &remote, &gh, &id);
+    assert_eq!(preview["digest"], "recovered", "{preview}");
+    let other = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(other["data"]["sent"][0]["comment_id"], posted, "{other}");
+    let confirmed = submit_confirmed(&state, &remote, &gh, &id, &preview["digest"]);
+    assert_eq!(confirmed["ok"], true, "{confirmed}");
+    assert_eq!(confirmed["data"]["summary"], "already recorded");
+    assert_eq!(mutation_calls(&gh).len(), 1);
 }
