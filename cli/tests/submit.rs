@@ -102,7 +102,11 @@ fn dry_run_previews_the_prompt_and_resolves_the_target_by_cwd() {
         prompt.starts_with("Two small things.\n\n1. @keep.txt#L3\nwhy C?\n\n2. @added.txt#L2\ntrailing newline"),
         "{prompt}"
     );
-    assert!(body.get("session").is_none());
+    assert_eq!(
+        body["session"]["comments"].as_array().unwrap().len(),
+        2,
+        "the stored session comes along, unchanged"
+    );
     assert!(herdr.last_text().is_empty(), "dry run sends nothing");
 }
 

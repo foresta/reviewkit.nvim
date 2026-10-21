@@ -150,6 +150,27 @@ fn permalink(session: &Session, comment: &Comment) -> Option<String> {
 /// so keeping its comments would post them twice.
 const CONSUMES: bool = true;
 
+/// The digest of a preview that only an interrupted submit's recovery left
+/// anything to do for.
+const RECOVERED: &str = "recovered";
+
+fn empty_result() -> SinkResult {
+    SinkResult {
+        sink: NAME.into(),
+        at: String::new(),
+        url: None,
+        sent: Vec::new(),
+        failed: Vec::new(),
+        skipped: Vec::new(),
+        thread_actions: Vec::new(),
+        decision: DecisionStatus::NotApplicable,
+        summary: String::new(),
+        mode: DeliveryMode::Sent,
+        decision_version: None,
+        attempted: None,
+    }
+}
+
 /// GitHub's limit on a review body; checked before sending because a body
 /// over it fails the whole review on every attempt.
 const MAX_REVIEW_BODY: usize = 65_536;
@@ -240,6 +261,19 @@ pub fn plan(session: &Session, attempt: &str) -> Result<Plan> {
             });
             continue;
         }
+        // Checked with the marker it is sent with: one comment over the limit
+        // fails the whole mutation, every attempt.
+        let posted = gh::with_marker(&body_with_suggestion(comment), &comment_marker(&comment.id, attempt));
+        if posted.chars().count() > MAX_REVIEW_BODY {
+            return Err(Error::invalid(format!(
+                "comment {} on {}:{} would be {} characters, over GitHub's {MAX_REVIEW_BODY}",
+                comment.id,
+                comment.path,
+                comment.line,
+                posted.chars().count()
+            ))
+            .hint("shorten the comment"));
+        }
         if let Some(thread_id) = &comment.reply_to {
             replies.push(PlannedReply {
                 alias: format!("reply{}", replies.len()),
@@ -253,7 +287,7 @@ pub fn plan(session: &Session, attempt: &str) -> Result<Plan> {
             "path": comment.path,
             "line": comment.line,
             "side": side_name(comment.side),
-            "body": gh::with_marker(&body_with_suggestion(comment), &comment_marker(&comment.id, attempt)),
+            "body": posted,
         });
         if let Some(start) = comment.start_line.filter(|s| *s < comment.line) {
             thread["startLine"] = serde_json::json!(start);
@@ -1021,7 +1055,7 @@ impl super::Sink for GithubSink {
                 target: None,
                 mode: DeliveryMode::Sent,
                 raw: serde_json::Value::Null,
-                digest: Some("recovered".into()),
+                digest: Some(RECOVERED.into()),
             }),
             other => other,
         }
@@ -1084,6 +1118,21 @@ impl super::Sink for GithubSink {
             (Err(err), Some(mut recovered)) if is_nothing_to_submit(&err) => {
                 recovered.summary = crate::core::apply::summary(&recovered);
                 (store.load(id)?, recovered)
+            }
+            // Another instance recorded the recovery between the preview and
+            // this confirmation: what the user confirmed is already done.
+            (Err(err), None) if is_nothing_to_submit(&err) && opts.expect_digest.as_deref() == Some(RECOVERED) => {
+                let mut done = empty_result();
+                done.summary = "already recorded".into();
+                (store.load(id)?, done)
+            }
+            // Phase 1 is saved: the user hears what it found even though
+            // this send was refused.
+            (Err(err), Some(recovered)) => {
+                let ids: Vec<&str> = recovered.sent.iter().map(|s| s.comment_id.as_str()).collect();
+                let mut err = err;
+                err.details["recovered"] = serde_json::json!(ids);
+                return Err(err);
             }
             (outcome, _) => outcome?,
         };
@@ -1272,6 +1321,15 @@ mod tests {
             .map(|s| s.comment_id.as_str())
             .collect();
         assert_eq!(delivered, vec!["c_1", "c_4", "c_5"]);
+    }
+
+    #[test]
+    fn a_comment_over_githubs_limit_is_refused_before_sending() {
+        let mut s = pr_session();
+        s.comments[0].body = "x".repeat(MAX_REVIEW_BODY);
+        let err = plan(&s, "t").unwrap_err();
+        assert_eq!(err.code, ErrorCode::EInvalid);
+        assert!(err.message.contains(&s.comments[0].id), "{}", err.message);
     }
 
     #[test]

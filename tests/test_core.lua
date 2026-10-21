@@ -334,6 +334,14 @@ T["core"]["the preview names thread places and a decision a selection leaves que
   eq(vim.tbl_contains(lines, "  resolve src/a.rs:4"), true)
 end
 
+T["core"]["an empty preview after a recovery still explains itself"] = function()
+  local lines = child.lua_get([[require('reviewkit.view.preview').lines(
+    { sink = 'github', comment_ids = {}, body_comment_ids = {}, skipped = {}, replies = {}, thread_actions = {},
+      mode = 'sent', raw = {} },
+    { comments = {}, pending_submit = true })]])
+  eq(lines[1], "An earlier submit was cut off: what it already posted is recognised, not sent again.")
+end
+
 T["core"]["the clipboard refuses to copy nothing"] = function()
   child.lua([[
     require('reviewkit.sink.clipboard').submit({ comments = {} }, { register = 'r' }, function(err)

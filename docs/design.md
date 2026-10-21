@@ -300,6 +300,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   submit は `expect_digest` を、ロックを取って照合を済ませた後の送る直前の内容と比べる。確認から送信までの間に別のインスタンスが
   decision やコメントを変えた・refresh した場合は送らず、Lua はプレビューを出し直す。`--expect-rev` は使わない（既読や
   送る内容に関係の無い変更でも弾くため）。照合だけで送るものが無くなったときのプレビューは空で、確認すると submit が照合を保存する
+  （その間に別のインスタンスが保存していれば ok で `already recorded`）。照合を保存した後で送信が断られたときは、
+  エラーの `details.recovered` に照合で送信済みと分かったコメントの id が入る
 - `SinkTarget { id, name?, status?, cwd?, title? }` は送り先の候補。`id` を `HerdrOptions.target` に渡す。
   `sink targets` は agent の無い pane も含めて全 pane を返す（stage は任意の pane に送れる）。
   `E_AMBIGUOUS` の `details.candidates` は agent が動いている pane だけ
@@ -346,7 +348,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   「自分の、同じ state・同じ本文の、試行の開始以後の review」で探す。marker を付ける前の版が書いた pending（`marked` が無い）は
   本文と時刻で照合する。本文で照合する場合（decision だけの review と、古い pending）は、viewer が取れなければ照合せず、
   再試行可のエラーで止める（誰の投稿でも一致してしまうため）。
-  marker は表示（threads、`pr.json`）に出す前に剥がし、照合は剥がす前の本文で行う。
+  marker は表示（threads、`pr.json`）に出す前に剥がし（本文の最後の行だけ。途中の同じ形の行は他人の本文）、照合は剥がす前の本文で行う。
   残っている間は Session の `pending_submit` が true（ファイルの有無から毎回求める）で、Lua は開いたときに知らせる。
   記録には review が decision を運んだかも残し、運んでいない review（comment だけの送信）を照合しても decision は消さない
 - 送信の故障時の挙動（送信の経路を変えるときはここを先に直す）:
@@ -435,7 +437,7 @@ core.pr_info(cb)               -- PrInfo。表示は持たないが取り出せ�
 core.side_file(side, path, cb) -- file base / file head の data。core.base_file(path, cb) は side = "base"
 core.submit(sink, opts, cb)  -- Rust 側 sink は submit。Lua 登録 sink は impl.submit(session, opts, cb) の結果を submit apply に渡す
                              -- opts は setup の sinks.<name> に重ねる。cb(err, result, session)
-core.preview(sink, opts, cb) -- submit --dry-run。cb(err, SubmitPreview)
+core.preview(sink, opts, cb) -- submit --dry-run。cb(err, SubmitPreview)。返った Session でキャッシュも更新する
 core.register_sink(name, impl)  -- impl = { submit, available?, consumes? }。available() は boolean, reason? を返す。
                              -- consumes(session, requested) は送れたコメントをキューから消すか（既定 false）
 core.sinks(cb)               -- sink list と登録済みの Lua sink（runtime = "lua"）をマージ。同名は Lua を優先

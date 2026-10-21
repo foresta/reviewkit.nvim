@@ -112,7 +112,10 @@ pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
     if args.dry_run {
         let session = store.load_with_queued(&session_id)?;
         let preview = sink.preview(ctx, &session, &opts)?;
-        return Response::new(serde_json::json!({ "preview": preview }));
+        // The client renders comment text from its own copy of the session,
+        // which may trail the one this preview (and its digest) was made from.
+        let stored = store.load(&session_id)?;
+        return Response::with_session(serde_json::json!({ "preview": preview }), &stored);
     }
     let (session, result) = sink.submit(ctx, &store, &session_id, &opts)?;
     Response::with_session(result, &session)

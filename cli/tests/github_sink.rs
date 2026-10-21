@@ -183,7 +183,12 @@ fn dry_run_returns_the_plan_and_sends_nothing() {
     assert_eq!(preview["comment_ids"].as_array().unwrap().len(), 1);
     assert_eq!(preview["mode"], "sent");
     assert!(mutation_calls(&gh).is_empty());
-    assert!(body.get("session").is_none());
+    assert_eq!(
+        body["session"]["comments"].as_array().unwrap().len(),
+        1,
+        "the stored session comes along, unchanged"
+    );
+    assert_eq!(body["session"]["rev"], 2);
 }
 
 #[test]
@@ -1990,7 +1995,7 @@ fn every_gh_call_names_its_host_whatever_gh_host_says() {
     );
     assert_eq!(sent["ok"], true, "{sent}");
     let calls = gh.calls();
-    let mut checked = 0;
+    let (mut views, mut apis) = (0, 0);
     for call in &calls {
         let args: Vec<&str> = call["args"]
             .as_array()
@@ -2002,17 +2007,18 @@ fn every_gh_call_names_its_host_whatever_gh_host_says() {
             Some(&"pr") => {
                 let repo = args.iter().position(|a| *a == "--repo").map(|i| args[i + 1]);
                 assert_eq!(repo, Some("github.com/o/r"), "{args:?}");
-                checked += 1;
+                views += 1;
             }
             Some(&"api") => {
                 let host = args.iter().position(|a| *a == "--hostname").map(|i| args[i + 1]);
                 assert_eq!(host, Some("github.com"), "{args:?}");
-                checked += 1;
+                apis += 1;
             }
             _ => {}
         }
     }
-    assert!(checked >= 3, "{calls:?}");
+    assert!(views >= 1, "the PR was looked up: {calls:?}");
+    assert!(apis >= 2, "details were read and the review posted: {calls:?}");
 }
 
 #[test]
@@ -2132,4 +2138,45 @@ fn a_pr_comment_an_agent_consumed_can_still_be_restored_for_github() {
             .unwrap(),
     );
     assert_eq!(restored["session"]["comments"][0]["id"], cid, "{restored}");
+}
+
+#[test]
+fn a_token_that_cannot_read_the_viewer_still_reconciles_by_marker() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let posted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "app token"}),
+    );
+    interrupt_next_submit(&gh);
+    submit_github(&state, &remote, &gh, &id);
+    let landed = mutation_calls(&gh)[0]["variables"]["threads"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    github_shows(
+        &gh,
+        "",
+        serde_json::json!([posted_thread("keep.txt", 3, "app", &landed)]),
+        serde_json::json!([]),
+    );
+    let path = gh.dir.path().join("responses.json");
+    let mut rules: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for rule in rules.iter_mut() {
+        if rule["body"]["data"]["repository"]["pullRequest"]["reviewThreads"].is_object() {
+            rule["body"]["data"]["viewer"] = serde_json::Value::Null;
+            rule["body"]["errors"] = serde_json::json!([
+                { "path": ["viewer"], "type": "FORBIDDEN", "message": "Resource not accessible by integration" }
+            ]);
+        }
+    }
+    std::fs::write(&path, serde_json::Value::Array(rules).to_string()).unwrap();
+    let body = submit_github(&state, &remote, &gh, &id);
+    assert_eq!(body["data"]["sent"][0]["comment_id"], posted, "{body}");
+    assert_eq!(mutation_calls(&gh).len(), 1);
 }
