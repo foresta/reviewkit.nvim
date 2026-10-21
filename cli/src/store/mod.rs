@@ -236,8 +236,11 @@ impl Store {
         let created = !dir.exists();
         std::fs::create_dir_all(&dir)?;
         let result = self.with_lock(id, || {
+            let mut drained = Vec::new();
             let mut session = if self.exists(id) {
-                self.load_for_write(id)?
+                let mut session = self.load_for_write(id)?;
+                drained = self.drain_applies(&mut session, true);
+                session
             } else {
                 let mut session = init()?;
                 if session.id != id {
@@ -251,6 +254,7 @@ impl Store {
             };
             let value = apply(&mut session)?;
             self.commit(&mut session)?;
+            remove_applied(&drained);
             self.mark_pending(&mut session);
             Ok((session, value))
         });
@@ -314,6 +318,26 @@ impl Store {
                 err
             }
         })
+    }
+
+    /// `with_fetch_lock` for a session that may not exist yet: its directory
+    /// has to be there before the lock file can be. A first open that fails
+    /// before its first save takes the directory away again.
+    pub fn with_new_fetch_lock<T>(&self, id: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        let dir = self.dir.session_dir(id)?;
+        let created = !dir.exists();
+        std::fs::create_dir_all(&dir)?;
+        let result = lock_while(
+            &self.dir.fetch_lock_file(id)?,
+            FETCH_LOCK_TIMEOUT,
+            &format!("session {id}"),
+            f,
+        );
+        if result.is_err() && created && !self.exists(id) {
+            let _ = std::fs::remove_dir_all(&dir);
+            self.remove_empty_parents(&dir);
+        }
+        result
     }
 
     /// Serializes slow work on one session (fetching a pull request) without
@@ -932,6 +956,33 @@ mod tests {
             .unwrap();
         assert_eq!(second.rev, 2);
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn open_or_create_records_queued_results_when_it_resumes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store(&dir);
+        store.create(session("local/abc/x")).unwrap();
+        let result: SinkResult = serde_json::from_value(serde_json::json!({
+            "sink": "slack", "at": "2026-01-01T00:00:00Z",
+            "sent": [], "failed": [], "skipped": [], "decision": "not_applicable"
+        }))
+        .unwrap();
+        store
+            .queue_apply(
+                "local/abc/x",
+                &QueuedApply {
+                    revision: SCHEMA_REVISION,
+                    consume: true,
+                    result,
+                },
+            )
+            .unwrap();
+        let (resumed, ()) = store
+            .open_or_create("local/abc/x", || panic!("exists"), |_| Ok(()))
+            .unwrap();
+        assert_eq!(resumed.last_submit.map(|last| last.sink), Some("slack".to_string()));
+        assert!(!resumed.pending_apply);
     }
 
     #[test]
