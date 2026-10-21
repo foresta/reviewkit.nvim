@@ -828,3 +828,55 @@ fn an_untracked_symlink_to_a_file_reads_as_that_file_everywhere() {
         serde_json::json!(["c"])
     );
 }
+
+#[test]
+fn a_two_dot_base_with_a_head_as_well_is_refused() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let out = reviewkit(&state, &repo)
+        .args(["session", "open", "--local", "--base", "HEAD~1..HEAD", "--head", "HEAD"])
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(body["error"]["code"], "E_INVALID");
+}
+
+#[test]
+fn a_large_file_deleted_or_only_large_at_the_head_commit_is_too_large() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let big = "line\n".repeat(300_000);
+    repo.write("big.txt", &big);
+    repo.git(&["add", "big.txt"]);
+    repo.git(&["commit", "-q", "-m", "big"]);
+    std::fs::remove_file(repo.path().join("big.txt")).unwrap();
+    let deleted = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        target(&deleted["session"], "big.txt")["too_large"],
+        true,
+        "a large deleted base"
+    );
+
+    let state = tempfile::tempdir().unwrap();
+    let commits = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD~1", "--head", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let id = commits["session"]["id"].as_str().unwrap().to_string();
+    assert_eq!(target(&commits["session"], "big.txt")["too_large"], true);
+    let head = json(
+        &reviewkit(&state, &repo)
+            .args(["file", "head", "--session", &id, "--path", "big.txt"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(head["data"]["too_large"], true);
+    assert!(head["data"]["lines"].is_null());
+}

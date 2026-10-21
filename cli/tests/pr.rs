@@ -767,3 +767,54 @@ fn a_closed_pull_request_whose_base_commit_is_gone_falls_back_to_the_branch() {
     );
     assert_eq!(body["session"]["base"]["sha"], remote.base_sha, "{body}");
 }
+
+#[test]
+fn a_mirror_left_with_promisor_packs_is_rebuilt() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let elsewhere = tempfile::tempdir().unwrap();
+    let open = || {
+        json(
+            &reviewkit_at(&state, &remote, &gh)
+                .arg("--cwd")
+                .arg(elsewhere.path())
+                .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+                .output()
+                .unwrap(),
+        )
+    };
+    open();
+    let pack = state.path().join("repos/github.com/o/r/mirror.git/objects/pack");
+    std::fs::create_dir_all(&pack).unwrap();
+    std::fs::write(pack.join("pack-left.promisor"), "").unwrap();
+    let body = open();
+    assert_eq!(body["session"]["base"]["sha"], remote.base_sha, "{body}");
+    assert!(!pack.join("pack-left.promisor").exists());
+}
+
+#[test]
+fn a_checkout_marked_only_by_a_promisor_remote_does_not_seed_the_mirror() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    git_in(remote.clone.path(), &["config", "remote.origin.promisor", "yes"]);
+    remote.clone.write("local-only.txt", "x\n");
+    git_in(remote.clone.path(), &["add", "local-only.txt"]);
+    git_in(remote.clone.path(), &["commit", "-q", "-m", "local only"]);
+    json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["session", "open", "--pr", "7"])
+            .output()
+            .unwrap(),
+    );
+    let mirror = state.path().join("repos/github.com/o/r/mirror.git");
+    let local_only = git_in(remote.clone.path(), &["rev-parse", "HEAD"]);
+    let seeded = std::process::Command::new(common::real_git())
+        .args(["cat-file", "-e", &format!("{local_only}^{{commit}}")])
+        .current_dir(&mirror)
+        .status()
+        .unwrap()
+        .success();
+    assert!(!seeded, "a promisor checkout is not copied into the mirror");
+}

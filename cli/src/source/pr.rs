@@ -311,23 +311,21 @@ fn materialize_locked(
             )
         };
         let branch = format!("refs/heads/{}", meta.base_ref);
-        // A closed PR's base branch is often deleted (stacked PRs) and only
-        // its recorded commit is needed; that commit may in turn be gone
-        // after a force-push, and the branch is the fallback.
-        let fetched = if meta.state == PrState::Open {
-            fetch(&branch)
-        } else {
-            match fetch(&meta.base_oid) {
-                Err(err) if err.code != ErrorCode::EAuth => {
-                    log::warn!(
-                        "fetching base {} failed, using {branch}: {}",
-                        meta.base_oid,
-                        err.message
-                    );
-                    fetch(&branch)
-                }
-                other => other,
+        // GitHub's recorded base commit first: a merged PR's branch is often
+        // deleted (stacked PRs), and an open PR's may be deleted before
+        // GitHub retargets it. The commit may in turn be gone after a
+        // force-push; only then is the branch worth a second fetch (a network
+        // failure would just fail twice).
+        let fetched = match fetch(&meta.base_oid) {
+            Err(err) if missing_on_remote(&err.message) => {
+                log::warn!(
+                    "fetching base {} failed, using {branch}: {}",
+                    meta.base_oid,
+                    err.message
+                );
+                fetch(&branch)
             }
+            other => other,
         };
         fetched.map_err(|err| {
             let message = format!("cannot fetch pull request #{}: {}", meta.number, err.message);
@@ -356,6 +354,17 @@ fn materialize_locked(
         .pr_worktree(&repo_ref.host, &repo_ref.owner, &repo_ref.name, meta.number);
     mirror.worktree_checkout(&worktree, &head)?;
     Ok(Checkout { worktree, head, base })
+}
+
+fn missing_on_remote(message: &str) -> bool {
+    [
+        "not our ref",
+        "unadvertised object",
+        "couldn't find remote ref",
+        "no such remote ref",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
 }
 
 fn incomplete_mirror(dir: &std::path::Path) -> bool {
@@ -441,5 +450,27 @@ pub fn purge(session: &Session, git: &dyn Git, state: &StateDir) {
             }
             Ok(())
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_missing_object_or_ref_sends_the_base_fetch_to_the_branch() {
+        for gone in [
+            "error: Server does not allow request for unadvertised object 1111",
+            "fatal: remote error: upload-pack: not our ref 1111",
+            "fatal: couldn't find remote ref refs/heads/main",
+        ] {
+            assert!(missing_on_remote(gone), "{gone}");
+        }
+        for failed in [
+            "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com",
+            "fatal: Could not read from remote repository.",
+        ] {
+            assert!(!missing_on_remote(failed), "{failed}");
+        }
     }
 }
