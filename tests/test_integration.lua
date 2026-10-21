@@ -159,21 +159,29 @@ T["real binary: a queued comment does not make the worktree watcher refresh by i
   ]]):format(bin, helpers.fake_dir(), repo))
   child.cmd("Review diff HEAD")
   assert(child.lua_get("vim.wait(30000, function() return require('reviewkit.core').session() ~= nil end, 20)"))
+  assert(child.lua_get("vim.wait(30000, function() return require('reviewkit.orchestrator')._watching() > 0 end, 20)"))
+  -- No event marks "the watcher has nothing more to say", so quiet is
+  -- measured: longer than the refresh debounce (300 ms) plus the delivery of
+  -- a file event, before and after the comment. A watcher that re-fired on
+  -- its own writes would never go quiet the first time.
+  local quiet = [[
+    (function()
+      local last, since = -1, vim.uv.now()
+      return vim.wait(30000, function()
+        if _G.refreshes ~= last then
+          last, since = _G.refreshes, vim.uv.now()
+        end
+        return vim.uv.now() - since > 1000
+      end, 50)
+    end)()
+  ]]
+  assert(child.lua_get(quiet), "the watcher never went quiet")
+  child.lua("_G.refreshes = 0")
   child.lua(
     "require('reviewkit.core').add_comment({ path = 'f.txt', side = 'head', line = 2, body = 'b' }, function() _G.added = true end)"
   )
   assert(child.lua_get("vim.wait(30000, function() return _G.added end, 20)"))
-  child.lua([[
-    local last, stable_since = -1, vim.uv.now()
-    vim.wait(30000, function()
-      if _G.refreshes ~= last then
-        last, stable_since = _G.refreshes, vim.uv.now()
-      end
-      return vim.uv.now() - stable_since > 1000
-    end, 50)
-  ]])
-  child.lua("_G.refreshes = 0")
-  child.lua("vim.wait(3000)")
+  assert(child.lua_get(quiet), "the watcher never went quiet")
   eq(child.lua_get("_G.refreshes"), 0)
   child.stop()
 end

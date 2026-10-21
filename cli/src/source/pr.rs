@@ -36,10 +36,11 @@ pub fn repo_ref_of(repo: &Repository<'_>) -> Result<RepoRef> {
 /// gh cannot tell an SSH config alias (`Host work`, `Host github.com-work`)
 /// from a real host, and neither can reviewkit: a dotless name is often a
 /// GitHub Enterprise host. So the host is tried as is, and only a gh failure
-/// on it points at the alias.
+/// to reach or log into it points at the alias; an answer from the host
+/// (a missing PR, a rejected token) says the host is real.
 pub fn hint_remote_host(err: Error, host: &str) -> Error {
     let from_gh = err.tool.as_deref() == Some("gh") && matches!(err.code, ErrorCode::EAuth | ErrorCode::ETool);
-    if !from_gh || host == "github.com" {
+    if !from_gh || host == "github.com" || !names_an_unreachable_host(&err.message) {
         return err;
     }
     let alias = "the remote's host may be an SSH alias; pass the pull request URL instead";
@@ -48,6 +49,23 @@ pub fn hint_remote_host(err: Error, host: &str) -> Error {
         None => alias.to_string(),
     };
     err.hint(hint)
+}
+
+/// gh's wording; the message carries its stderr.
+fn names_an_unreachable_host(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "error connecting to",
+        "could not resolve host",
+        "no such host",
+        "connection refused",
+        "dial tcp",
+        "not logged into",
+        "unknown host",
+        "none of the git remotes",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
 }
 
 pub struct PrSource<'a> {
@@ -466,6 +484,18 @@ pub fn purge(session: &Session, git: &dyn Git, state: &StateDir) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rejected_token_on_a_real_host_gets_no_alias_hint() {
+        let err = Error::tool(
+            "gh",
+            ErrorCode::EAuth,
+            "gh api graphql failed: HTTP 401: Bad credentials (https://ghe/api/graphql)\nTry authenticating with:  gh auth login",
+        );
+        assert_eq!(super::hint_remote_host(err, "ghe").hint, None);
+        let unreachable = Error::tool("gh", ErrorCode::ETool, "error connecting to ghe");
+        assert!(super::hint_remote_host(unreachable, "ghe").hint.is_some());
+    }
 
     #[test]
     fn only_a_missing_object_or_ref_sends_the_base_fetch_to_the_branch() {

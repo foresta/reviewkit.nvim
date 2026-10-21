@@ -533,11 +533,58 @@ fn is_marker(line: &str) -> bool {
 /// `marker` makes is ours.
 pub fn strip_markers(body: &str) -> String {
     let lines: Vec<&str> = body.split_inclusive('\n').collect();
-    if !lines.iter().any(|l| is_marker(l)) {
+    let fenced = fenced_lines(&lines);
+    let ours = |i: usize, l: &str| !fenced[i] && is_marker(l);
+    if !lines.iter().enumerate().any(|(i, l)| ours(i, l)) {
         return body.to_string();
     }
-    let kept: String = lines.into_iter().filter(|l| !is_marker(l)).collect();
+    let kept: String = lines
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| !ours(*i, l))
+        .map(|(_, l)| *l)
+        .collect();
     kept.trim_end().to_string()
+}
+
+/// A code block shows a marker as text (a body explaining reviewkit, say).
+/// A fence left open is not counted: our line is appended after the body,
+/// so a body ending in an open fence would otherwise keep it forever.
+fn fenced_lines(lines: &[&str]) -> Vec<bool> {
+    let mut fenced = vec![false; lines.len()];
+    let mut open: Option<(usize, char, usize)> = None;
+    for (i, line) in lines.iter().enumerate() {
+        let fence = fence_of(line);
+        match (open, fence) {
+            (None, Some((ch, len, _))) => open = Some((i, ch, len)),
+            (Some((start, ch, len)), Some((c, l, bare))) if c == ch && l >= len && bare => {
+                fenced[start..=i].iter_mut().for_each(|f| *f = true);
+                open = None;
+            }
+            _ => {}
+        }
+    }
+    fenced
+}
+
+/// The fence character, its run length, and whether nothing follows it.
+fn fence_of(line: &str) -> Option<(char, usize, bool)> {
+    let line = line.trim_end_matches(['\n', '\r']);
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    if indent > 3 {
+        return None;
+    }
+    let rest = &line[indent..];
+    let ch = rest.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let len = rest.chars().take_while(|c| *c == ch).count();
+    if len < 3 {
+        return None;
+    }
+    let after = &rest[len..];
+    if ch == '`' && after.contains('`') {
+        return None;
+    }
+    Some((ch, len, after.trim().is_empty()))
 }
 
 impl PrDetails {
@@ -776,6 +823,21 @@ mod tests {
             "unmarked bodies are left alone"
         );
         assert_eq!(strip_markers(&m), "");
+    }
+
+    #[test]
+    fn a_marker_line_inside_a_code_block_is_text_not_a_marker() {
+        let m = marker("k");
+        let shown = format!("see:\n```\n{m}\n```\n~~~~\n```\n{m}\n~~~~");
+        assert_eq!(strip_markers(&shown), shown);
+        let posted = with_marker(&shown, &m);
+        assert_eq!(strip_markers(&posted), shown, "the post's own line still goes");
+        let unclosed = with_marker("```\ncode", &m);
+        assert_eq!(
+            strip_markers(&unclosed),
+            "```\ncode",
+            "an unclosed fence does not hide our line"
+        );
     }
 
     #[test]

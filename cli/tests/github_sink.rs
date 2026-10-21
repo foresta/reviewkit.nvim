@@ -1090,6 +1090,87 @@ fn a_comment_written_into_an_interrupted_review_body_is_not_sent_again() {
 }
 
 #[test]
+fn a_review_body_suggestion_posted_with_the_old_three_backtick_fence_is_not_sent_again() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let outside = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 7, "body": "far away", "suggestion": "```rust\nx\n```"}),
+    );
+    let old_text = "far away\n\nSuggested replacement:\n```\n```rust\nx\n```\n```";
+    let review_body = format!("{old_text}\n");
+    pending(
+        &state,
+        serde_json::json!({
+            "at": "2026-01-01T00:00:00Z",
+            "comments": [],
+            "event": "COMMENT",
+            "decision_body": "",
+            "review_body": review_body,
+            "body_comments": [ { "id": outside, "text": old_text } ]
+        }),
+    );
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([]),
+        serde_json::json!([
+            { "state": "COMMENTED", "body": review_body, "submittedAt": "2026-01-01T00:00:01Z", "url": "r", "author": {"login": "me"} }
+        ]),
+    );
+    let body = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github"])
+            .output()
+            .unwrap(),
+    );
+    assert!(mutation_calls(&gh).is_empty(), "nothing is posted twice: {body}");
+    assert_eq!(body["data"]["sent"][0]["comment_id"], outside.as_str(), "{body}");
+}
+
+#[test]
+fn an_inline_suggestion_after_a_code_block_posted_with_the_old_fence_is_not_sent_again() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let text = "see:\n```\nold()\n```";
+    let posted = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": text, "suggestion": "```rust\nx\n```"}),
+    );
+    let old_body = format!("{text}\n\n```suggestion\n```rust\nx\n```\n```");
+    pending(
+        &state,
+        serde_json::json!({ "at": "2026-01-01T00:00:00Z", "comments": [
+            { "id": posted, "path": "keep.txt", "side": "head", "line": 3, "body": old_body }
+        ] }),
+    );
+    github_shows(
+        &gh,
+        "me",
+        serde_json::json!([posted_thread("keep.txt", 3, "me", &old_body.replace('\n', "\r\n"))]),
+        serde_json::json!([]),
+    );
+    let body = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["submit", "--session", &id, "--sink", "github"])
+            .output()
+            .unwrap(),
+    );
+    assert!(mutation_calls(&gh).is_empty(), "nothing is posted twice: {body}");
+    assert_eq!(body["data"]["sent"][0]["comment_id"], posted, "{body}");
+}
+
+#[test]
 fn an_interrupted_submit_is_not_reconciled_from_a_partial_answer() {
     let state = tempfile::tempdir().unwrap();
     let remote = Remote::new();
@@ -2335,6 +2416,25 @@ fn prepend_rule(gh: &FakeGh, rule: serde_json::Value) {
     .unwrap();
 }
 
+/// Whether process `pid` holds `path` open: the only sign, without a seam in
+/// the binary, that it has moved past a step that does not touch gh.
+fn has_open(pid: u32, path: &std::path::Path) -> bool {
+    let want = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) {
+        return fds
+            .flatten()
+            .any(|fd| std::fs::read_link(fd.path()).is_ok_and(|target| target == want));
+    }
+    let out = std::process::Command::new("lsof")
+        .args(["-a", "-p", &pid.to_string(), "-Fn"])
+        .output()
+        .expect("lsof is needed where /proc is missing");
+    String::from_utf8_lossy(&out.stdout).lines().any(|l| {
+        l.strip_prefix('n')
+            .is_some_and(|name| std::path::Path::new(name) == want)
+    })
+}
+
 fn spawn_reviewkit(state: &tempfile::TempDir, remote: &Remote, gh: &FakeGh, args: &[&str]) -> std::process::Child {
     std::process::Command::new(assert_cmd::cargo::cargo_bin("reviewkit"))
         .envs(
@@ -2573,9 +2673,17 @@ fn a_record_left_by_a_submit_that_ran_in_between_stops_the_send_and_is_named() {
         .unwrap();
     let mut lock = fd_lock::RwLock::new(lock);
     let guard = lock.write().unwrap();
+    let lock_path = state.path().join("sessions/pr/github.com/o/r/7/session.lock");
     let submit = spawn_reviewkit(&state, &remote, &gh, &["submit", "--session", &id, "--sink", "github"]);
-    // Past its look for a record, waiting for the lock.
-    std::thread::sleep(std::time::Duration::from_millis(700));
+    // The send opens the lock file only after its first look for a record.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !has_open(submit.id(), &lock_path) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the submit never reached the lock"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     pending(
         &state,
         serde_json::json!({ "at": "2026-01-01T00:00:00Z", "marked": true, "comments": [] }),

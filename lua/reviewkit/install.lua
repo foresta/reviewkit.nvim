@@ -284,6 +284,26 @@ local function download(ctx, cb)
   end)
 end
 
+---@param stdout string cargo's `--message-format=json` output
+---@return string?
+function M.built_executable(stdout)
+  local found
+  for line in vim.gsplit(stdout, "\n", { plain = true }) do
+    local ok, msg = pcall(vim.json.decode, line)
+    if
+      ok
+      and type(msg) == "table"
+      and msg.reason == "compiler-artifact"
+      and type(msg.target) == "table"
+      and msg.target.name == "reviewkit"
+      and type(msg.executable) == "string"
+    then
+      found = msg.executable
+    end
+  end
+  return found
+end
+
 ---@param ctx table
 ---@param cb fun(result: reviewkit.InstallResult?, err: string?)
 local function build(ctx, cb)
@@ -303,12 +323,15 @@ local function build(ctx, cb)
     ctx.root .. "/cli/Cargo.toml",
     "--target-dir",
     ctx.root .. "/target",
+    -- The path is read from cargo rather than assumed: a user's
+    -- `build.target` puts the binary under target/<triple>/ instead.
+    "--message-format=json-render-diagnostics",
   }
   ctx.exec(cmd, function(res)
     if res.code ~= 0 then
       return cb(nil, "cargo build failed:\n" .. (res.stderr or ""))
     end
-    local built = ctx.root .. "/target/release/reviewkit"
+    local built = M.built_executable(res.stdout or "") or (ctx.root .. "/target/release/reviewkit")
     if vim.fn.executable(built) ~= 1 then
       return cb(nil, "cargo build succeeded but " .. built .. " is missing")
     end

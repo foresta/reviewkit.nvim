@@ -33,16 +33,11 @@ test: test-rust test-lua test-integration
 test-rust:
 	cargo test --workspace --locked
 
-# The tests run git, directly and through the CLI; the developer's global
-# and system config (commit signing, hooks) must not reach it, as in the
-# Rust tests.
-ISOLATED_GIT = GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-
 test-lua: deps
-	$(ISOLATED_GIT) $(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua
+	$(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua
 
 test-integration: deps debug-bin
-	$(ISOLATED_GIT) REVIEWKIT_REAL_BIN=$(CURDIR)/$(DEBUG_BIN) $(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua $(INTEGRATION_TESTS)
+	REVIEWKIT_REAL_BIN=$(CURDIR)/$(DEBUG_BIN) $(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua $(INTEGRATION_TESTS)
 
 debug-bin:
 	cargo build --locked
@@ -69,7 +64,7 @@ gen-types: debug-bin
 	$(NVIM) -l scripts/gen-types.lua --bin $(DEBUG_BIN)
 
 gen-schema:
-	REVIEWKIT_UPDATE_SCHEMA=1 cargo test --test schema
+	REVIEWKIT_UPDATE_SCHEMA=1 cargo test --locked --test schema
 
 TARGET ?= $(shell rustc -vV | sed -n 's/^host: //p')
 

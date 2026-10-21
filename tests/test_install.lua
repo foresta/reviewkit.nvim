@@ -49,16 +49,32 @@ local function checkout(version)
   )
 end
 
-local function fake_cargo(version, schema)
+--- Like cargo: the binary lands under target/<triple>/ when a build target
+--- is configured, and the artifact line names where.
+local function fake_cargo(version, schema, triple)
+  local out = root .. "/target/" .. (triple and (triple .. "/") or "") .. "release"
   write(fakebin .. "/cargo", {
     "#!/bin/sh",
     'echo "$@" > "' .. fakebin .. '/cargo.args"',
-    'mkdir -p "' .. root .. '/target/release"',
-    'cat > "' .. root .. "/target/release/reviewkit\" <<'BIN'",
+    'mkdir -p "' .. out .. '"',
+    'cat > "' .. out .. "/reviewkit\" <<'BIN'",
     binary(version, schema)[1],
     binary(version, schema)[2],
     "BIN",
-    'chmod +x "' .. root .. '/target/release/reviewkit"',
+    'chmod +x "' .. out .. '/reviewkit"',
+    "cat <<'JSON'",
+    vim.json.encode({
+      reason = "compiler-artifact",
+      target = { name = "reviewkit", kind = { "lib" } },
+      executable = vim.NIL,
+    }),
+    vim.json.encode({
+      reason = "compiler-artifact",
+      target = { name = "reviewkit", kind = { "bin" } },
+      executable = out .. "/reviewkit",
+    }),
+    vim.json.encode({ reason = "build-finished", success = true }),
+    "JSON",
   }, true)
   return fakebin .. "/cargo"
 end
@@ -174,13 +190,27 @@ T["install"]["an unreleased checkout builds first, and without cargo takes the l
   eq(built.source, "build")
   vim.fn.delete(root .. "/bin/reviewkit")
   vim.fn.delete(fakebin .. "/cargo")
-  local downloaded = require("reviewkit.install").ensure(opts({ cargo = fakebin .. "/cargo" }))
+  -- The warning is only for the real latest release, so its URL is kept and
+  -- a fake curl answers it from the local release.
+  write(fakebin .. "/curl", {
+    "#!/bin/sh",
+    'while [ $# -gt 1 ]; do [ "$1" = -o ] && { shift; out=$1; }; shift; done',
+    'echo "$1" >> "' .. fakebin .. '/curl.urls"',
+    'cp "' .. release .. '/$(basename "$1")" "$out"',
+  }, true)
+  local o = opts({ cargo = fakebin .. "/cargo", curl = fakebin .. "/curl" })
+  o.base_url = nil
+  local downloaded = require("reviewkit.install").ensure(o)
   eq(downloaded.source, "download")
   eq(installed(), "1.2.3")
+  eq(
+    vim.fn.readfile(fakebin .. "/curl.urls")[1],
+    "https://github.com/foresta/reviewkit.nvim/releases/latest/download/SHA256SUMS"
+  )
   local warned = vim.tbl_filter(function(m)
     return m:find("may lack newer features", 1, true) ~= nil
   end, logs)
-  eq(#warned, 0)
+  eq(#warned, 1)
 end
 
 T["install"]["an unreleased checkout rebuilds even when the binary claims the same -dev version"] = function()
@@ -201,6 +231,15 @@ T["install"]["the asset for this machine is named by target(), and `*` marked su
   local result, err = install.ensure(opts({ real_target = true }))
   eq(err, nil)
   eq(result.source, "download")
+end
+
+T["install"]["a cargo configured with a build target still installs what it built"] = function()
+  checkout("1.2.3")
+  local result, err =
+    require("reviewkit.install").ensure(opts({ cargo = fake_cargo("1.2.3", 1, "x86_64-unknown-linux-gnu") }))
+  eq(err, nil)
+  eq(result.source, "build")
+  eq(installed(), "1.2.3")
 end
 
 T["install"]["cargo is told where to put the binary"] = function()

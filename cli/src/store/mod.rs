@@ -653,6 +653,26 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     tmp.as_file().sync_all()?;
     tmp.persist(path)
         .map_err(|err| Error::internal(format!("cannot replace {}: {}", path.display(), err.error)))?;
+    // The file is already replaced; failing now would make the caller retry
+    // a write that happened. Some file systems refuse to sync a directory.
+    if let Err(err) = sync_dir(dir) {
+        log::warn!("cannot sync {}: {}", dir.display(), err.message);
+    }
+    Ok(())
+}
+
+/// The rename lives in the directory entry; until that is on disk a power
+/// loss can bring back the old file or none, which for the pending submit
+/// record means posting again what already reached GitHub.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> Result<()> {
+    File::open(dir)?.sync_all()?;
+    Ok(())
+}
+
+/// Windows cannot open a directory as a file to flush it.
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> Result<()> {
     Ok(())
 }
 

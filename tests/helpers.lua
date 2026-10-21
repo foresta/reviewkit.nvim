@@ -131,6 +131,63 @@ function M.child(dir)
   return child
 end
 
+--- Counts CLI runs in the child by kind ("--drain", "session get", else the
+--- argv), as started and as finished: `finished` moves only after the
+--- caller's callback has returned, so whatever that callback set off has
+--- already started. Timers set inside a callback land in `_G.deferred`.
+---@param child table
+function M.track(child)
+  child.lua([[
+    _G.started, _G.finished, _G.deferred = {}, {}, {}
+    local inside = {}
+    local cli = require("reviewkit.cli")
+    local run = cli.run
+    local function kind(args)
+      local joined = table.concat(args, " ")
+      for _, k in ipairs({ "--drain", "session get" }) do
+        if joined:find(k, 1, true) then
+          return k
+        end
+      end
+      return joined
+    end
+    cli.run = function(args, opts, cb)
+      local k = kind(args)
+      _G.started[k] = (_G.started[k] or 0) + 1
+      return run(args, opts, function(...)
+        table.insert(inside, k)
+        cb(...)
+        table.remove(inside)
+        _G.finished[k] = (_G.finished[k] or 0) + 1
+      end)
+    end
+    local defer = vim.defer_fn
+    vim.defer_fn = function(fn, ms)
+      if #inside > 0 then
+        table.insert(_G.deferred, { kind = inside[#inside], ms = ms })
+      end
+      return defer(fn, ms)
+    end
+  ]])
+end
+
+---@param child table
+---@param kind string
+---@param n integer
+function M.wait_finished(child, kind, n)
+  local ok = child.lua_get(("vim.wait(20000, function() return (_G.finished[%q] or 0) >= %d end, 10)"):format(kind, n))
+  if not ok then
+    error(("%s never finished %d times"):format(kind, n))
+  end
+end
+
+---@param child table
+---@param kind string
+---@return integer
+function M.started(child, kind)
+  return child.lua_get(("_G.started[%q] or 0"):format(kind))
+end
+
 ---@param child table
 ---@return string[]
 function M.event_names(child)

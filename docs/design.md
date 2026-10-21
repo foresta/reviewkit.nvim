@@ -325,7 +325,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
 ## 5. 状態の所有と並行性
 
 - 保存先は `<state-dir>/sessions/<id>/session.json`。PR の付帯情報（conversation、checks）は同じディレクトリの `pr.json` に分け、
-  Session の封筒を重くしない。変更系は advisory lock → 読む → 適用 → `rev += 1` → temp + rename。
+  Session の封筒を重くしない。変更系は advisory lock → 読む → 適用 → `rev += 1` → temp + rename（rename の後に親ディレクトリも fsync し、電源断で古い版に戻らないようにする）。
   ロックはプロセス終了で解放される。CLI のロック待ちは短く（2 秒）、Lua の `cli.call` が `E_LOCKED` を間隔を空けて数回再試行する。
   PR の open と refresh（gh と git fetch）はロックの外（fetch.lock の中）で取得し、ロックの中では読み直したセッションに当てるだけにする。
   初回の open も同じで、取得が済んでからロックの中でセッションを作る（取得に失敗したら作りかけのディレクトリを消す）。
@@ -386,7 +386,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   （記録しないと履歴から戻して二重に投稿できてしまう）。
   marker は表示（threads、`pr.json`）に出す前に剥がし、照合は剥がす前の本文で行う。剥がすのは reviewkit の形
   （`<!-- reviewkit:` と 16 進 12 桁と ` -->` だけの行）に限り、本文のどこにあっても剥がす（照合が行の位置を問わず marker を
-  探すのと揃える。GitHub で marker の後ろに追記された本文でも剥がれる）。
+  探すのと揃える。GitHub で marker の後ろに追記された本文でも剥がれる）。ただし閉じたコードブロック（```` ``` ```` / `~~~`）の中の
+  行は本文の一部として残す（marker を説明する本文を壊さないため）。閉じていないフェンスは数えない（末尾に付けた自分の marker が残り続けるため）。
   残っている間は Session の `pending_submit` が true（ファイルの有無から毎回求める）で、Lua は開いたときに知らせる。
   記録には review が decision を運んだかも残し、運んでいない review（comment だけの送信）を照合しても decision は消さない
 - 送信の故障時の挙動（送信の経路を変えるときはここを先に直す）:
@@ -414,8 +415,9 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   `auth token` も含め、すべての呼び出し）。色を強制した利用者の環境では、パイプ越しでも JSON に色が付いて読めなくなる
 - `--pr <番号>` で origin から host を読むときはポートを外す（`gh --hostname` はポート付きの host を知らない）。
   host は SSH の host alias（`~/.ssh/config` の別名）かもしれないが、ドットの無い GitHub Enterprise の host と見分けられないので、
-  そのまま gh に渡す。origin から読んだ host（github.com 以外）で gh が失敗したとき（`E_AUTH` / `E_TOOL`）は、
-  hint に「host が SSH alias かもしれない。PR の URL を渡す」を添える
+  そのまま gh に渡す。origin から読んだ host（github.com 以外）で gh が host に届かない・その host に未ログインのとき
+  （`E_AUTH` / `E_TOOL` のうち、gh の stderr が接続・名前解決・未ログインを示すもの）は、
+  hint に「host が SSH alias かもしれない。PR の URL を渡す」を添える。host が応答した失敗（PR が無い、トークンの拒否）には添えない
 
 ## 6. hunk・コメント可能範囲・行ずれ
 
