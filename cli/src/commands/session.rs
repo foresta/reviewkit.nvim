@@ -122,7 +122,7 @@ pub fn refresh(ctx: &Context, git: &SystemGit, store: &Store, id: &str) -> Resul
                 local_repo: Some(&local_repo),
             };
             store.with_fetch_lock(id, || {
-                let current = store.load(id)?;
+                let current = store.load_for_write(id)?;
                 let snapshot = pr::fetch(&current, &src, store, None)?;
                 store.update_if_changed(id, |s| crate::core::refresh::apply(s, snapshot, git))
             })?
@@ -153,6 +153,7 @@ fn open(ctx: &Context, store: &Store, args: OpenArgs) -> Result<Response> {
             }
             Err(err) => return Err(err),
         };
+        let from_remote = repo_ref.is_none();
         let repo_ref = match (repo_ref, &local_repo) {
             (Some(r), _) => r,
             (None, Some(local)) => pr::repo_ref_of(local)?,
@@ -164,7 +165,13 @@ fn open(ctx: &Context, store: &Store, args: OpenArgs) -> Result<Response> {
             state: &ctx.state_dir,
             local_repo: local_repo.as_ref(),
         };
-        pr::open(store, &src, &repo_ref, number)?
+        pr::open(store, &src, &repo_ref, number).map_err(|err| {
+            if from_remote {
+                pr::hint_remote_host(err, &repo_ref.host)
+            } else {
+                err
+            }
+        })?
     } else {
         let repo = Repository::discover(&git, &ctx.cwd)?;
         let base = args.base.unwrap_or_else(|| "HEAD".to_string());

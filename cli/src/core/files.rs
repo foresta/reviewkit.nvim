@@ -1,5 +1,6 @@
 use std::path::{Component, Path};
 
+use crate::core::TOO_LARGE_BYTES;
 use crate::core::comments::SideFile;
 use crate::error::{Error, Result};
 use crate::ext::git::{Git, Repository};
@@ -43,6 +44,13 @@ pub fn check_path(path: &str) -> Result<()> {
 pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &str) -> Result<Option<SideFile>> {
     check_path(path)?;
     let target = session.targets.iter().find(|t| t.path == path);
+    let limit = TOO_LARGE_BYTES as u64;
+    let large = |blob: Option<String>| SideFile {
+        blob,
+        binary: false,
+        too_large: true,
+        lines: Vec::new(),
+    };
     let (bytes, blob) = match (side, session.head.sha.as_deref()) {
         (Side::Base, _) => {
             let git_path = base_git_path(session, path);
@@ -52,6 +60,9 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
             let blob = target
                 .and_then(|t| t.base_blob.clone())
                 .or_else(|| repo.blob_id(&session.base.sha, git_path));
+            if repo.blob_size(&session.base.sha, git_path).is_some_and(|s| s > limit) {
+                return Ok(Some(large(blob)));
+            }
             (repo.read_blob(&session.base.sha, git_path)?, blob)
         }
         (Side::Head, Some(sha)) => {
@@ -61,12 +72,20 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
             let blob = target
                 .and_then(|t| t.head_blob.clone())
                 .or_else(|| repo.blob_id(sha, path));
+            if repo.blob_size(sha, path).is_some_and(|s| s > limit) {
+                return Ok(Some(large(blob)));
+            }
             (repo.read_blob(sha, path)?, blob)
         }
         (Side::Head, None) => {
             let full = session.source.worktree().join(path);
-            if !full.is_file() {
-                return Ok(None);
+            let meta = match std::fs::metadata(&full) {
+                Ok(meta) if meta.is_file() => meta,
+                _ => return Ok(None),
+            };
+            if meta.len() > limit {
+                let blob = target.and_then(|t| t.head_blob.clone());
+                return Ok(Some(large(blob)));
             }
             (std::fs::read(&full)?, repo.hash_object_write(path).ok())
         }
@@ -77,7 +96,12 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
     } else {
         split_lines(&String::from_utf8_lossy(&bytes))
     };
-    Ok(Some(SideFile { blob, binary, lines }))
+    Ok(Some(SideFile {
+        blob,
+        binary,
+        too_large: false,
+        lines,
+    }))
 }
 
 /// Editor line numbers: a trailing newline does not start a line, and CRLF

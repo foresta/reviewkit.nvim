@@ -107,6 +107,7 @@ pub fn reanchor(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
         let empty = SideFile {
             blob: None,
             binary: false,
+            too_large: false,
             lines: vec![],
         };
         let commentable = comments::commentable_on(
@@ -161,7 +162,7 @@ fn follow(
         stale: true,
     };
     let Some(file) = file else { return stale };
-    if file.binary {
+    if file.binary || file.too_large {
         return Followed {
             start,
             line,
@@ -292,6 +293,7 @@ mod tests {
         SideFile {
             blob: blob.map(str::to_string),
             binary,
+            too_large: false,
             lines: lines.iter().map(|l| l.to_string()).collect(),
         }
     }

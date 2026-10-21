@@ -131,6 +131,50 @@ fn reopening_rereads_metadata_and_resume_works() {
 }
 
 #[test]
+fn a_session_that_cannot_be_written_fails_before_the_fetch() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let opened = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+            .output()
+            .unwrap(),
+    );
+    let path = PathBuf::from(opened["session"]["state_path"].as_str().unwrap());
+    let pr_json = path.with_file_name("pr.json");
+    let mut raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    raw["_writer"]["revision"] = serde_json::json!(999);
+    let newer = serde_json::to_vec(&raw).unwrap();
+    let graphql_calls = || {
+        gh.calls()
+            .iter()
+            .filter(|c| c["args"].to_string().contains("graphql"))
+            .count()
+    };
+    for (contents, args) in [
+        (
+            newer.clone(),
+            vec!["session", "refresh", "--session", "pr/github.com/o/r/7"],
+        ),
+        (newer, vec!["session", "open", "--pr", "https://github.com/o/r/pull/7"]),
+        (
+            b"{".to_vec(),
+            vec!["session", "open", "--pr", "https://github.com/o/r/pull/7"],
+        ),
+    ] {
+        std::fs::write(&path, &contents).unwrap();
+        std::fs::remove_file(&pr_json).ok();
+        let before = graphql_calls();
+        let out = reviewkit(&state, &remote, &gh).args(&args).output().unwrap();
+        assert!(!out.status.success(), "{args:?}");
+        assert_eq!(graphql_calls(), before, "{args:?}: nothing is fetched");
+        assert!(!pr_json.exists(), "{args:?}: pr.json is not rewritten");
+        assert_eq!(std::fs::read(&path).unwrap(), contents, "{args:?}");
+    }
+}
+
+#[test]
 fn pr_number_without_a_github_origin_is_invalid_and_merged_prs_use_the_recorded_base() {
     let state = tempfile::tempdir().unwrap();
     let remote = Remote::new();
@@ -158,6 +202,45 @@ fn pr_number_without_a_github_origin_is_invalid_and_merged_prs_use_the_recorded_
     assert_eq!(body["session"]["source"]["state"], "MERGED");
     assert_eq!(body["session"]["base"]["sha"], remote.base_sha);
     assert!(!body["session"]["targets"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn a_dotless_origin_host_reaches_gh_and_a_failure_there_suggests_the_url() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    git_in(remote.clone.path(), &["remote", "set-url", "origin", "git@ghe:o/r.git"]);
+    std::fs::write(
+        gh.dir.path().join("responses.json"),
+        serde_json::json!([{ "match": ["pr view"], "stderr": "error connecting to ghe\n", "exit": 1 }]).to_string(),
+    )
+    .unwrap();
+    let out = reviewkit(&state, &remote, &gh)
+        .args(["session", "open", "--pr", "7"])
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        gh.calls().iter().any(|c| c["args"].to_string().contains("ghe/o/r")),
+        "a dotless host is a host gh may know: {:?}",
+        gh.calls()
+    );
+    assert_eq!(body["error"]["tool"], "gh", "{body}");
+    assert!(
+        body["error"]["hint"].as_str().unwrap_or("").contains("SSH alias"),
+        "{body}"
+    );
+
+    let out = reviewkit(&state, &remote, &gh)
+        .args(["session", "open", "--pr", "https://ghe/o/r/pull/7"])
+        .output()
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(body["error"]["tool"], "gh", "{body}");
+    assert!(
+        !body["error"]["hint"].as_str().unwrap_or("").contains("SSH alias"),
+        "a host from a URL argument is not a remote's: {body}"
+    );
 }
 
 #[test]

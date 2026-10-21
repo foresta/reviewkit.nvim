@@ -498,8 +498,8 @@ impl<'a> Repository<'a> {
 
     /// `ls-tree` rather than `cat-file -s` per file: one git per batch.
     /// `--literal-pathspecs` because a path such as `:x` is pathspec magic
-    /// otherwise; a batch that still fails (a user's GIT_*_PATHSPECS clashes
-    /// with it) is sized per file, since a size not found reads as small.
+    /// otherwise; a batch that still fails is sized per file, since a size
+    /// not found reads as small.
     pub fn blob_sizes(&self, rev: &str, paths: &[String]) -> std::collections::HashMap<String, u64> {
         let mut sizes = std::collections::HashMap::new();
         for chunk in paths.chunks(200) {
@@ -621,10 +621,6 @@ impl<'a> Repository<'a> {
         Ok(Self::at(git, mirror.to_path_buf()))
     }
 
-    pub fn fetch(&self, remote: &str, refspecs: &[String]) -> Result<()> {
-        self.fetch_with(&[], remote, refspecs)
-    }
-
     pub fn fetch_with(&self, config: &[String], remote: &str, refspecs: &[String]) -> Result<()> {
         let mut args: Vec<&str> = config.iter().flat_map(|c| ["-c", c.as_str()]).collect();
         args.extend(["fetch", "--quiet", "--no-tags", remote]);
@@ -672,21 +668,32 @@ impl<'a> Repository<'a> {
 
 /// `https://host/owner/name(.git)`, `ssh://git@host/owner/name` and
 /// `git@host:owner/name(.git)`. Anything else is left unparsed rather than
-/// guessed.
+/// guessed. The port is dropped: gh names a host without one.
 pub fn parse_remote_url(url: &str) -> Option<(Option<String>, Option<String>, Option<String>)> {
-    let rest = if let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) {
-        rest.split_once('/')
-            .map(|(host, path)| (host.split('@').next_back().unwrap_or(host), path))
-    } else if let Some(rest) = url.strip_prefix("ssh://") {
-        let rest = rest.split_once('@').map(|(_, r)| r).unwrap_or(rest);
-        rest.split_once('/')
-    } else {
-        url.split_once('@').and_then(|(_, r)| r.split_once(':'))
-    }?;
-    let (host, path) = rest;
+    let (host, path) = split_remote_url(url)?;
     let path = path.trim_end_matches('/').trim_end_matches(".git");
     let (owner, name) = path.rsplit_once('/')?;
     Some((Some(host.to_string()), Some(owner.to_string()), Some(name.to_string())))
+}
+
+fn split_remote_url(url: &str) -> Option<(&str, &str)> {
+    fn without_user(host: &str) -> &str {
+        host.rsplit('@').next().unwrap_or(host)
+    }
+    fn without_port(host: &str) -> &str {
+        host.split(':').next().unwrap_or(host)
+    }
+    if let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) {
+        let (host, path) = rest.split_once('/')?;
+        Some((without_port(without_user(host)), path))
+    } else if let Some(rest) = url.strip_prefix("ssh://") {
+        let (host, path) = rest.split_once('/')?;
+        Some((without_port(without_user(host)), path))
+    } else {
+        let (_, rest) = url.split_once('@')?;
+        let (host, path) = rest.split_once(':')?;
+        Some((host, path))
+    }
 }
 
 /// `:<old mode> <new mode> <old sha> <new sha> <status>[score]\0<path>\0`
@@ -845,6 +852,24 @@ mod tests {
         assert_eq!(parse_remote_url("git@github.com:foresta/reviewkit.nvim.git"), expect);
         assert_eq!(parse_remote_url("ssh://git@github.com/foresta/reviewkit.nvim"), expect);
         assert_eq!(parse_remote_url("/local/path"), None);
+    }
+
+    #[test]
+    fn a_port_is_not_part_of_the_host() {
+        let ghe = |url: &str| parse_remote_url(url).and_then(|(host, _, _)| host);
+        assert_eq!(
+            ghe("ssh://git@ghe.example.com:2222/o/r.git").as_deref(),
+            Some("ghe.example.com")
+        );
+        assert_eq!(
+            ghe("https://ghe.example.com:8443/o/r.git").as_deref(),
+            Some("ghe.example.com")
+        );
+        assert_eq!(
+            ghe("https://user@ghe.example.com:8443/o/r").as_deref(),
+            Some("ghe.example.com")
+        );
+        assert_eq!(ghe("git@ghe:o/r.git").as_deref(), Some("ghe"), "a dotless host is kept");
     }
 
     #[test]

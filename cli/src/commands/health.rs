@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use crate::context::Context;
 use crate::envelope::Response;
@@ -7,7 +7,14 @@ use crate::error::Result;
 use crate::model::health::{HealthInfo, StateDirStatus, ToolStatus, ToolsStatus};
 
 pub fn run(ctx: &Context) -> Result<Response> {
-    let gh = tool_status(ctx.tools.gh.as_deref());
+    let gh = ToolStatus {
+        path: ctx.tools.gh.clone(),
+        version: ctx
+            .tools
+            .gh
+            .as_deref()
+            .and_then(|path| crate::ext::tool::version_of(crate::ext::gh::command(path))),
+    };
     let gh_auth = ctx
         .tools
         .gh
@@ -40,7 +47,7 @@ fn tool_status(path: Option<&Path>) -> ToolStatus {
 /// default host (GH_HOST, else github.com): health has no session, so it
 /// cannot know which host a review will use.
 fn gh_authenticated(gh: &Path) -> bool {
-    Command::new(gh)
+    crate::ext::gh::command(gh)
         .args(["auth", "token"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

@@ -49,6 +49,10 @@ enum Envelope<'a> {
 }
 
 pub fn emit(result: Result<Response>) -> ExitCode {
+    ExitCode::from(emit_to(&mut std::io::stdout().lock(), result))
+}
+
+fn emit_to(out: &mut impl Write, result: Result<Response>) -> u8 {
     let (body, code) = match &result {
         Ok(response) => (Envelope::Ok { ok: true, response }, 0),
         Err(error) => (Envelope::Err { ok: false, error }, error.code.exit_code()),
@@ -62,10 +66,19 @@ pub fn emit(result: Result<Response>) -> ExitCode {
         })
         .expect("static envelope")
     });
-    let mut stdout = std::io::stdout().lock();
-    let _ = writeln!(stdout, "{json}");
-    let _ = stdout.flush();
-    ExitCode::from(code)
+    match writeln!(out, "{json}").and_then(|()| out.flush()) {
+        Ok(()) => code,
+        Err(err) => {
+            // The reader went away before reading the answer; there is no one
+            // to hand an envelope to, so only the exit code can say it failed.
+            if err.kind() == std::io::ErrorKind::BrokenPipe {
+                log::debug!("stdout was closed before the response was written");
+            } else {
+                eprintln!("reviewkit: cannot write the response to stdout: {err}");
+            }
+            crate::error::ErrorCode::EIo.exit_code()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -81,6 +94,26 @@ mod tests {
         })
         .unwrap();
         assert_eq!(json, serde_json::json!({"ok": true, "data": {"a": 1}}));
+    }
+
+    struct Failing(std::io::ErrorKind);
+
+    impl Write for Failing {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(self.0.into())
+        }
+    }
+
+    #[test]
+    fn a_response_that_cannot_be_written_exits_with_the_io_code() {
+        for kind in [std::io::ErrorKind::BrokenPipe, std::io::ErrorKind::StorageFull] {
+            let code = emit_to(&mut Failing(kind), Response::new(serde_json::json!({})));
+            assert_eq!(code, crate::error::ErrorCode::EIo.exit_code(), "{kind:?}");
+        }
+        assert_eq!(emit_to(&mut Vec::new(), Response::new(serde_json::json!({}))), 0);
     }
 
     #[test]

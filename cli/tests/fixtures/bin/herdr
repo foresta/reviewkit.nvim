@@ -1,6 +1,7 @@
 #!/bin/sh
 # FAKE_HERDR_DIR holds agents.json / panes.json; every call is appended to calls.log.
-# FAKE_HERDR_FAIL=1 makes agent prompt / pane send-text exit 1.
+# FAKE_HERDR_FAIL=1 makes agent prompt / pane send-text exit 1; =not_found answers
+# as herdr does for a target that does not exist (a JSON error on stderr).
 dir="${FAKE_HERDR_DIR:-}"
 if [ -n "$dir" ]; then
   printf '%s\n' "$*" >> "$dir/calls.log"
@@ -12,6 +13,10 @@ case "$1 $2" in
   "agent prompt"|"pane send-text")
     if [ -n "${FAKE_HERDR_SLEEP:-}" ]; then sleep "$FAKE_HERDR_SLEEP"; fi
     if [ "${FAKE_HERDR_FAIL:-0}" = "1" ]; then echo "pane gone" >&2; exit 1; fi
+    if [ "${FAKE_HERDR_FAIL:-0}" = "not_found" ]; then
+      printf '{"error":{"code":"agent_not_found","message":"agent target %s not found"},"id":"cli:agent:prompt"}\n' "$3" >&2
+      exit 1
+    fi
     printf '%s' "$4" > "$dir/last_text"
     printf '%s' "$3" > "$dir/last_target" ;;
   *) echo "fake herdr: unsupported: $*" >&2; exit 1 ;;
