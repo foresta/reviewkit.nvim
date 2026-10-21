@@ -4,6 +4,8 @@ local eq = MiniTest.expect.equality
 local T = MiniTest.new_set()
 local child, dir
 
+local QUEUED = { { id = "c_1", path = "a", side = "head", line = 1, kind = "issue", body = "x", stale = false } }
+
 local function open_rules(extra)
   local rules = {
     { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = helpers.session() } },
@@ -155,7 +157,12 @@ end
 T["core"]["a registered Lua sink is applied through submit apply"] = function()
   helpers.respond(
     dir,
-    open_rules({
+    vim.list_extend({
+      {
+        match = { "session open --local" },
+        body = { ok = true, data = vim.NIL, session = helpers.session({ comments = QUEUED }) },
+      },
+    }, {
       {
         match = { "submit apply" },
         body = {
@@ -226,14 +233,21 @@ end
 
 T["core"]["a Lua sink checks the disk for another instance's waiting delivery first"] = function()
   helpers.respond(dir, {
-    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = helpers.session() } },
+    {
+      match = { "session open --local" },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ comments = QUEUED }) },
+    },
     {
       match = { "session get" },
-      body = { ok = true, data = vim.NIL, session = helpers.session({ rev = 2, pending_apply = true }) },
+      body = {
+        ok = true,
+        data = vim.NIL,
+        session = helpers.session({ rev = 2, pending_apply = true, comments = QUEUED }),
+      },
     },
     {
       match = { "--drain" },
-      body = { ok = true, data = vim.NIL, session = helpers.session({ rev = 3 }) },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ rev = 3, comments = QUEUED }) },
     },
     {
       match = { "submit apply" },
@@ -265,6 +279,68 @@ T["core"]["a Lua sink checks the disk for another instance's waiting delivery fi
   eq(order[1], "get")
   eq(order[#order], "apply")
   eq(vim.tbl_contains(order, "drain"), true)
+end
+
+T["core"]["a Lua sink is not given comments it already sent"] = function()
+  local session = helpers.session({
+    comments = {
+      {
+        id = "c_1",
+        path = "a",
+        side = "head",
+        line = 1,
+        kind = "issue",
+        body = "x",
+        stale = false,
+        deliveries = {
+          { sink = "clip", at = "t", mode = "sent", consumed = false },
+        },
+      },
+      { id = "c_2", path = "a", side = "head", line = 2, kind = "issue", body = "y", stale = false, deliveries = {} },
+    },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = session } },
+    { match = { "submit apply" }, body = { ok = true, data = { sink = "clip" }, session = session } },
+  })
+  open(child)
+  child.lua([[
+    _G.given = nil
+    require('reviewkit.core').register_sink('clip', {
+      submit = function(s, _, cb)
+        _G.given = vim.tbl_map(function(c) return c.id end, s.comments)
+        cb(nil, { sent = {}, failed = {}, skipped = {}, decision = 'not_applicable' })
+      end,
+      consumes = function(_, requested)
+        _G.requested = requested
+        return false
+      end,
+    })
+    require('reviewkit.core').submit('clip', { consume = true }, _G.finish)
+  ]])
+  child.lua_get("_G.wait_done()")
+  eq(child.lua_get("_G.given"), { "c_2" })
+  eq(child.lua_get("_G.requested"), true)
+end
+
+T["core"]["the preview names thread places and a decision a selection leaves queued"] = function()
+  local lines = child.lua_get([[require('reviewkit.view.preview').lines(
+    { sink = 'github', decision = 'comment', comment_ids = {}, body_comment_ids = {}, skipped = {}, replies = {},
+      thread_actions = { { thread_id = 'PRRT_1', action = 'resolve' } }, mode = 'sent', raw = {} },
+    { comments = {}, decision = { event = 'approve', body = '' },
+      threads = { { id = 'PRRT_1', path = 'src/a.rs', line = 4, comments = {} } } },
+    { selection = true })]])
+  eq(vim.tbl_contains(lines, "Your decision is not part of a selection and stays queued."), true)
+  eq(vim.tbl_contains(lines, "  resolve src/a.rs:4"), true)
+end
+
+T["core"]["the clipboard refuses to copy nothing"] = function()
+  child.lua([[
+    require('reviewkit.sink.clipboard').submit({ comments = {} }, { register = 'r' }, function(err)
+      _G.copy_err = err
+    end)
+  ]])
+  eq(child.lua_get("_G.copy_err.code"), "E_INVALID")
 end
 
 T["core"]["sinks merges the CLI's list with registered Lua sinks, Lua winning"] = function()

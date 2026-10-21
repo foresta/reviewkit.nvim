@@ -171,7 +171,13 @@ pub fn retire(history: &mut Vec<crate::model::Comment>, gone: Vec<crate::model::
 
 /// "3 sent, 1 skipped (outside diff), 0 failed"
 pub fn summary(result: &SinkResult) -> String {
-    let mut parts = vec![format!("{} sent", result.sent.len())];
+    // A copy or a staged prompt reached nobody yet; "sent" would say it did.
+    let verb = match result.mode {
+        DeliveryMode::Sent => "sent",
+        DeliveryMode::Staged => "staged",
+        DeliveryMode::Copied => "copied",
+    };
+    let mut parts = vec![format!("{} {verb}", result.sent.len())];
     if !result.skipped.is_empty() {
         let mut reasons: Vec<&str> = result.skipped.iter().map(|s| reason_label(s.reason)).collect();
         reasons.sort_unstable();
@@ -180,7 +186,7 @@ pub fn summary(result: &SinkResult) -> String {
     }
     parts.push(format!("{} failed", result.failed.len()));
     match result.decision {
-        DecisionStatus::Sent => parts.push("decision sent".into()),
+        DecisionStatus::Sent => parts.push(format!("decision {verb}")),
         DecisionStatus::Failed => parts.push("decision failed".into()),
         DecisionStatus::Skipped => parts.push("decision skipped".into()),
         DecisionStatus::NotApplicable => {}
@@ -336,5 +342,10 @@ mod tests {
         assert_eq!(summary(&r), "3 sent, 1 skipped (outside diff), 0 failed");
         let r = result(&[], &[None], &[], DecisionStatus::Failed);
         assert_eq!(summary(&r), "0 sent, 1 failed, decision failed");
+        let mut copy = result(&["a"], &[], &[], DecisionStatus::Sent);
+        copy.mode = DeliveryMode::Copied;
+        assert_eq!(summary(&copy), "1 copied, 0 failed, decision copied");
+        copy.mode = DeliveryMode::Staged;
+        assert_eq!(summary(&copy), "1 staged, 0 failed, decision staged");
     }
 }

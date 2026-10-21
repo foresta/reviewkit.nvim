@@ -496,7 +496,7 @@ T["orchestrator"]["ReviewSubmit clipboard goes through submit apply and fills th
       match = { "submit apply" },
       body = {
         ok = true,
-        data = { sink = "clipboard", summary = "1 sent, 0 failed" },
+        data = { sink = "clipboard", summary = "1 copied, 0 failed" },
         session = helpers.session({ source = { worktree = worktree }, rev = 3 }),
       },
     },
@@ -505,7 +505,7 @@ T["orchestrator"]["ReviewSubmit clipboard goes through submit apply and fills th
   child.cmd("Review diff HEAD~1")
   wait_notice("1 file to review")
   child.cmd("ReviewSubmit clipboard")
-  wait_notice("clipboard: 1 sent")
+  wait_notice("clipboard: 1 copied")
   eq(child.lua_get("vim.fn.getreg('r'):find('1. src/a.rs:4\\ncopy me', 1, true) ~= nil"), true)
   local applied
   for _, call in ipairs(helpers.calls(dir)) do
@@ -530,14 +530,14 @@ T["orchestrator"]["a clipboard that cannot be written reports a failure and copi
     { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = with_comment } },
     {
       match = { "submit apply" },
-      body = { ok = true, data = { sink = "clipboard", summary = "0 sent, 1 failed" }, session = with_comment },
+      body = { ok = true, data = { sink = "clipboard", summary = "0 copied, 1 failed" }, session = with_comment },
     },
   })
   child.cmd("Review diff HEAD~1")
   wait_notice("1 file to review")
   child.lua("vim.fn.getreg = function() return '' end")
   child.cmd("ReviewSubmit clipboard")
-  wait_notice("clipboard: 0 sent")
+  wait_notice("clipboard: 0 copied")
   local applied
   for _, call in ipairs(helpers.calls(dir)) do
     if call.args[1] == "submit" and call.args[2] == "apply" then

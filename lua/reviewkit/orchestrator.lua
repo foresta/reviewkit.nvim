@@ -278,19 +278,26 @@ local function announce(session)
   end
 end
 
+---@param err? reviewkit.Error
+---@param session? reviewkit.Session
+local function opened(err, session)
+  if err then
+    return notify_error(err)
+  end
+  if not session then
+    return
+  end
+  announce(session)
+  require("reviewkit.view.diff").open()
+  require("reviewkit.view.queue").show_targets()
+  vim.cmd("botright copen")
+  vim.cmd("wincmd p")
+end
+
 ---@param spec reviewkit.OpenSpec
 local function open(spec)
   attach()
-  core.open(spec, function(err, session)
-    if err then
-      return notify_error(err)
-    end
-    announce(session)
-    require("reviewkit.view.diff").open()
-    require("reviewkit.view.queue").show_targets()
-    vim.cmd("botright copen")
-    vim.cmd("wincmd p")
-  end)
+  core.open(spec, opened)
 end
 
 ---@param base string
@@ -308,14 +315,7 @@ end
 function M.resume(id)
   attach()
   if id then
-    return core.resume(id, function(err, session)
-      if err then
-        return notify_error(err)
-      end
-      announce(session)
-      require("reviewkit.view.diff").open()
-      require("reviewkit.view.queue").show_targets()
-    end)
+    return core.resume(id, opened)
   end
   require("reviewkit.cli").call({ "session", "list" }, {}, function(err, envelope)
     if err then
@@ -651,7 +651,7 @@ function M.submit(sink, opts)
       end
       require("reviewkit.view.preview").show(plan, core.session(), function()
         M.submit(sink, vim.tbl_extend("force", opts, { confirmed = true, expect_digest = plan.digest }))
-      end)
+      end, { selection = opts.comment_ids ~= nil })
     end)
   end
   local send_opts = vim.deepcopy(opts)
@@ -689,10 +689,21 @@ end
 
 ---@param opts? { purge?: boolean }
 function M.close(opts)
-  if not core.session() then
+  local current = core.session()
+  if not current then
     return notify("no review session is open")
   end
   opts = opts or {}
+  -- Purging deletes the record that keeps an interrupted GitHub submit from
+  -- posting its comments a second time.
+  if opts.purge and (current.pending_submit or current.pending_apply) then
+    local question = current.pending_submit
+        and "An earlier GitHub submit was cut off; deleting the session forgets what it may have posted. Delete anyway?"
+      or "A delivery is still waiting to be recorded; deleting the session forgets it. Delete anyway?"
+    if vim.fn.confirm(question, "&Delete\n&Keep", 2) ~= 1 then
+      return
+    end
+  end
   local unsent = #core.comments()
   if unsent > 0 then
     local what = ("%d comment%s still in the queue"):format(unsent, unsent == 1 and "" or "s")
@@ -710,7 +721,6 @@ function M.close(opts)
   end)
 end
 
---- Sends the comments on lines `first`..`last` of the queue list only.
 ---@param sink string?
 ---@param first integer
 ---@param last integer

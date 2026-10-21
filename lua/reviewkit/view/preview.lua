@@ -17,12 +17,26 @@ local function place(comment)
   return ("%s:%s%s"):format(comment.path, range, comment.side == "base" and " (base)" or "")
 end
 
+---@param session? reviewkit.Session
+---@param thread_id string
+---@return string
+local function thread_place(session, thread_id)
+  for _, t in ipairs(session and session.threads or {}) do
+    if t.id == thread_id then
+      local line = t.line ~= vim.NIL and t.line or t.original_line
+      return line and line ~= vim.NIL and ("%s:%s"):format(t.path, line) or t.path
+    end
+  end
+  return thread_id
+end
+
 --- Comments are named by id in the preview; their place and text come
 --- from the session, which is what the sink reads too.
 ---@param preview reviewkit.SubmitPreview
 ---@param session? reviewkit.Session
+---@param opts? { selection?: boolean }
 ---@return string[]
-function M.lines(preview, session)
+function M.lines(preview, session, opts)
   local by_id = {}
   for _, c in ipairs(session and session.comments or {}) do
     by_id[c.id] = c
@@ -34,6 +48,9 @@ function M.lines(preview, session)
   end
   if preview.decision then
     table.insert(lines, ("Review: %s"):format(EVENTS[preview.decision] or preview.decision))
+  end
+  if opts and opts.selection and session and session.decision and session.decision ~= vim.NIL then
+    table.insert(lines, "Your decision is not part of a selection and stays queued.")
   end
   if preview.text and vim.trim(preview.text) ~= "" then
     vim.list_extend(lines, vim.split(preview.text, "\n", { plain = true }))
@@ -68,7 +85,7 @@ function M.lines(preview, session)
   if #actions > 0 then
     table.insert(lines, ("Thread actions (%d)"):format(#actions))
     for _, a in ipairs(actions) do
-      table.insert(lines, ("  %s %s"):format(a.action, a.thread_id))
+      table.insert(lines, ("  %s %s"):format(a.action, thread_place(session, a.thread_id)))
     end
     table.insert(lines, "")
   end
@@ -86,9 +103,10 @@ end
 ---@param preview reviewkit.SubmitPreview
 ---@param session? reviewkit.Session
 ---@param on_confirm fun()
+---@param opts? { selection?: boolean }
 ---@return integer buf
-function M.show(preview, session, on_confirm)
-  local lines = M.lines(preview, session)
+function M.show(preview, session, on_confirm, opts)
+  local lines = M.lines(preview, session, opts)
   local buf = api.nvim_create_buf(false, true)
   vim.bo[buf].bufhidden = "wipe"
   api.nvim_buf_set_lines(buf, 0, -1, false, lines)

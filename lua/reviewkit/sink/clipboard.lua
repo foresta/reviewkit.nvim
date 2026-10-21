@@ -1,9 +1,22 @@
 local M = {}
 
+---@param session reviewkit.Session
+---@param thread_id string
+---@return string
+local function reply_note(session, thread_id)
+  for _, t in ipairs(session.threads or {}) do
+    if t.id == thread_id and t.comments[1] then
+      return "reply to " .. t.comments[1].author
+    end
+  end
+  return "reply to a review thread"
+end
+
+---@param session reviewkit.Session
 ---@param c reviewkit.Comment
 ---@param i integer
 ---@return string[]
-local function block(c, i)
+local function block(session, c, i)
   local range = c.start_line and c.start_line ~= c.line and ("%d-%d"):format(c.start_line, c.line) or tostring(c.line)
   local head = ("%d. %s:%s"):format(i, c.path, range)
   if c.kind and c.kind ~= "issue" then
@@ -11,6 +24,12 @@ local function block(c, i)
   end
   if c.side == "base" then
     head = head .. " (base)"
+  end
+  if c.reply_to and c.reply_to ~= vim.NIL then
+    head = head .. " (" .. reply_note(session, c.reply_to) .. ")"
+  end
+  if c.stale then
+    head = head .. " (the line may have moved)"
   end
   local lines = { head, c.body }
   if c.suggestion and c.suggestion ~= "" then
@@ -66,7 +85,16 @@ function M.submit(session, opts, cb)
     table.insert(lines, "")
   end
   for i, c in ipairs(session.comments) do
-    vim.list_extend(lines, block(c, i))
+    vim.list_extend(lines, block(session, c, i))
+  end
+  -- An empty copy would overwrite the register and still report success.
+  if #lines == 0 then
+    return cb({
+      code = "E_INVALID",
+      message = "nothing to copy: the queue is empty and the decision has no text",
+      retryable = false,
+      details = { empty = true },
+    })
   end
   local text = table.concat(lines, "\n")
   local register = opts.register or "+"
