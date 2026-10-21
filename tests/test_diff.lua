@@ -189,6 +189,50 @@ T["diff"]["reveal lands on a head line of a commit session"] = function()
   eq(child.lua_get("vim.api.nvim_win_get_cursor(0)[1]"), 3)
 end
 
+T["diff"]["the working tree's file of a commit session takes no comments"] = function()
+  open_review(commit_session(string.rep("1", 40)), {
+    {
+      match = { "file head", "--path src/a.rs" },
+      body = {
+        ok = true,
+        data = { exists = true, binary = false, too_large = false, lines = { "a", "b", "c", "d" } },
+      },
+    },
+  })
+  child.cmd("tabnew " .. worktree .. "/src/a.rs")
+  eq(child.lua_get("require('reviewkit.view.diff').location(0) == nil"), true)
+end
+
+T["diff"]["<CR> on a target of a commit session opens the commit's copy"] = function()
+  open_review(commit_session(string.rep("1", 40)), {
+    {
+      match = { "file head", "--path src/a.rs" },
+      body = {
+        ok = true,
+        data = { exists = true, binary = false, too_large = false, lines = { "a", "b", "c", "d" } },
+      },
+    },
+  })
+  child.cmd("copen")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 1, 0 })")
+  child.type_keys("<CR>")
+  wait("vim.api.nvim_buf_get_name(0):find('reviewkit://head/', 1, true) ~= nil")
+end
+
+T["diff"]["the working tree's file opened in a commit session's head window is swapped for the commit's copy"] = function()
+  open_review(commit_session(string.rep("1", 40)), {
+    {
+      match = { "file head", "--path src/a.rs" },
+      body = { ok = true, data = { exists = true, binary = false, too_large = false, lines = { "a", "b", "c", "d" } } },
+    },
+  })
+  child.lua("vim.api.nvim_set_current_win(require('reviewkit.view.diff')._state().right)")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  wait(
+    "vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().right)):find('reviewkit://head/', 1, true) ~= nil"
+  )
+end
+
 T["diff"]["a head commit in another encoding is decoded with fileencodings"] = function()
   child.lua("vim.o.fileencodings = 'ucs-bom,utf-8,latin1'")
   open_review(commit_session(string.rep("1", 40)), {

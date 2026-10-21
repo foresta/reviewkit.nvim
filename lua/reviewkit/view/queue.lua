@@ -88,6 +88,7 @@ function M.show_targets()
       lnum = first,
       col = 1,
       text = ("%s +%d -%d%s"):format(t.status, t.stats.added, t.stats.removed, t.viewed and " ✓" or ""),
+      user_data = { path = t.path, side = "head", line = first },
     })
   end
   M.replace(items, TITLE .. " targets")
@@ -167,11 +168,18 @@ local function entry_under_cursor()
 end
 
 --- `<CR>` on a base-side entry would open the head file at a base line
---- number; those go to the base window of the diff view instead.
+--- number, and on a commit head's entry the working tree's file; those go
+--- to the diff view instead.
 function M.open_entry()
   local data = entry_under_cursor()
   local target = data and core.target(data.path)
-  local in_view = data and (data.side == "base" or (target and target.status == "deleted"))
+  local session = core.session()
+  local in_view = data
+    and (
+      data.side == "base"
+      or (target and target.status == "deleted")
+      or (target and require("reviewkit.view.diff").reviews_commit(session))
+    )
   if not data or not in_view then
     local count = vim.v.count > 0 and tostring(vim.v.count) or ""
     return vim.cmd('execute "normal! ' .. count .. '\\<CR>"')
