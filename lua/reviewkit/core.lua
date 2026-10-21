@@ -13,8 +13,16 @@ local M = {}
 ---| "ReviewSubmitted"
 ---| "ReviewSessionClosed"
 
+---@class reviewkit.LuaSinkResult: reviewkit.SinkResult
+---@field sink? string
+---@field sent? reviewkit.Sent[]
+---@field failed? reviewkit.Failed[]
+---@field skipped? reviewkit.Skipped[]
+---@field thread_actions? reviewkit.ThreadActionResult[]
+---@field decision? reviewkit.DecisionStatus
+
 ---@class reviewkit.LuaSink
----@field submit fun(session: reviewkit.Session, opts: table, cb: fun(err: reviewkit.Error?, result: reviewkit.SinkResult?))
+---@field submit fun(session: reviewkit.Session, opts: table, cb: fun(err: reviewkit.Error?, result: reviewkit.LuaSinkResult?))
 ---@field available? fun(): boolean, string?
 ---@field consumes? fun(session: reviewkit.Session, requested: boolean?): boolean
 
@@ -745,6 +753,13 @@ local function submit_lua(session, sink, lua_sink, opts, cb, decision_left)
       })
     end
     result.sink = result.sink or sink
+    -- Filled here rather than made optional in the contract: the CLI's own
+    -- sinks always report them, and only a Lua sink may leave them out.
+    result.sent = result.sent or {}
+    result.failed = result.failed or {}
+    result.skipped = result.skipped or {}
+    result.thread_actions = result.thread_actions or {}
+    result.decision = result.decision or "not_applicable"
     -- The sink worked from this snapshot; stamping it here lets the CLI
     -- keep comments edited while the sink was running, whatever the sink.
     local version = {}

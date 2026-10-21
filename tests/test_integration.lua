@@ -63,7 +63,7 @@ T["real binary: open, comment, submit through a Lua sink"] = function()
     require('reviewkit.core').register_sink('capture', {
       submit = function(session, opts, cb)
         _G.captured = session.comments[1].body
-        cb(nil, { sent = { { comment_id = session.comments[1].id } }, failed = {}, skipped = {}, decision = 'not_applicable' })
+        cb(nil, { sent = { { comment_id = session.comments[1].id } } })
       end,
     })
     require('reviewkit.core').submit('capture', {}, _G.finish)

@@ -192,6 +192,32 @@ T["core"]["a registered Lua sink is applied through submit apply"] = function()
   eq(vim.json.decode(last.stdin).sink, "clip")
 end
 
+T["core"]["a Lua sink may leave out what it has nothing to report for"] = function()
+  helpers.respond(dir, {
+    {
+      match = { "session open --local" },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ comments = QUEUED }) },
+    },
+    {
+      match = { "submit apply" },
+      body = { ok = true, data = { sink = "clip" }, session = helpers.session({ rev = 3 }) },
+    },
+  })
+  open(child)
+  child.lua([[
+    require('reviewkit.core').register_sink('clip', {
+      submit = function(session, opts, cb)
+        cb(nil, { sent = { { comment_id = 'c_1' } } })
+      end,
+    })
+    require('reviewkit.core').submit('clip', {}, _G.finish)
+  ]])
+  eq(child.lua_get("_G.wait_done()").err, nil)
+  local calls = helpers.calls(dir)
+  local sent = vim.json.decode(calls[#calls].stdin)
+  eq({ sent.failed, sent.skipped, sent.thread_actions, sent.decision }, { {}, {}, {}, "not_applicable" })
+end
+
 T["core"]["a delivery waiting to be recorded is drained once per change and holds back Lua sinks"] = function()
   helpers.respond(dir, {
     {
