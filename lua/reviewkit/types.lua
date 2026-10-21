@@ -66,9 +66,10 @@ M.SCHEMA_REVISION = 10
 ---@field start_line? integer|vim.NIL
 ---@field suggestion? string|vim.NIL
 
---- Whether GitHub would accept the comment; `reason` says why not, which
---- may also be independent of the host (stale, binary, delivered). Comments
---- outside the diff are still queued (D4); the sink decides what to skip.
+--- Whether GitHub would accept the comment; `reason` says why not
+--- (`outside_diff`, or `binary`, which is independent of the host). The
+--- other reasons only appear in `Skipped`. Comments outside the diff are
+--- still queued (D4); the sink decides what to skip.
 --- Named after GitHub rather than a neutral `in_diff` because the ranges,
 --- this flag and `outside_diff` all follow GitHub's rule; a second hosting
 --- sink needs per-destination ranges and reasons, a version bump anyway.
@@ -263,8 +264,9 @@ M.SCHEMA_REVISION = 10
 ---@field runtime reviewkit.SinkRuntime
 
 --- Also the stdin of `submit apply`: a Lua sink fills `sink`, `sent`,
---- `failed`, `skipped`, `thread_actions` and `decision`; `at` and `summary`
---- default to empty and are filled by core.
+--- `failed`, `skipped`, `thread_actions` and `decision`, and may fill `url`,
+--- `mode`, `attempted` and `decision_version`; `at` and `summary` default to
+--- empty and are filled by core.
 ---@class reviewkit.SinkResult
 ---@field at? string
 ---@field attempted? string[] `None` means every queued comment; given, a whole failure marks only these, so comments added while the sink was sending stay unmarked.

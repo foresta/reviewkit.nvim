@@ -148,6 +148,8 @@ Comment {
   created_at, updated_at
 }
 Reason = "outside_diff" | "stale" | "binary" | "not_supported" | "delivered"
+                            -- Comment.commentable.reason は outside_diff / binary だけ（stale は Comment.stale）。
+                            -- stale / not_supported / delivered は SinkResult.skipped の reason にだけ出る
 
 CommentInput { path, side, line, start_line?, kind?, body, suggestion?, reply_to? }
                             -- core が anchor / commentable / id を埋める
@@ -247,7 +249,8 @@ reviewkit session close   --session ID [--purge]         -> data: { closed: true
 reviewkit target list --session ID                       -> data: Target[]
 reviewkit target viewed --session ID --path P [--undo]   -> session   既読の付け外し。head_blob を一緒に記録する
 reviewkit pr show --session ID                           -> data: PrInfo   pr.json から。無ければ E_NO_SESSION ではなく data: null
-reviewkit file base   --session ID --path P              -> data: { exists, binary, too_large, lines: string[]|null }
+reviewkit file base   --session ID --path P              -> data: { exists, binary, too_large, lines: string[]|null, raw? }
+                                                                     raw: UTF-8 でないときの生のバイト（base64）。lines は置換文字入りの代替
                                                                      targets 外の path も可。base で未追跡なら exists = false
 reviewkit file head   --session ID --path P              -> 同じ形。head がコミットのセッションだけ（作業ツリーなら E_INVALID）。
                                                             view はこれを読み取り専用で head 側に出す（作業ツリーの別ブランチや未コミットの
@@ -266,7 +269,8 @@ reviewkit sink targets --sink herdr [--cwd]              -> data: SinkTarget[]  
 reviewkit submit --session ID --sink github|herdr [--dry-run] [--options -]
                                                          -> data: SinkResult（dry-run は data.preview: SubmitPreview）, session
                                                             --options - のときだけ stdin から SubmitOptions を読む
-reviewkit submit apply --session ID [--consume] (stdin: SinkResult の sent / failed / skipped / thread_actions / decision)
+reviewkit submit apply --session ID [--consume] (stdin: SinkResult の sent / failed / skipped / thread_actions / decision、
+                                                            省略可の url / mode / attempted / decision_version)
                                                          -> session   Lua 側 sink の結果を core に適用。at は CLI が付ける。ロック待ちは記録待ち（送信箱）
 reviewkit submit apply --session ID --drain              -> session   記録待ちの結果を記録するだけ（stdin を読まない）
 
@@ -389,6 +393,8 @@ lua/reviewkit/
   core.lua            state を持つ唯一の Lua モジュール。キャッシュ、etags 差分で User autocmd、state_path の監視、Lua 側 sink の登録
   types.lua           生成された LuaCATS + SCHEMA_VERSION
   health.lua          :checkhealth reviewkit
+  log.lua             CLI の呼び出しとエラーの直近の記録（:ReviewLog）
+  maps.lua            既定キーマップの表（mode、lhs、action、desc、diff ビューのバッファだけか）
   install.lua         ensure()（Releases から取得して検証、合わなければ cargo build → <plugin>/bin/）
   view/diff.lua       タブ・左右ウィンドウ・次 / 前の移動。base 側は file base で取得した読み取り専用バッファ。
                       左右の位置合わせと色付けは Neovim の diff モード（diffthis）。hunk 間の移動とコメント可否は Target から
@@ -396,9 +402,10 @@ lua/reviewkit/
   view/queue.lua      一覧（quickfix）
   view/input.lua      入力窓
   view/thread.lua     カーソル行のスレッドを float で表示。r で返信（reply_to 付きコメント）、R で resolve の切り替え
+  view/preview.lua    送信前のプレビュー（SubmitPreview）を見せて確認する
   orchestrator.lua    :Review の配線、worktree の監視、既定キーマップ
   sink/clipboard.lua  Lua 側 sink の最小例
-plugin/reviewkit.lua  コマンド定義だけ
+plugin/reviewkit.lua  コマンドと maps.lua の <Plug>(reviewkit-*) の定義だけ（orchestrator は読み込まない）
 scripts/gen-types.lua `reviewkit schema` の JSON Schema から types.lua を生成
 ```
 
@@ -407,29 +414,34 @@ scripts/gen-types.lua `reviewkit schema` の JSON Schema から types.lua を生
 CLI を呼ぶものは非同期 `cb(err, result)`、キャッシュ読みは同期。返るテーブルは読み取り専用で、書き換えてはならない。
 
 ```
-core.open(spec, cb)          spec = { kind = "pr", number = 123 } | { kind = "local", base = "HEAD~3", head? }
+core.open(spec, cb)          spec = { kind = "pr", pr = 123 | url, cwd? } | { kind = "local", base = "HEAD~3", head?, cwd? }
 core.resume(id, cb)
 core.refresh(opts, cb)
 core.close(opts, cb)
 core.session() / core.targets() / core.comments() / core.decision() / core.threads()
+core.target(path)            -- path の Target（無ければ nil）
+core.relpath(name)           -- バッファ名を session の path に（worktree の外なら nil）。両側を realpath で解決する
 core.is_commentable(path, side, line)      -- Target.commentable から
 core.add_comment(input, cb) / core.update_comment(id, patch, cb) / core.remove_comment(id, cb)
 core.set_decision(decision, cb) / core.clear_decision(cb)
 core.set_viewed(path, on, cb)
 core.resolve_thread(id, resolved, cb) / core.refresh_threads(cb) / core.pending_thread_action(id)
 core.pr_info(cb)               -- PrInfo。表示は持たないが取り出せる
+core.side_file(side, path, cb) -- file base / file head の data。core.base_file(path, cb) は side = "base"
 core.submit(sink, opts, cb)  -- Rust 側 sink は submit。Lua 登録 sink は impl.submit(session, opts, cb) の結果を submit apply に渡す
+                             -- opts は setup の sinks.<name> に重ねる。cb(err, result, session)
+core.preview(sink, opts, cb) -- submit --dry-run。cb(err, SubmitPreview)
 core.register_sink(name, impl)  -- impl = { submit, available?, consumes? }。available() は boolean, reason? を返す。
                              -- consumes(session, requested) は送れたコメントをキューから消すか（既定 false）
 core.sinks(cb)               -- sink list と登録済みの Lua sink（runtime = "lua"）をマージ。同名は Lua を優先
 core.sink_names()            -- 最後の sinks() と登録済みの名前。:ReviewSubmit の補完用（同期）
 core.history(cb) / core.restore(id, cb) / core.clear_delivered(sink?, cb) / core.clear_history(cb)
-core.on(event, fn)           -- User autocmd の薄い包み
+core.on(event, fn, group?)   -- User autocmd の薄い包み。autocmd の id を返す
 ```
 
 ### イベント
 
-`User` autocmd。`data = { session_id, rev }`。etags の差分で発火するので、1 応答で複数発火することも、無変更なら発火しないこともある。
+`User` autocmd。`data = { session_id, rev }`（`ReviewSubmitted` は `result` に SinkResult も載せる）。etags の差分で発火するので、1 応答で複数発火することも、無変更なら発火しないこともある。
 
 `ReviewSessionOpened`、`ReviewTargetsChanged`、`ReviewQueueChanged`、`ReviewDecisionChanged`、`ReviewThreadsChanged`
 （threads と thread_actions の両方）、`ReviewViewedChanged`、`ReviewSubmitted`、`ReviewSessionClosed`
@@ -438,19 +450,21 @@ core.on(event, fn)           -- User autocmd の薄い包み
 
 ```lua
 require("reviewkit").setup({
-  cli = { path = nil, dev = false },
+  cli = { path = nil, dev = false, state_dir = nil },   -- state_dir は CLI の --state-dir として渡す
   tools = { git = nil, gh = nil, herdr = nil },   -- REVIEWKIT_* として CLI に渡す
   set_keymaps = true,
   sinks = {
     herdr = { agent_type = "claude", header = nil, match_foreground_cwd = true },   -- HerdrOptions として渡す
+    -- どの sink の表にも consume = true | false を書ける（SubmitOptions.consume。既定は sink が決める。
+    -- github は二重投稿を避けるため常に消費し、clipboard の写しは消費しない）
     github = { confirm = true },                    -- :ReviewSubmit github は送る内容を見せて確認する
     clipboard = { register = "+" },
   },
 })
 ```
 
-`:Review pr <number|url>`、`:Review diff <base> [<head>]`、`:Review resume`、`:Review refresh`、`:Review threads [refresh]`、
-`:ReviewSubmit herdr|github|clipboard`、`:ReviewClose`、`:ReviewHistory`、`:ReviewInstall`、`:ReviewLog`。
+`:Review pr <number|url>`、`:Review diff <base> [<head>]`、`:Review resume [id]`、`:Review refresh`、`:Review threads [refresh]`、
+`:ReviewSubmit herdr|github|clipboard`（`:'<,'>ReviewSubmit` はキューの一覧で選んだ行だけ）、`:ReviewClose[!]`、`:ReviewHistory`、`:ReviewInstall`、`:ReviewLog`。
 quickfix の一覧では、履歴の `r` でキューへ戻し、キューの `D` で配送済みを履歴へ移す（確認あり）。キューの一覧で行を選んで
 `<leader>rs`（visual）か `:'<,'>ReviewSubmit {sink}` を使うと、その行のコメントだけを送る（`comment_ids`）。`:ReviewClose` は未送信の
 コメントがあると確認する（`!` の purge ではコメントも消えると明示する）。diff ビューのバッファだけのキーは

@@ -292,7 +292,7 @@
         "type": "object"
       },
       "Commentable": {
-        "description": "Whether GitHub would accept the comment; `reason` says why not, which\nmay also be independent of the host (stale, binary, delivered). Comments\noutside the diff are still queued (D4); the sink decides what to skip.\nNamed after GitHub rather than a neutral `in_diff` because the ranges,\nthis flag and `outside_diff` all follow GitHub's rule; a second hosting\nsink needs per-destination ranges and reasons, a version bump anyway.",
+        "description": "Whether GitHub would accept the comment; `reason` says why not\n(`outside_diff`, or `binary`, which is independent of the host). The\nother reasons only appear in `Skipped`. Comments outside the diff are\nstill queued (D4); the sink decides what to skip.\nNamed after GitHub rather than a neutral `in_diff` because the ranges,\nthis flag and `outside_diff` all follow GitHub's rule; a second hosting\nsink needs per-destination ranges and reasons, a version bump anyway.",
         "properties": {
           "github": {
             "type": "boolean"
@@ -1122,7 +1122,7 @@
         "type": "object"
       },
       "SinkResult": {
-        "description": "Also the stdin of `submit apply`: a Lua sink fills `sink`, `sent`,\n`failed`, `skipped`, `thread_actions` and `decision`; `at` and `summary`\ndefault to empty and are filled by core.",
+        "description": "Also the stdin of `submit apply`: a Lua sink fills `sink`, `sent`,\n`failed`, `skipped`, `thread_actions` and `decision`, and may fill `url`,\n`mode`, `attempted` and `decision_version`; `at` and `summary` default to\nempty and are filled by core.",
         "properties": {
           "at": {
             "default": "",

@@ -61,8 +61,9 @@ pub enum AgentType {
 }
 
 /// Also the stdin of `submit apply`: a Lua sink fills `sink`, `sent`,
-/// `failed`, `skipped`, `thread_actions` and `decision`; `at` and `summary`
-/// default to empty and are filled by core.
+/// `failed`, `skipped`, `thread_actions` and `decision`, and may fill `url`,
+/// `mode`, `attempted` and `decision_version`; `at` and `summary` default to
+/// empty and are filled by core.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SinkResult {
     pub sink: String,
