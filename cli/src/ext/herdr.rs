@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::env::env_non_empty;
 use crate::error::{Error, ErrorCode, Result};
-use crate::store::env_non_empty;
 
 /// The seam for tests: the sink talks to this trait, the binary talks to
 /// `SystemHerdr`.
@@ -60,8 +60,12 @@ impl Herdr for SystemHerdr {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|err| {
-                Error::tool("herdr", ErrorCode::EToolMissing, format!("cannot run herdr: {err}"))
-                    .hint("check that REVIEWKIT_HERDR points at an executable")
+                let err = crate::ext::tool::spawn_error("herdr", err);
+                if err.code == ErrorCode::EToolMissing {
+                    err.hint("check that REVIEWKIT_HERDR points at an executable")
+                } else {
+                    err
+                }
             })?;
         // Pipes are drained on threads so a large `agent list` cannot fill
         // the pipe and deadlock against the wait below.
@@ -198,7 +202,7 @@ pub fn prompt(herdr: &dyn Herdr, target: &str, text: &str) -> Result<()> {
 /// herdr keeps no record to reconcile with, so only the agent's screen can
 /// tell whether a failed send arrived.
 fn sent_maybe(err: Error) -> Error {
-    if err.code == ErrorCode::EToolMissing {
+    if crate::ext::tool::never_started(&err) {
         return err;
     }
     err.outcome_unknown("check the agent's pane before sending again")

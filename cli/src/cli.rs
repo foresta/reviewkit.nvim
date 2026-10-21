@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 use crate::context::{Context, Tools};
+use crate::env::env_non_empty;
 use crate::error::{Error, Result};
-use crate::store::{StateDir, env_non_empty};
+use crate::store::StateDir;
 
 #[derive(Debug, Parser)]
 #[command(name = "reviewkit", version, about, disable_help_subcommand = true)]

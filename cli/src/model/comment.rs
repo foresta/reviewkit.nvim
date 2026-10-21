@@ -34,9 +34,9 @@ pub struct Delivery {
     pub mode: DeliveryMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// This delivery took the comment out of the queue: it reached the
-    /// session's destination. Such a comment is never put back (an edit
-    /// would deliver it twice) and is the only kind the history drops.
+    /// This delivery took the comment out of the queue. When the sink is the
+    /// session's final destination the comment is not put back (an edit
+    /// would deliver it twice); the history drops these first.
     #[serde(default)]
     pub consumed: bool,
 }

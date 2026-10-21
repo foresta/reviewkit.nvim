@@ -1,6 +1,6 @@
 mod state_dir;
 
-pub use state_dir::{StateDir, env_non_empty};
+pub use state_dir::StateDir;
 
 use std::fs::File;
 use std::io::Write;
@@ -555,7 +555,7 @@ fn collect_sessions(dir: &Path, out: &mut Vec<Session>) {
     }
 }
 
-fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| Error::internal("session file has no parent directory"))?;

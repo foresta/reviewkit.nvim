@@ -1,29 +1,12 @@
 pub mod github;
 pub mod herdr;
 
-use serde::{Deserialize, Serialize};
-
 use crate::context::Context;
 use crate::error::{Error, Result};
 use crate::model::{Session, SinkResult, SinkTarget, Source, SubmitOptions, SubmitPreview};
 use crate::store::Store;
 
-/// `cli` sinks are built into this binary and `submit --sink` sends; `lua`
-/// sinks are registered in the client and report through `submit apply`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum SinkRuntime {
-    Cli,
-    Lua,
-}
-
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct SinkInfo {
-    pub name: String,
-    pub available: bool,
-    pub reason: Option<String>,
-    pub runtime: SinkRuntime,
-}
+pub use crate::model::{SinkInfo, SinkRuntime};
 
 /// A destination built into the CLI. Adding one is a file and a line in
 /// `builtin`. A sink is handed the store, not a session: github holds the

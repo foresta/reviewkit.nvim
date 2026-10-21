@@ -53,7 +53,7 @@ pub fn add(session: &mut Session, input: CommentInput, file: Option<SideFile>) -
         path: input.path.clone(),
         side: input.side,
         line: input.line,
-        start_line: input.start_line,
+        start_line: single_line(input.start_line, input.line),
         kind: input.kind,
         body: input.body,
         suggestion: input.suggestion,
@@ -160,7 +160,7 @@ pub fn update(session: &mut Session, id: &str, patch: CommentPatch, file: Option
         || patch.suggestion.as_ref().is_some_and(|s| *s != comment.suggestion)
         || patch.kind.is_some_and(|k| k != comment.kind);
     comment.line = line;
-    comment.start_line = start_line;
+    comment.start_line = single_line(start_line, line);
     if let Some(kind) = patch.kind {
         comment.kind = kind;
     }
@@ -211,8 +211,11 @@ pub fn clear_delivered(session: &mut Session, sink: Option<&str>, keep: &[String
 }
 
 /// Brings a comment back with its deliveries, so no sink sends it twice.
-/// A comment already in the queue stays where it is.
-pub fn restore(session: &mut Session, id: &str) -> Result<()> {
+/// A comment already in the queue stays where it is. `final_sink` says
+/// whether a sink is where this session's comments end up: only a comment
+/// consumed there is refused (an agent given a PR comment with `consume`
+/// does not post it, and GitHub may still need it).
+pub fn restore(session: &mut Session, id: &str, final_sink: impl Fn(&str) -> bool) -> Result<()> {
     if session.comments.iter().any(|c| c.id == id) {
         return Ok(());
     }
@@ -221,7 +224,11 @@ pub fn restore(session: &mut Session, id: &str) -> Result<()> {
         .iter()
         .position(|c| c.id == id)
         .ok_or_else(|| Error::new(ErrorCode::ENoComment, format!("no such comment in the history: {id}")))?;
-    if let Some(d) = session.history[index].deliveries.iter().find(|d| d.consumed) {
+    if let Some(d) = session.history[index]
+        .deliveries
+        .iter()
+        .find(|d| d.consumed && final_sink(&d.sink))
+    {
         return Err(Error::invalid(format!(
             "{id} already reached its destination ({}); queue a new comment instead",
             d.sink
@@ -251,6 +258,13 @@ pub fn narrowed(session: &Session, ids: Option<&[String]>) -> Result<Option<Sess
     }
     let mut view = session.clone();
     view.comments.retain(|c| ids.contains(&c.id));
+    // Through any sink: the history does not say this one would deliver them.
+    if view.comments.is_empty() {
+        return Err(
+            Error::invalid("nothing to submit: the selected comments already left the queue")
+                .details(serde_json::json!({ "empty": true })),
+        );
+    }
     view.decision = None;
     view.thread_actions.clear();
     view.history.clear();
@@ -275,6 +289,12 @@ fn target_for<'a>(session: &'a Session, path: &str) -> Option<&'a Target> {
 /// the diff is accepted and merely flagged (D4). A malformed range is the
 /// caller's mistake (E_INVALID). Binary files have no line count to check,
 /// and an empty file still has the one virtual line an editor shows.
+/// A range of one line is a single-line comment; keeping both forms would
+/// make sinks and the view tell them apart in each place.
+fn single_line(start_line: Option<u32>, line: u32) -> Option<u32> {
+    start_line.filter(|s| *s != line)
+}
+
 fn check_range(path: &str, line: u32, start_line: Option<u32>, file: &SideFile) -> Result<()> {
     if let Some(start) = start_line
         && (start == 0 || start > line)

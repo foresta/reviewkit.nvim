@@ -2,6 +2,7 @@ pub mod cli;
 pub mod commands;
 pub mod context;
 pub mod core;
+pub mod env;
 pub mod envelope;
 pub mod error;
 pub mod ext;

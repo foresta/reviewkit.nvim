@@ -2100,3 +2100,36 @@ fn an_agent_matched_by_its_process_cwd_is_checked_there_not_in_its_shell_cwd() {
         "1 sent, 0 failed; the agent's checkout is not at the pull request head"
     );
 }
+
+#[test]
+fn a_pr_comment_an_agent_consumed_can_still_be_restored_for_github() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let id = open(&state, &remote, &gh);
+    let cid = add(
+        &state,
+        &remote,
+        &gh,
+        &id,
+        serde_json::json!({"path": "keep.txt", "side": "head", "line": 3, "body": "for both"}),
+    );
+    let herdr_dir = tempfile::tempdir().unwrap();
+    let sent = json(
+        &reviewkit(&state, &remote, &gh)
+            .env("REVIEWKIT_HERDR", common::fixture_bin("herdr"))
+            .env("FAKE_HERDR_DIR", herdr_dir.path())
+            .args(["submit", "--session", &id, "--sink", "herdr", "--options", "-"])
+            .write_stdin(r#"{"target": "w1:p1", "consume": true}"#)
+            .output()
+            .unwrap(),
+    );
+    assert!(sent["session"]["comments"].as_array().unwrap().is_empty(), "{sent}");
+    let restored = json(
+        &reviewkit(&state, &remote, &gh)
+            .args(["history", "restore", "--session", &id, "--id", &cid])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(restored["session"]["comments"][0]["id"], cid, "{restored}");
+}

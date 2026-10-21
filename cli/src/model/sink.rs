@@ -190,3 +190,20 @@ pub struct SinkTarget {
     pub cwd: Option<String>,
     pub title: Option<String>,
 }
+
+/// `cli` sinks are built into this binary and `submit --sink` sends; `lua`
+/// sinks are registered in the client and report through `submit apply`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SinkRuntime {
+    Cli,
+    Lua,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct SinkInfo {
+    pub name: String,
+    pub available: bool,
+    pub reason: Option<String>,
+    pub runtime: SinkRuntime,
+}

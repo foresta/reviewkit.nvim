@@ -29,6 +29,22 @@ impl LocalSpec {
                 base: format!("{}...", if a.is_empty() { "HEAD" } else { a }),
                 head: Some(b.to_string()),
             },
+            // `A..B` is how git names the same comparison as `<base> <head>`;
+            // an empty side is HEAD, as in git.
+            (None, None) if base.contains("..") => {
+                let (a, b) = base.split_once("..").expect("checked above");
+                let or_head = |s: &str| {
+                    if s.is_empty() {
+                        "HEAD".to_string()
+                    } else {
+                        s.to_string()
+                    }
+                };
+                LocalSpec {
+                    base: or_head(a),
+                    head: Some(or_head(b)),
+                }
+            }
             (_, head) => LocalSpec { base, head },
         }
     }
@@ -181,6 +197,10 @@ mod tests {
         assert_eq!((spec.base.as_str(), spec.head.as_deref()), ("main...", Some("feature")));
         let left_out = LocalSpec::new("...feature".into(), None);
         assert_eq!(left_out.base, "HEAD...");
+        let two = LocalSpec::new("main..feature".into(), None);
+        assert_eq!((two.base.as_str(), two.head.as_deref()), ("main", Some("feature")));
+        let to_head = LocalSpec::new("main..".into(), None);
+        assert_eq!((to_head.base.as_str(), to_head.head.as_deref()), ("main", Some("HEAD")));
         let kept = LocalSpec::new("main...".into(), None);
         assert_eq!((kept.base.as_str(), kept.head.as_deref()), ("main...", None));
         let explicit = LocalSpec::new("main...x".into(), Some("y".into()));

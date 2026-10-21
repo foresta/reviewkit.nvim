@@ -122,7 +122,6 @@ pub fn reanchor(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
             comment.stale = true;
             continue;
         }
-        // Found again (reverted, or moved with its text intact): no longer stale.
         comment.stale = false;
         if let Some(file) = file {
             comment.line = outcome.line;

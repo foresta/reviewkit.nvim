@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::env::env_non_empty;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone)]
@@ -82,12 +83,6 @@ impl StateDir {
     pub fn fetch_lock_file(&self, id: &str) -> Result<PathBuf> {
         Ok(self.session_dir(id)?.join("fetch.lock"))
     }
-}
-
-/// Empty counts as unset so that `VAR= reviewkit ...` behaves like an unset
-/// VAR for every variable, instead of each call site deciding differently.
-pub fn env_non_empty(name: &str) -> Option<std::ffi::OsString> {
-    std::env::var_os(name).filter(|v| !v.is_empty())
 }
 
 #[cfg(test)]
