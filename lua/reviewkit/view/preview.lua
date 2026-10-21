@@ -46,6 +46,15 @@ function M.lines(preview, session, opts)
     table.insert(lines, "An earlier submit was cut off: what it already posted is recognised, not sent again.")
     table.insert(lines, "")
   end
+  local recovered = preview.recovered or {}
+  if #recovered > 0 then
+    table.insert(lines, ("Found on GitHub from that submit, recorded on send (%d)"):format(#recovered))
+    for _, id in ipairs(recovered) do
+      local c = by_id[id]
+      table.insert(lines, c and ("  %s  %s"):format(place(c), first_line(c.body)) or ("  " .. id))
+    end
+    table.insert(lines, "")
+  end
   if preview.decision then
     table.insert(lines, ("Review: %s"):format(EVENTS[preview.decision] or preview.decision))
   end

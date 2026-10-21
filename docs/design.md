@@ -314,7 +314,10 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   marker は含めない。プレビューも中断した送信の照合を（保存せずに）行ってから作るので、確認した内容と実際に送る内容が揃う。
   submit は `expect_digest` を、ロックを取って照合を済ませた後の送る直前の内容と比べる。確認から送信までの間に別のインスタンスが
   decision やコメントを変えた・refresh した場合は送らず、Lua はプレビューを出し直す。`--expect-rev` は使わない（既読や
-  送る内容に関係の無い変更でも弾くため）。照合だけで送るものが無くなったときのプレビューは空で、確認すると submit が照合を保存する
+  送る内容に関係の無い変更でも弾くため）。
+- `SubmitPreview.recovered`（github だけ）は、中断した送信の照合で GitHub に届いていたと分かったコメントの id。再送はせず、
+  確認した送信で送信済みとして保存する。照合だけで送るものが無くなったときのプレビューは行コメント等が空で、`digest` は
+  「何も送らない」内容のハッシュになる。これを確認すると submit が照合を保存する
   （その間に別のインスタンスが保存していれば ok で `already recorded`）。照合を保存した後で送信が断られたときは、
   エラーの `details.recovered` に照合で送信済みと分かったコメントの id が入る
 - `SinkTarget { id, name?, status?, cwd?, title? }` は送り先の候補。`id` を `HerdrOptions.target` に渡す。
@@ -463,6 +466,7 @@ lua/reviewkit/
   types.lua           生成された LuaCATS + SCHEMA_VERSION
   health.lua          :checkhealth reviewkit
   log.lua             CLI の呼び出しとエラーの直近の記録（:ReviewLog）
+  notify.lua          CLI のエラー（code・message・hint）を vim.notify で知らせる
   maps.lua            既定キーマップの表（mode、lhs、action、desc、diff ビューのバッファだけか）
   install.lua         ensure()（Releases から取得して検証、合わなければ cargo build → <plugin>/bin/）
   fence.lua           中のコードブロックで閉じない Markdown のフェンス（suggestion の入力窓と clipboard）
@@ -488,6 +492,7 @@ lua/reviewkit/
   sink/clipboard.lua  Lua 側 sink の最小例。本文が空の decision は写さないので、写しの成否によらず skipped
 plugin/reviewkit.lua  コマンドと maps.lua の <Plug>(reviewkit-*) の定義だけ（orchestrator は読み込まない）
 scripts/gen-types.lua `reviewkit schema` の JSON Schema から types.lua を生成
+scripts/install.lua   プラグインマネージャの build フックから install.ensure() を呼ぶ入口
 ```
 
 ### core の公開 API

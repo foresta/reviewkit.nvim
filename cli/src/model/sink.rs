@@ -171,6 +171,10 @@ pub struct SubmitPreview {
     /// can check it under the session lock give one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
+    /// Comments an interrupted submit is found to have posted already. They
+    /// are not sent again; confirming the preview records them as sent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovered: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

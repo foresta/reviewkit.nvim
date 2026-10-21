@@ -13,8 +13,10 @@
 境界は **argv + stdin JSON → stdout JSON** の 1 回実行コマンド。cdylib（nvim-oxi 等）は採らない。
 Neovim の ABI と LuaJIT に結合せず、配布が `cargo install` かバイナリ 1 つで済むため。
 
-各サブコマンドは lib 内の `fn run(ctx, Request) -> Result<Response>` で、将来 stdio で JSON 行を受ける
-`serve` を足しても契約は変わらない。
+各サブコマンドは lib 内の `fn run(ctx, <clap のサブコマンド型>) -> Result<Response>` で、入力の JSON は各コマンドが
+stdin から自分で読む。将来 stdio で JSON 行を受ける `serve` を足すときは、引数と入力を値で受け取る形に
+コマンドの入口を作り直す必要がある（stdin は要求の流れに使われるため）。JSON の型は変えずに済む見込みだが、
+要求の封筒（どのコマンドを呼ぶか、要求と応答の対応付け）は新しく契約に足す。
 
 ## Rust
 

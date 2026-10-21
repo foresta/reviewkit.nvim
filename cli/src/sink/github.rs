@@ -168,10 +168,6 @@ fn permalink(session: &Session, comment: &Comment) -> Option<String> {
 /// so keeping its comments would post them twice.
 const CONSUMES: bool = true;
 
-/// The digest of a preview that only an interrupted submit's recovery left
-/// anything to do for.
-const RECOVERED: &str = "recovered";
-
 fn empty_result() -> SinkResult {
     SinkResult {
         sink: NAME.into(),
@@ -488,26 +484,43 @@ pub fn preview(session: &Session) -> Result<SubmitPreview> {
         mode: DeliveryMode::Sent,
         raw: serde_json::to_value(&plan).unwrap_or_default(),
         digest: Some(digest(session)?),
+        recovered: Vec::new(),
     })
 }
 
 /// Planned with no attempt, so the per-attempt markers do not make two
 /// plans of the same content differ.
 fn digest(session: &Session) -> Result<String> {
-    use sha2::{Digest, Sha256};
     let plan = plan(session, "")?;
+    Ok(hash_request(&plan.mutation, &plan.variables))
+}
+
+/// What a preview with nothing left to post confirms: only a recovery,
+/// which the send saves.
+fn empty_digest() -> String {
+    hash_request("", &serde_json::Value::Null)
+}
+
+fn hash_request(mutation: &str, variables: &serde_json::Value) -> String {
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(plan.mutation.as_bytes());
+    hasher.update(mutation.as_bytes());
     hasher.update([0]);
-    hasher.update(plan.variables.to_string().as_bytes());
-    Ok(hasher.finalize()[..12].iter().map(|b| format!("{b:02x}")).collect())
+    hasher.update(variables.to_string().as_bytes());
+    hasher.finalize()[..12].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn check_digest(session: &Session, expected: Option<&str>) -> Result<()> {
     let Some(expected) = expected else {
         return Ok(());
     };
-    if digest(session)? == expected {
+    let actual = match digest(session) {
+        Ok(actual) => actual,
+        // Left to the send, which reports nothing to submit or the recovery.
+        Err(err) if is_nothing_to_submit(&err) && expected == empty_digest() => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    if actual == expected {
         return Ok(());
     }
     Err(Error::new(
@@ -1098,13 +1111,14 @@ impl super::Sink for GithubSink {
         let session_dir = crate::store::Store::new(ctx.state_dir.clone())
             .state_dir()
             .session_dir(&session.id)?;
-        let mut recovered = false;
+        let mut recovered = None;
         if pending_path(&session_dir).exists() {
             let gh = gh::SystemGh::new(ctx.tools.gh.as_deref())?;
             let repo = repo_ref_of(&session)?;
             if let Some(found) = reconcile_pending(&mut session, &gh, &repo, &session_dir)? {
+                let ids: Vec<String> = found.sent.iter().map(|s| s.comment_id.clone()).collect();
                 crate::core::apply::apply(&mut session, found, true)?;
-                recovered = true;
+                recovered = Some(ids);
             }
         }
         let planned = crate::core::comments::narrowed(&session, opts.comment_ids.as_deref())
@@ -1112,7 +1126,7 @@ impl super::Sink for GithubSink {
         match planned {
             // Only the send saves the recovery, so the confirmation must still
             // let it run when nothing is left to post.
-            Err(err) if recovered && is_nothing_to_submit(&err) => Ok(SubmitPreview {
+            Err(err) if recovered.is_some() && is_nothing_to_submit(&err) => Ok(SubmitPreview {
                 sink: NAME.into(),
                 comment_ids: Vec::new(),
                 body_comment_ids: Vec::new(),
@@ -1124,8 +1138,13 @@ impl super::Sink for GithubSink {
                 target: None,
                 mode: DeliveryMode::Sent,
                 raw: serde_json::Value::Null,
-                digest: Some(RECOVERED.into()),
+                digest: Some(empty_digest()),
+                recovered: recovered.unwrap_or_default(),
             }),
+            Ok(mut preview) => {
+                preview.recovered = recovered.unwrap_or_default();
+                Ok(preview)
+            }
             other => other,
         }
     }
@@ -1240,7 +1259,9 @@ impl super::Sink for GithubSink {
             }
             // Another instance recorded the recovery between the preview and
             // this confirmation: what the user confirmed is already done.
-            (Err(err), None) if is_nothing_to_submit(&err) && opts.expect_digest.as_deref() == Some(RECOVERED) => {
+            (Err(err), None)
+                if is_nothing_to_submit(&err) && opts.expect_digest.as_deref() == Some(empty_digest().as_str()) =>
+            {
                 let mut done = empty_result();
                 done.summary = "already recorded".into();
                 (store.load(id)?, done)
