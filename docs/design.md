@@ -318,6 +318,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   （中断した送信の照合で gh から PR を取り直す段も含む。gh の呼び出しごとに timeout があり、それが送信の間続く）と herdr の送信（`agent prompt` / `pane send-text`）。
   その間の変更系（コメントの追加・編集、decision）は再試行の後に `E_LOCKED`（hint で送信中の可能性を示す）で失敗する。
   入力窓から保存したものが失敗したときは、Lua が入力した本文のまま入力窓を開き直し、本文を失わない。
+  入力窓は保存の後に（次のイベントループで）閉じる。`:wq` / `:x` / `ZZ` の終了側が入力窓自身に効くようにするため。
   PR の取得はセッションごとの fetch.lock で直列にし、リポジトリごとの mirror は `mirror.lock` で守る（作成は一時ディレクトリから rename）。
   git の fetch / clone は `REVIEWKIT_GIT_TIMEOUT_MS`（既定 120 秒）で打ち切り、認証のプロンプトは出さない。部分 clone（`extensions.partialClone` か `remote.<name>.promisor=true`）では
   どのコマンドも足りない blob を取りに行きうるので、すべてのコマンドを同じ時間で打ち切る。チェックアウトが移動・削除されていれば、

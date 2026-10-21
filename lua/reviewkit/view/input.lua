@@ -58,6 +58,12 @@ function M.open(opts)
   api.nvim_create_autocmd("BufWriteCmd", {
     buffer = buf,
     callback = function()
+      -- The window stays until the scheduled close; a second `:w` or <C-s>
+      -- typed ahead would save the same text twice.
+      if saved then
+        vim.bo[buf].modified = false
+        return
+      end
       local lines = api.nvim_buf_get_lines(buf, 0, -1, false)
       while #lines > 0 and vim.trim(lines[#lines]) == "" do
         table.remove(lines)
@@ -65,7 +71,9 @@ function M.open(opts)
       vim.bo[buf].modified = false
       saved = true
       vim.cmd("stopinsert")
-      close()
+      -- Later, not now: the quit half of `:wq` / `:x` / `ZZ` acts on the
+      -- current window, which must still be this one.
+      vim.schedule(close)
       opts.on_save(table.concat(lines, "\n"))
     end,
   })
@@ -116,7 +124,9 @@ function M.open_keeping(opts, save)
             vim.notify("[reviewkit] the text is kept in the unnamed register", vim.log.levels.WARN)
           end
         end
-        reopen()
+        -- After the window that was saved from has closed (its close is
+        -- scheduled too), or the new one would lose the focus to it.
+        vim.schedule(reopen)
       end)
     end,
   }) --[[@as reviewkit.InputOpts]])
