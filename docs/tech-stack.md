@@ -58,6 +58,9 @@ Neovim の ABI と LuaJIT に結合せず、配布が `cargo install` かバイ�
 
 fake `gh` は引数のパターンと応答（`status` / `body` / `stderr` / `exit`）の対応表を持つスクリプトで、GitHub へは一切通信しない。
 
+git はどの段でも開発者の global / system の設定（コミット署名、hooks）を読まない（Rust は `ISOLATED_GIT`、Lua は Makefile が
+`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1` を付けて実行する）。
+
 CI（GitHub Actions、macOS + Linux）: `cargo test`、`cargo clippy -D warnings`、`cargo fmt --check`、
 `lua-language-server --check`、`stylua --check`、`make test`。
 
@@ -91,7 +94,8 @@ reviewkit.nvim/
 
 - **バイナリ**: GitHub Releases に素のバイナリ `reviewkit-<target triple>`（macOS arm64 / x86_64、Linux x86_64 / arm64 は
   musl）と `SHA256SUMS` を置く。`.github/workflows/release.yml` がネイティブ runner の matrix で `make dist` し、タグ `vX.Y.Z`
-  のときだけ公開する（PR ではビルドとスモークだけ）。cargo-dist は installer / manifest が不要なので使わない。
+  のときだけ公開する（PR ではビルドとスモークだけ）。リリースは draft で作り、全バイナリと `SHA256SUMS` を上げてから公開する
+  （成果物の揃わない公開リリースを導入スクリプトが拾わないため）。cargo-dist は installer / manifest が不要なので使わない。
   `cargo install --git https://github.com/foresta/reviewkit.nvim reviewkit` も可
 - **バージョンの規約**: `[workspace.package] version` はリリースの commit でだけ `X.Y.Z` にし、そこにタグを打ち、直後に次の
   `X.Y.Z-dev` に上げる。release.yml はタグと version の一致と、pre-release でないことを検査する
