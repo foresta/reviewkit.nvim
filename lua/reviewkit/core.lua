@@ -715,6 +715,13 @@ local function submit_lua(session, sink, lua_sink, opts, cb, decision_left)
     end
     return true
   end, session.comments)
+  for _, d in ipairs(session.decision and session.decision.deliveries or {}) do
+    if d.sink == sink and d.mode == "sent" then
+      session.decision = nil
+      decision_left = true
+      break
+    end
+  end
   if #session.comments == 0 and not (session.decision and session.decision.body ~= "") then
     return vim.schedule(function()
       cb({

@@ -380,6 +380,33 @@ T["core"]["a drain that fails for another reason reports that reason and is not 
   eq(drains(), seen)
 end
 
+T["core"]["a Lua sink that has every comment and the decision is refused before it runs"] = function()
+  local sent = { { sink = "clip", at = "t", mode = "sent", consumed = false } }
+  local session = helpers.session({
+    comments = {
+      { id = "c_1", path = "a", side = "head", line = 1, kind = "issue", body = "x", stale = false, deliveries = sent },
+    },
+    decision = { event = "comment", body = "text", updated_at = "t", deliveries = sent },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = session } },
+  })
+  open(child)
+  child.lua([[
+    _G.ran = false
+    require('reviewkit.core').register_sink('clip', {
+      submit = function(_, _, cb)
+        _G.ran = true
+        cb(nil, { sent = {}, failed = {}, skipped = {}, decision = 'not_applicable' })
+      end,
+    })
+    require('reviewkit.core').submit('clip', {}, _G.finish)
+  ]])
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err.code, "E_INVALID")
+  eq(child.lua_get("_G.ran"), false)
+end
+
 T["core"]["the clipboard refuses to copy nothing"] = function()
   child.lua([[
     require('reviewkit.sink.clipboard').submit({ comments = {} }, { register = 'r' }, function(err)

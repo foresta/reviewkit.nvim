@@ -1,6 +1,6 @@
 ---
 source: cli/src/sink/herdr.rs
-expression: "format_prompt(&session(), &opts)"
+expression: "format_prompt(&session(), &opts, None)"
 ---
 Review feedback:
 

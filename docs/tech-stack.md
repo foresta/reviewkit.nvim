@@ -77,7 +77,7 @@ reviewkit.nvim/
     src/sink/{github,herdr}.rs
     src/ext/{git,gh,herdr,diffparse,tool}.rs   architecture.md の lib 層（`lib.rs` と衝突するので ext）
     src/commands/           サブコマンド 1 つにつき 1 ファイル
-    tests/                  assert_cmd、fixtures/bin/{gh,git,herdr}
+    tests/                  assert_cmd、fixtures/bin/{gh,git,herdr}、fixtures/diff（パーサの入力）
   lua/reviewkit/            Lua 側（design.md 参照）
   plugin/reviewkit.lua      コマンドと <Plug> マップの定義だけ。二重読み込みガード
   tests/                    mini.test、fixtures/bin/reviewkit（stub）

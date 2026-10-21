@@ -4,7 +4,7 @@ local M = {}
 ---@field cli { path?: string, dev: boolean, state_dir?: string }
 ---@field tools { git?: string, gh?: string, herdr?: string }
 ---@field set_keymaps boolean
----@field sinks { herdr: { agent_type: "claude"|"plain", header?: string, match_foreground_cwd: boolean, consume?: boolean }, github: { confirm: boolean }, clipboard: { register: string } }
+---@field sinks { herdr: { agent_type: "claude"|"plain", header?: string, match_foreground_cwd: boolean, consume?: boolean }, github: { confirm: boolean, consume?: boolean }, clipboard: { register: string, consume?: boolean } }
 
 ---@type reviewkit.Config
 local defaults = {
