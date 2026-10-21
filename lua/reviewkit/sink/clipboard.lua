@@ -44,6 +44,18 @@ local function block(session, c, i)
   return lines
 end
 
+--- A decision without text is not in the copy, so the copy's outcome is
+--- not its outcome.
+---@param session reviewkit.Session
+---@param outcome reviewkit.DecisionStatus
+---@return reviewkit.DecisionStatus
+local function decision_status(session, outcome)
+  if not session.decision then
+    return "not_applicable"
+  end
+  return session.decision.body ~= "" and outcome or "skipped"
+end
+
 ---@param session reviewkit.Session
 ---@return reviewkit.SinkResult
 local function copied(session)
@@ -57,7 +69,7 @@ local function copied(session)
     sent = sent,
     failed = {},
     skipped = {},
-    decision = session.decision and (session.decision.body ~= "" and "sent" or "skipped") or "not_applicable",
+    decision = decision_status(session, "sent"),
   }
 end
 
@@ -122,7 +134,7 @@ function M.submit(session, opts, cb)
         },
       },
       skipped = {},
-      decision = session.decision and "failed" or "not_applicable",
+      decision = decision_status(session, "failed"),
     })
   end
   cb(nil, copied(session))

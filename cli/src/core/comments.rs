@@ -360,6 +360,12 @@ pub fn commentable_on(
             reason: Some(Reason::Binary),
         };
     }
+    if file.too_large || target.is_some_and(|t| t.too_large) {
+        return Commentable {
+            github: false,
+            reason: Some(Reason::TooLarge),
+        };
+    }
     let Some(target) = target else {
         return Commentable {
             github: false,

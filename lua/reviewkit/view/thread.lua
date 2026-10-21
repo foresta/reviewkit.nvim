@@ -21,7 +21,12 @@ function M.at(buf, line)
     return found
   end
   for _, t in ipairs(core.threads()) do
-    if t.path == path and t.side == side and t.line and line >= (t.start_line or t.line) and line <= t.line then
+    local last = t.line ~= vim.NIL and t.line or nil
+    -- A range may start on the other side, where start_line counts the
+    -- other file's lines.
+    local start_side = (t.start_side ~= nil and t.start_side ~= vim.NIL) and t.start_side or t.side
+    local first = (t.start_line ~= nil and t.start_line ~= vim.NIL and start_side == t.side) and t.start_line or last
+    if t.path == path and t.side == side and last and line >= first and line <= last then
       table.insert(found, t)
     end
   end
@@ -110,7 +115,7 @@ function M.reply(thread)
     title = "Reply to " .. (thread.comments[1] and thread.comments[1].author or "thread"),
   }, function(text, done)
     if vim.trim(text) == "" then
-      return
+      return vim.notify("[reviewkit] empty reply discarded", vim.log.levels.INFO)
     end
     core.add_comment({
       path = thread.path,

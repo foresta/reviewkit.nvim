@@ -738,7 +738,7 @@ fn a_too_large_file_is_not_commentable_on_github_and_is_not_read_for_anchors() {
         );
         let comment = added["session"]["comments"].as_array().unwrap().last().unwrap().clone();
         assert_eq!(comment["commentable"]["github"], false, "{side}: {comment}");
-        assert_eq!(comment["commentable"]["reason"], "outside_diff", "{side}");
+        assert_eq!(comment["commentable"]["reason"], "too_large", "{side}");
         assert_eq!(comment["anchor"]["context"]["lines"], serde_json::json!([]), "{side}");
     }
     let refreshed = json(
@@ -751,6 +751,40 @@ fn a_too_large_file_is_not_commentable_on_github_and_is_not_read_for_anchors() {
         assert_eq!(comment["stale"], false, "{comment}");
         assert_eq!(comment["commentable"]["github"], false, "{comment}");
     }
+}
+
+#[test]
+fn a_comment_on_a_large_working_tree_file_pins_the_file_as_it_is_now() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let big = "line\n".repeat(300_000);
+    repo.write("lock.json", &big);
+    repo.git(&["add", "lock.json"]);
+    repo.git(&["commit", "-q", "-m", "big file"]);
+    repo.write("lock.json", &format!("{big}one more\n"));
+    let body = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let id = body["session"]["id"].as_str().unwrap().to_string();
+    repo.write("lock.json", &format!("{big}changed since the refresh\n"));
+    let now = Process::new(real_git())
+        .current_dir(repo.path())
+        .args(["hash-object", "lock.json"])
+        .output()
+        .unwrap();
+    let now = String::from_utf8(now.stdout).unwrap().trim().to_string();
+    let added = json(
+        &reviewkit(&state, &repo)
+            .args(["comment", "add", "--session", &id])
+            .write_stdin(r#"{"path": "lock.json", "side": "head", "line": 1, "body": "x"}"#)
+            .output()
+            .unwrap(),
+    );
+    let comment = added["session"]["comments"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(comment["anchor"]["blob"], now.as_str(), "{comment}");
 }
 
 #[test]

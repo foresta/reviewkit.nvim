@@ -282,7 +282,7 @@ pub fn plan(session: &Session, attempt: &str) -> Result<Plan> {
         if let Some(reason) = skip_reason(comment).filter(|_| comment.reply_to.is_none()) {
             // A stale comment's line no longer says where it points, so it
             // is held back rather than sent to a wrong place in the body.
-            if matches!(reason, Reason::OutsideDiff | Reason::Binary) {
+            if matches!(reason, Reason::OutsideDiff | Reason::Binary | Reason::TooLarge) {
                 outside.push(comment);
                 continue;
             }
@@ -1522,6 +1522,19 @@ mod tests {
             )),
             "{body}"
         );
+    }
+
+    #[test]
+    fn a_comment_on_a_file_too_large_to_diff_is_written_into_the_review_body() {
+        let mut s = pr_session();
+        s.comments[3].commentable = Commentable {
+            github: false,
+            reason: Some(Reason::TooLarge),
+        };
+        let plan = plan(&s, "t").unwrap();
+        assert!(plan.skipped.iter().all(|sk| sk.comment_id != s.comments[3].id));
+        let body = plan.variables["body"].as_str().unwrap();
+        assert!(body.contains(&format!("**`{}` L", s.comments[3].path)), "{body}");
     }
 
     #[test]

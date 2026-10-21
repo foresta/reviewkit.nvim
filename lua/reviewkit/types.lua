@@ -4,7 +4,7 @@
 local M = {}
 
 M.SCHEMA_VERSION = 1
-M.SCHEMA_REVISION = 10
+M.SCHEMA_REVISION = 11
 
 ---@alias reviewkit.AgentType "claude"|"plain"
 
@@ -67,7 +67,8 @@ M.SCHEMA_REVISION = 10
 ---@field suggestion? string|vim.NIL
 
 --- Whether GitHub would accept the comment; `reason` says why not
---- (`outside_diff`, or `binary`, which is independent of the host). The
+--- (`outside_diff`, or `binary` / `too_large`, which are independent of the
+--- host). The
 --- other reasons only appear in `Skipped`. Comments outside the diff are
 --- still queued (D4); the sink decides what to skip.
 --- Named after GitHub rather than a neutral `in_diff` because the ranges,
@@ -200,7 +201,7 @@ M.SCHEMA_REVISION = 10
 ---@field end integer
 ---@field start integer
 
----@alias reviewkit.Reason "outside_diff"|"stale"|"binary"|"not_supported"|"delivered"
+---@alias reviewkit.Reason "outside_diff"|"stale"|"binary"|"not_supported"|"delivered"|"too_large"
 
 ---@class reviewkit.Repo
 ---@field host? string

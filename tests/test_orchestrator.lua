@@ -1064,4 +1064,153 @@ T["orchestrator"]["files of a pull request's worktree cannot be edited"] = funct
   eq(child.lua_get("vim.bo.modifiable"), false)
 end
 
+T["orchestrator"]["saving an empty comment says it was discarded and queues nothing"] = function()
+  helpers.respond(dir, rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 4, 0 })")
+  child.lua("require('reviewkit.orchestrator').comment()")
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { '  ', '' })")
+  child.cmd("write")
+  local notices = wait_notice("discarded")
+  eq(#vim.tbl_filter(function(n)
+    return n.msg:find("discarded", 1, true) ~= nil
+  end, notices), 1)
+  eq(last_call("add"), nil)
+end
+
+T["orchestrator"]["saving an edit with no text keeps the comment and says so"] = function()
+  local with = helpers.session({
+    source = { worktree = worktree },
+    rev = 2,
+    comments = {
+      { id = "c_1", path = "src/a.rs", side = "head", line = 4, kind = "issue", body = "keep", stale = false },
+    },
+    etags = { comments = "c1" },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = with } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = with } },
+    { match = { "comment update" }, body = { ok = true, data = vim.NIL, session = with } },
+  })
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  child.lua("vim.api.nvim_win_set_cursor(0, { 4, 0 })")
+  child.lua("require('reviewkit.orchestrator').edit_comment()")
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { '' })")
+  child.cmd("write")
+  wait_notice("discarded")
+  eq(last_call("update"), nil)
+end
+
+T["orchestrator"]["a comment on a file whose reload was declined is refused"] = function()
+  helpers.respond(dir, rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("vim.o.autoread = false")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  vim.fn.writefile({ "new1", "new2", "l1", "l2", "l3", "l4", "l5", "l6" }, worktree .. "/src/a.rs")
+  vim.uv.fs_utime(worktree .. "/src/a.rs", os.time() + 10, os.time() + 10)
+  child.lua("vim.api.nvim_win_set_cursor(0, { 4, 0 })")
+  -- The W11 dialog blocks the call; <CR> answers it with its default, OK.
+  child.lua_notify("require('reviewkit.orchestrator').comment()")
+  child.type_keys("<CR>")
+  wait_notice("newer than the buffer")
+  eq(child.lua_get("vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]"), "l1")
+  eq(child.lua_get("vim.bo.buftype"), "")
+end
+
+local function fake_git(out_dir)
+  local bin = helpers.fake_dir()
+  local log = bin .. "/log"
+  vim.fn.writefile({
+    "#!/bin/sh",
+    ('echo "GIT_DIR=$GIT_DIR GIT_WORK_TREE=$GIT_WORK_TREE $*" >> %s'):format(vim.fn.shellescape(log)),
+    ("printf '%%s\\n%%s\\n' %s %s"):format(vim.fn.shellescape(out_dir), vim.fn.shellescape(out_dir)),
+  }, bin .. "/git")
+  vim.uv.fs_chmod(bin .. "/git", tonumber("755", 8))
+  return bin .. "/git", log
+end
+
+T["orchestrator"]["the git dir is found with the configured git, outside GIT_DIR, and not watched twice"] = function()
+  local real = vim.fn.resolve(helpers.fake_dir())
+  vim.fn.mkdir(real .. "/.git", "p")
+  local link = helpers.fake_dir() .. "-link"
+  vim.uv.fs_symlink(real, link)
+  local git, log = fake_git(real .. "/.git")
+  local session = helpers.session({ source = { worktree = link }, repo = { root = link } })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = session } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = session } },
+  })
+  child.lua(("vim.env.GIT_DIR = '/elsewhere/.git'; require('reviewkit').setup({ tools = { git = %q } })"):format(git))
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua(("vim.wait(20000, function() return vim.uv.fs_stat(%q) ~= nil end, 20)"):format(log))
+  child.lua("vim.wait(300, function() return false end, 20)")
+  local logged = table.concat(vim.fn.readfile(log), "\n")
+  eq(logged:find("rev-parse", 1, true) ~= nil, true)
+  eq(logged:find("GIT_DIR= GIT_WORK_TREE= ", 1, true) ~= nil, true)
+  eq(child.lua_get("require('reviewkit.orchestrator')._watching()"), 1)
+end
+
+T["orchestrator"]["a commit head on a branch is followed when the branch moves"] = function()
+  local git_dir = vim.fn.resolve(helpers.fake_dir())
+  vim.fn.mkdir(git_dir .. "/refs/heads", "p")
+  local git = fake_git(git_dir)
+  local function at(sha, rev)
+    return helpers.session({
+      source = { worktree = worktree, base_spec = "main", head_spec = "feature" },
+      repo = { root = worktree },
+      head = { ref = "feature", sha = sha, dirty = false },
+      rev = rev,
+    })
+  end
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = at(string.rep("e", 40), 1) } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = at(string.rep("f", 40), 2) } },
+    {
+      match = { "file " },
+      body = { ok = true, data = { exists = true, binary = false, too_large = false, lines = {} } },
+    },
+  })
+  child.lua(("require('reviewkit').setup({ tools = { git = %q } })"):format(git))
+  child.cmd("Review diff main feature")
+  wait_notice("file to review")
+  child.lua("vim.wait(20000, function() return require('reviewkit.orchestrator')._watching() > 0 end, 20)")
+  eq(child.lua_get("require('reviewkit.orchestrator')._watching() > 0"), true)
+  vim.fn.writefile({ string.rep("f", 40) }, git_dir .. "/refs/heads/feature")
+  wait_notice("head moved")
+  local notices = child.lua_get("_G.notices")
+  local found = false
+  for _, n in ipairs(notices) do
+    found = found or n.msg:find("head moved to ffffffff", 1, true) ~= nil
+  end
+  eq(found, true)
+end
+
+T["orchestrator"]["an explicit refresh asked for during a background one reports its error"] = function()
+  helpers.respond(dir, rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua([[
+    _G.pending = {}
+    require("reviewkit.core").refresh = function(_, cb) table.insert(_G.pending, cb) end
+    vim.api.nvim_exec_autocmds("FocusGained", {})
+  ]])
+  child.lua("vim.wait(20000, function() return #_G.pending == 1 end, 20)")
+  child.cmd("Review refresh")
+  child.lua("_G.pending[1](nil)")
+  child.lua("vim.wait(20000, function() return #_G.pending == 2 end, 20)")
+  child.lua([[_G.pending[2]({ code = "E_TOOL", message = "git broke", retryable = false, details = {} })]])
+  local notices = wait_notice("git broke")
+  local shown = false
+  for _, n in ipairs(notices) do
+    shown = shown or (n.msg:find("git broke", 1, true) ~= nil and n.level == vim.log.levels.ERROR)
+  end
+  eq(shown, true)
+end
+
 return T

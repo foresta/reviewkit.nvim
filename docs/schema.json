@@ -292,7 +292,7 @@
         "type": "object"
       },
       "Commentable": {
-        "description": "Whether GitHub would accept the comment; `reason` says why not\n(`outside_diff`, or `binary`, which is independent of the host). The\nother reasons only appear in `Skipped`. Comments outside the diff are\nstill queued (D4); the sink decides what to skip.\nNamed after GitHub rather than a neutral `in_diff` because the ranges,\nthis flag and `outside_diff` all follow GitHub's rule; a second hosting\nsink needs per-destination ranges and reasons, a version bump anyway.",
+        "description": "Whether GitHub would accept the comment; `reason` says why not\n(`outside_diff`, or `binary` / `too_large`, which are independent of the\nhost). The\nother reasons only appear in `Skipped`. Comments outside the diff are\nstill queued (D4); the sink decides what to skip.\nNamed after GitHub rather than a neutral `in_diff` because the ranges,\nthis flag and `outside_diff` all follow GitHub's rule; a second hosting\nsink needs per-destination ranges and reasons, a version bump anyway.",
         "properties": {
           "github": {
             "type": "boolean"
@@ -827,7 +827,8 @@
           "stale",
           "binary",
           "not_supported",
-          "delivered"
+          "delivered",
+          "too_large"
         ],
         "type": "string"
       },
@@ -1952,6 +1953,6 @@
     "title": "Contract",
     "type": "object"
   },
-  "schema_revision": 10,
+  "schema_revision": 11,
   "schema_version": 1
 }

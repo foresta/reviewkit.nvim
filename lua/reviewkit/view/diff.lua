@@ -630,8 +630,21 @@ function M.attach()
         path = core.relpath(api.nvim_buf_get_name(args.buf))
       end
       if path and (path ~= state.path or worktree_of_commit) and core.target(path) then
+        local win = state.right --[[@as integer]]
         vim.schedule(function()
-          M.show(path)
+          -- Read now, not at BufWinEnter: `:edit +N` and `:cnext` place the
+          -- cursor after the event.
+          local line = worktree_of_commit
+            and win
+            and api.nvim_win_is_valid(win)
+            and api.nvim_win_get_buf(win) == args.buf
+            and api.nvim_win_get_cursor(win)[1]
+          M.show(path, line and function()
+            if line and win == state.right and api.nvim_win_is_valid(win) then
+              local last = api.nvim_buf_line_count(api.nvim_win_get_buf(win))
+              api.nvim_win_set_cursor(win, { math.max(1, math.min(line, last)), 0 })
+            end
+          end or nil)
         end)
       end
     end,

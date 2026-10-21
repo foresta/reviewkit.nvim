@@ -707,4 +707,45 @@ T["core"]["an older rev from the CLI is ignored and nothing fires after close"] 
   eq(helpers.event_names(child), {})
 end
 
+T["core"]["list puts the sessions of the current repository first"] = function()
+  local here = vim.fn.resolve(helpers.fake_dir())
+  vim.fn.mkdir(here .. "/sub", "p")
+  helpers.respond(dir, {
+    {
+      match = { "session list" },
+      body = {
+        ok = true,
+        data = {
+          { id = "other-new", kind = "local", repo_root = "/elsewhere", updated_at = "2026-01-03T00:00:00Z" },
+          { id = "here-old", kind = "local", repo_root = here, updated_at = "2026-01-01T00:00:00Z" },
+          { id = "here-new", kind = "local", repo_root = here, updated_at = "2026-01-02T00:00:00Z" },
+        },
+      },
+    },
+  })
+  child.lua(("vim.fn.chdir(%q)"):format(here .. "/sub"))
+  child.lua("require('reviewkit.core').list(_G.finish)")
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err, nil)
+  local ids = vim.tbl_map(function(s)
+    return s.id .. (s.here and "*" or "")
+  end, d.results[1])
+  eq(ids, { "here-new*", "here-old*", "other-new" })
+end
+
+T["core"]["a clipboard decision with no text is skipped whether or not the copy worked"] = function()
+  child.lua([[
+    vim.fn.getreg = function() return "" end
+    local session = {
+      comments = { { id = "c_1", path = "a", side = "head", line = 1, kind = "issue", body = "x" } },
+      decision = { event = "approve", body = "", deliveries = {} },
+    }
+    require("reviewkit.sink.clipboard").submit(session, { register = "r" }, function(err, result)
+      _G.copy = result
+    end)
+  ]])
+  eq(child.lua_get("#_G.copy.failed"), 1)
+  eq(child.lua_get("_G.copy.decision"), "skipped")
+end
+
 return T

@@ -291,6 +291,42 @@ function M.close(opts, cb)
   end)
 end
 
+---@class reviewkit.ListedSession: reviewkit.SessionSummary
+---@field here boolean of the repository around the current directory
+
+--- The CLI lists every repository's sessions. Of the roots holding the
+--- current directory the deepest wins, so a nested repository's sessions are
+--- not mistaken for its parent's.
+---@param cb fun(err: reviewkit.Error?, sessions: reviewkit.ListedSession[]?)
+function M.list(cb)
+  cli.call({ "session", "list" }, {}, function(err, envelope)
+    if err then
+      return cb(err)
+    end
+    local cwd = vim.uv.fs_realpath(vim.fn.getcwd()) or vim.fn.getcwd()
+    local here, depth = nil, -1
+    local sessions = vim.deepcopy(envelope and envelope.data or {})
+    for _, s in ipairs(sessions) do
+      local root = type(s.repo_root) == "string" and (vim.uv.fs_realpath(s.repo_root) or s.repo_root) or nil
+      if root and vim.fs.relpath(root, cwd) ~= nil and #root > depth then
+        here, depth = root, #root
+      end
+      s._root = root
+    end
+    for _, s in ipairs(sessions) do
+      s.here = here ~= nil and s._root == here
+      s._root = nil
+    end
+    table.sort(sessions, function(a, b)
+      if a.here ~= b.here then
+        return a.here
+      end
+      return (a.updated_at or "") > (b.updated_at or "")
+    end)
+    cb(nil, sessions)
+  end)
+end
+
 ---@return reviewkit.Session?
 function M.session()
   return state.session

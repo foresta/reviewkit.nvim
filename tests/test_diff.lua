@@ -871,4 +871,21 @@ T["diff"]["closing the review closes the diff tab"] = function()
   eq(child.lua_get("#vim.api.nvim_list_tabpages()"), 1)
 end
 
+T["diff"]["the working tree's file swapped for the commit's copy keeps the cursor line"] = function()
+  open_review(commit_session(string.rep("1", 40)), {
+    {
+      match = { "file head", "--path src/a.rs" },
+      body = { ok = true, data = { exists = true, binary = false, too_large = false, lines = { "a", "b", "c", "d" } } },
+    },
+  })
+  child.lua("vim.api.nvim_set_current_win(require('reviewkit.view.diff')._state().right)")
+  child.cmd("edit +3 " .. worktree .. "/src/a.rs")
+  wait(
+    "vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(require('reviewkit.view.diff')._state().right)):find('reviewkit://head/', 1, true) ~= nil"
+  )
+  wait("not require('reviewkit.view.diff')._state().showing")
+  child.lua("vim.wait(200, function() return false end, 20)")
+  eq(child.lua_get("vim.api.nvim_win_get_cursor(require('reviewkit.view.diff')._state().right)[1]"), 3)
+end
+
 return T

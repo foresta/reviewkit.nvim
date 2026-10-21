@@ -84,8 +84,9 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
                 _ => return Ok(None),
             };
             if meta.len() > limit {
-                let blob = target.and_then(|t| t.head_blob.clone());
-                return Ok(Some(large(blob)));
+                // Not the Target's head_blob: that is the file as of the last
+                // refresh. Not `-w`: nothing diffs a file this large later.
+                return Ok(Some(large(repo.hash_object(path).ok())));
             }
             (std::fs::read(&full)?, repo.hash_object_write(path).ok())
         }
