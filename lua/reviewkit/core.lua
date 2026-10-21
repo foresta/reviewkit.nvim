@@ -368,7 +368,7 @@ local function mutate(args, stdin, cb)
   end)
 end
 
---- Newest first; not cached, since the session is sent without it.
+--- Not cached: the session is sent without it.
 ---@param cb fun(err: reviewkit.Error?, history: reviewkit.Comment[]?)
 function M.history(cb)
   local session, err = require_session()
@@ -687,6 +687,27 @@ end
 ---@param decision_left boolean
 local function submit_lua(session, sink, lua_sink, opts, cb, decision_left)
   local merged = vim.tbl_extend("force", config.get().sinks[sink] or {}, opts)
+  -- Like the CLI's own sinks: a comment brought back from the history keeps
+  -- its deliveries, and one this sink already sent is not sent again.
+  session = vim.deepcopy(session)
+  session.comments = vim.tbl_filter(function(c)
+    for _, d in ipairs(c.deliveries or {}) do
+      if d.sink == sink and d.mode == "sent" then
+        return false
+      end
+    end
+    return true
+  end, session.comments)
+  if #session.comments == 0 and not (session.decision and session.decision.body ~= "") then
+    return vim.schedule(function()
+      cb({
+        code = "E_INVALID",
+        message = "nothing to submit: no comment " .. sink .. " has not received, and no decision text",
+        retryable = false,
+        details = { empty = true },
+      })
+    end)
+  end
   lua_sink.submit(session, merged, function(sink_err, result)
     if sink_err then
       return cb(sink_err)
@@ -719,8 +740,8 @@ local function submit_lua(session, sink, lua_sink, opts, cb, decision_left)
       result.decision = "skipped"
     end
     local consume = merged.consume
-    if consume == nil and lua_sink.consumes then
-      consume = lua_sink.consumes(session, nil)
+    if lua_sink.consumes then
+      consume = lua_sink.consumes(session, merged.consume)
     end
     local args = { "submit", "apply", "--session", session.id }
     if consume then

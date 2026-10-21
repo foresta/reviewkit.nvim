@@ -34,9 +34,7 @@ local function label(comment)
   return table.concat(parts, " ")
 end
 
---- The quickfix list is the queue: one entry per comment, jumping to the
---- head-side file. The list is replaced rather than appended so repeated
---- refreshes do not pile up.
+--- Replaced rather than appended, so repeated refreshes do not pile up.
 function M.show_comments()
   local session = core.session()
   if not session then
@@ -202,7 +200,6 @@ function M.selected_ids(first, last)
   return ids
 end
 
---- `r` in the history list.
 function M.restore_entry()
   if not in_our_list("history") then
     return pass_through("r")
@@ -213,7 +210,11 @@ function M.restore_entry()
   end
   core.restore(data.comment_id, function(err)
     if err then
-      return vim.notify("[reviewkit] " .. err.message, vim.log.levels.ERROR)
+      local place = ("%s:%d"):format(data.path, data.line)
+      local message = err.message:gsub(vim.pesc(data.comment_id), function()
+        return place
+      end)
+      return vim.notify("[reviewkit] " .. message, vim.log.levels.ERROR)
     end
     vim.notify("[reviewkit] back in the queue")
     -- The list is a snapshot; the restored comment must not stay in it.
@@ -225,12 +226,16 @@ function M.restore_entry()
   end)
 end
 
---- `D` in the queue list.
 function M.clear_delivered()
   if not in_our_list("queue") then
     return pass_through("D")
   end
-  if vim.fn.confirm("Move the delivered comments to the history?", "&Move\n&Keep", 2) ~= 1 then
+  local session = core.session()
+  local question = "Move the delivered comments to the history?"
+  if session and session.source.kind == "pr" then
+    question = question .. " GitHub will not get the ones only another sink received."
+  end
+  if vim.fn.confirm(question, "&Move\n&Keep", 2) ~= 1 then
     return
   end
   core.clear_delivered(nil, function(err, _, data)
@@ -284,10 +289,24 @@ function M.attach()
     group = group,
     pattern = "qf",
     callback = function(args)
-      vim.keymap.set("n", "<CR>", M.open_entry, { buffer = args.buf, desc = "reviewkit: open entry" })
-      vim.keymap.set("n", "K", M.preview_thread, { buffer = args.buf, desc = "reviewkit: show the thread" })
-      vim.keymap.set("n", "r", M.restore_entry, { buffer = args.buf, desc = "reviewkit: restore to the queue" })
-      vim.keymap.set("n", "D", M.clear_delivered, { buffer = args.buf, desc = "reviewkit: clear delivered" })
+      -- Not tied to set_keymaps: these keys act only inside our lists and
+      -- are the only way to restore or move entries there. A quickfix
+      -- plugin's own buffer-local keys win, since passing a key through
+      -- outside our lists would not reach theirs.
+      local taken = {}
+      for _, map in ipairs(vim.api.nvim_buf_get_keymap(args.buf, "n")) do
+        taken[map.lhs] = true
+      end
+      for _, key in ipairs({
+        { "<CR>", M.open_entry, "open entry" },
+        { "K", M.preview_thread, "show the thread" },
+        { "r", M.restore_entry, "restore to the queue" },
+        { "D", M.clear_delivered, "clear delivered" },
+      }) do
+        if not taken[key[1]] then
+          vim.keymap.set("n", key[1], key[2], { buffer = args.buf, desc = "reviewkit: " .. key[3] })
+        end
+      end
     end,
   })
 end
