@@ -168,4 +168,38 @@ T["cli"]["call retries a locked session a few times, then gives up"] = function(
   eq(child.lua_get("_G.attempts"), 4)
 end
 
+T["cli"]["health reports a missing git as an error and says what gh is for"] = function()
+  helpers.respond(dir, {
+    {
+      match = { "health" },
+      body = {
+        ok = true,
+        data = {
+          tools = { git = {}, gh = {}, herdr = { path = "/bin/herdr", version = "1" } },
+          gh_auth = vim.NIL,
+          state_dir = { path = "/tmp/s", writable = true },
+        },
+      },
+    },
+  })
+  child.lua([[
+    _G.reported = {}
+    for _, level in ipairs({ "start", "ok", "warn", "error", "info" }) do
+      vim.health[level] = function(msg) table.insert(_G.reported, level .. ": " .. msg) end
+    end
+    require("reviewkit.health").check()
+  ]])
+  local reported = child.lua_get("_G.reported")
+  local function has(text)
+    for _, line in ipairs(reported) do
+      if line:find(text, 1, true) then
+        return true
+      end
+    end
+    return false
+  end
+  eq(has("error: git: not found"), true)
+  eq(has("pull requests"), true)
+end
+
 return T

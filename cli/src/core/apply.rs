@@ -209,6 +209,7 @@ fn reason_label(reason: Reason) -> &'static str {
         Reason::Binary => "binary",
         Reason::NotSupported => "not supported",
         Reason::Delivered => "already delivered",
+        Reason::TooLarge => "too large to diff",
     }
 }
 

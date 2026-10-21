@@ -56,9 +56,10 @@ function M.check()
       health.ok(name .. ": " .. tool.version)
     elseif tool.path then
       health.warn(name .. ": found at " .. tool.path .. " but --version failed")
+    elseif name == "git" then
+      health.error("git: not found (required)", { "install git or set setup({ tools = { git = ... } })" })
     else
-      local advice = name == "git" and "required"
-        or ("needed for the " .. (name == "gh" and "github" or "herdr") .. " sink")
+      local advice = name == "gh" and "needed for pull requests and the github sink" or "needed for the herdr sink"
       health.warn(name .. ": not found (" .. advice .. ")")
     end
   end

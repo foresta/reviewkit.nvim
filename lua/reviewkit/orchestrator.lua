@@ -9,13 +9,15 @@ M.LOCKED_ROUNDS = 5
 
 local KINDS = { "issue", "suggestion", "question", "praise", "nit" }
 local REFRESH_DEBOUNCE_MS = 300
+M.GIT_TIMEOUT_MS = 10000
 
 local state = {
   attached = false,
   watchers = {}, ---@type uv.uv_fs_event_t[]
   debounce = nil, ---@type uv.uv_timer_t?
   refreshing = false,
-  refresh_again = false,
+  refresh_again = nil, ---@type { quiet: boolean }?
+  watch_gen = 0,
   locked_rounds = 0,
   retry_pending = false,
   previewing = false,
@@ -23,6 +25,8 @@ local state = {
 }
 
 local notify_error = require("reviewkit.notify").error
+
+local record_mtime, record_mtimes
 
 ---@param msg string
 local function notify(msg)
@@ -35,15 +39,19 @@ end
 --- afterwards instead of racing it.
 ---@param quiet? boolean background refreshes log instead of interrupting
 local function request_refresh(quiet)
-  if not core.session() then
+  local before = core.session()
+  if not before then
     return
   end
   if state.refreshing then
-    state.refresh_again = true
+    -- One rerun serves every request made meanwhile, so it reports errors
+    -- if any of them was an explicit :Review refresh.
+    state.refresh_again = { quiet = quiet == true and (state.refresh_again == nil or state.refresh_again.quiet) }
     return
   end
   state.refreshing = true
-  core.refresh({}, function(err)
+  local head_before = before.head.sha
+  core.refresh({}, function(err, session)
     state.refreshing = false
     if err and err.code == "E_LOCKED" then
       -- Still locked after the retries in cli.call (a long GitHub submit): the
@@ -63,6 +71,17 @@ local function request_refresh(quiet)
       return
     end
     state.locked_rounds = 0
+    if
+      not err
+      and session
+      and session.id == before.id
+      and head_before ~= nil
+      and head_before ~= vim.NIL
+      and session.head.sha ~= head_before
+      and type(session.head.sha) == "string"
+    then
+      notify(("head moved to %s"):format(session.head.sha:sub(1, 8)))
+    end
     if err then
       if quiet then
         vim.notify_once(
@@ -73,9 +92,10 @@ local function request_refresh(quiet)
         notify_error(err)
       end
     end
-    if state.refresh_again then
-      state.refresh_again = false
-      request_refresh(quiet)
+    local again = state.refresh_again
+    if again then
+      state.refresh_again = nil
+      request_refresh(again.quiet)
     end
   end)
 end
@@ -95,6 +115,7 @@ local function schedule_refresh()
 end
 
 local function stop_watching()
+  state.watch_gen = state.watch_gen + 1
   for _, watcher in ipairs(state.watchers) do
     watcher:stop()
     watcher:close()
@@ -131,42 +152,108 @@ local function add_watcher(dir, recursive, relevant)
   end
 end
 
+--- Inherited GIT_DIR / GIT_WORK_TREE would point git at whatever
+--- repository Neovim was started for, not at the worktree asked about.
+---@return table<string, string>
+local function git_env()
+  local env = vim.fn.environ()
+  -- The repository variables of the CLI's INHERITED_REPOSITORY_ENV (its
+  -- pathspec switches do not affect rev-parse), plus the ceiling, which
+  -- would stop rev-parse from finding a worktree below it.
+  for _, name in ipairs({
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_QUARANTINE_PATH",
+    "GIT_CEILING_DIRECTORIES",
+  }) do
+    env[name] = nil
+  end
+  env.GIT_TERMINAL_PROMPT = "0"
+  return env
+end
+
+---@param path string
+---@return string
+local function real(path)
+  return vim.uv.fs_realpath(path) or path
+end
+
+--- A working-tree head is watched as files; a commit head only moves with
+--- its ref, so only HEAD and the refs are watched for it.
 ---@param session reviewkit.Session
-local function watch_worktree(session)
+---@param files boolean
+local function watch(session, files)
   stop_watching()
   state.debounce = vim.uv.new_timer()
-  -- `recursive` is honoured on macOS; Linux inotify watches only the root,
-  -- where BufWritePost and FocusGained still cover the reviewer's own edits.
-  add_watcher(session.source.worktree, true, M._relevant_change)
+  local gen = state.watch_gen
+  local worktree = session.source.worktree
+  if files then
+    -- `recursive` is honoured on macOS; Linux inotify watches only the root,
+    -- where BufWritePost and FocusGained still cover the reviewer's own edits.
+    add_watcher(worktree, true, M._relevant_change)
+  end
   -- A linked worktree (`git worktree add`) keeps HEAD and refs outside the
   -- worktree, where the recursive watch above never looks.
-  local worktree = session.source.worktree
-  vim.system(
-    { "git", "-C", worktree, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir" },
-    { text = true },
-    function(res)
-      local dirs = res.code == 0 and vim.split(vim.trim(res.stdout or ""), "\n") or {}
-      vim.schedule(function()
-        local git_dir, common = dirs[1], dirs[2]
-        local still_watching = state.debounce ~= nil and #state.watchers > 0
-        if not still_watching or not git_dir or not common or vim.startswith(git_dir, worktree .. "/") then
-          return
-        end
-        add_watcher(git_dir, false, function(name)
-          return name == "HEAD"
-        end)
-        add_watcher(common, false, function(name)
-          return name == "packed-refs"
-        end)
-        local not_lock = function(name)
-          return not name:match("%.lock$")
-        end
-        add_watcher(common .. "/refs", true, not_lock)
-        -- Linux ignores `recursive`; plain branch names live right here.
-        add_watcher(common .. "/refs/heads", false, not_lock)
+  local ok = pcall(vim.system, {
+    config.get().tools.git or "git",
+    "-C",
+    worktree,
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-dir",
+    "--git-common-dir",
+  }, { text = true, env = git_env(), clear_env = true, timeout = M.GIT_TIMEOUT_MS }, function(res)
+    local dirs = res.code == 0 and vim.split(vim.trim(res.stdout or ""), "\n") or {}
+    vim.schedule(function()
+      local git_dir, common = dirs[1], dirs[2]
+      if gen ~= state.watch_gen or not git_dir or not common then
+        return
+      end
+      -- realpath on both: rev-parse resolves symlinks (macOS /var), the
+      -- recorded worktree may not, and a mismatch would watch it twice.
+      if files and vim.fs.relpath(real(worktree), real(git_dir)) ~= nil then
+        return
+      end
+      add_watcher(git_dir, false, function(name)
+        return name == "HEAD"
       end)
-    end
-  )
+      add_watcher(common, false, function(name)
+        return name == "packed-refs"
+      end)
+      local not_lock = function(name)
+        return not name:match("%.lock$")
+      end
+      add_watcher(common .. "/refs", true, not_lock)
+      -- Linux ignores `recursive`; plain branch names live right here.
+      add_watcher(common .. "/refs/heads", false, not_lock)
+    end)
+  end)
+  if not ok then
+    vim.notify_once(
+      "[reviewkit] cannot run git to find the git dir; HEAD and refs are not watched",
+      vim.log.levels.WARN
+    )
+  end
+end
+
+--- Only a local session refreshes without the network; a pull request's
+--- refresh fetches, and its worktree is reviewkit's own.
+---@param session reviewkit.Session
+---@return "files"|"refs"|nil
+local function watch_mode(session)
+  if session.source.kind ~= "local" then
+    return nil
+  end
+  if session.head.sha == nil or session.head.sha == vim.NIL then
+    return "files"
+  end
+  return "refs"
 end
 
 --- Inside a `.git` directory only a moved HEAD or ref changes what is
@@ -193,6 +280,34 @@ function M._relevant_change(filename)
     or inside:match("^reftable/") ~= nil
 end
 
+--- Seconds alone would miss a write in the same second as the read.
+---@param name string
+---@return integer[]? { sec, nsec }
+local function mtime(name)
+  local stat = vim.uv.fs_stat(name)
+  return stat and { stat.mtime.sec, stat.mtime.nsec } or nil
+end
+
+---@param buf integer
+function record_mtime(buf)
+  if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "" then
+    local name = vim.api.nvim_buf_get_name(buf)
+    if name ~= "" then
+      vim.b[buf].reviewkit_mtime = mtime(name) or false
+    end
+  end
+end
+
+--- Buffers read before the session opened have no record; what is on disk
+--- now is the best guess for them.
+function record_mtimes()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.b[buf].reviewkit_mtime == nil then
+      record_mtime(buf)
+    end
+  end
+end
+
 local function attach()
   if state.attached then
     return
@@ -211,11 +326,13 @@ local function attach()
     -- Fills the :ReviewSubmit completion; nothing waits on it.
     core.sinks(function() end)
     local session = core.session()
-    if session and session.head.sha == nil then
-      watch_worktree(session)
+    local mode = session and watch_mode(session)
+    if session and mode then
+      watch(session, mode == "files")
     else
       stop_watching()
     end
+    record_mtimes()
   end, group)
   core.on("ReviewSessionClosed", stop_watching, group)
   -- A PR refresh checks the new head out under open buffers; Vim only
@@ -260,11 +377,18 @@ local function attach()
       protect(args.buf)
     end,
   })
+  vim.api.nvim_create_autocmd({ "BufReadPost", "BufWritePost" }, {
+    group = group,
+    callback = function(args)
+      record_mtime(args.buf)
+    end,
+  })
   vim.api.nvim_create_autocmd({ "BufWritePost", "FocusGained" }, {
     group = group,
     callback = function(args)
       local session = core.session()
-      if not session or session.head.sha ~= nil then
+      local mode = session and watch_mode(session)
+      if not mode or (args.event == "BufWritePost" and mode ~= "files") then
         return
       end
       if args.event == "BufWritePost" and not core.relpath(vim.api.nvim_buf_get_name(args.buf)) then
@@ -336,19 +460,20 @@ function M.resume(id)
   if id then
     return core.resume(id, opened)
   end
-  require("reviewkit.cli").call({ "session", "list" }, {}, function(err, envelope)
+  core.list(function(err, summaries)
     if err then
       return notify_error(err)
     end
-    local summaries = envelope and envelope.data or {}
+    summaries = summaries or {}
     if #summaries == 0 then
       return notify("no saved sessions")
     end
     vim.ui.select(summaries, {
       prompt = "Resume review session",
       format_item = function(s)
+        local root = s.repo_root or ""
         return ("%s  %s  (%d comment%s, %s)"):format(
-          vim.fs.basename(s.repo_root or ""),
+          s.here and vim.fs.basename(root) or vim.fn.fnamemodify(root, ":~"),
           s.title or s.id,
           s.comments or 0,
           s.comments == 1 and "" or "s",
@@ -406,6 +531,17 @@ local function not_on_disk(buf)
   vim.cmd("checktime " .. buf)
   if vim.b[buf].changedtick ~= tick then
     notify("the file changed on disk and was reloaded; check the line and comment again")
+    return true
+  end
+  -- With 'noautoread' a declined reload leaves changedtick alone, and Vim
+  -- stops warning about it; only the time the text was read tells.
+  local read_at = vim.b[buf].reviewkit_mtime
+  local on_disk = mtime(vim.api.nvim_buf_get_name(buf))
+  local newer = type(read_at) == "table"
+    and on_disk ~= nil
+    and (on_disk[1] > read_at[1] or (on_disk[1] == read_at[1] and on_disk[2] > read_at[2]))
+  if newer then
+    notify("the file on disk is newer than the buffer; reload it (:edit) and comment again")
     return true
   end
   return false
@@ -515,6 +651,13 @@ function M.comment(opts)
   end
   local outside = not core.is_commentable(path, side, line)
     or (start_line ~= nil and not core.is_commentable(path, side, start_line))
+  local target = core.target(path)
+  local note = ""
+  if target and target.too_large then
+    note = " (file too large to diff; not a line comment)"
+  elseif outside then
+    note = " (outside the diff; agent only)"
+  end
   local lines = nil
   if opts.suggest then
     local selected = vim.api.nvim_buf_get_lines(buf, (start_line or line) - 1, line, false)
@@ -524,13 +667,13 @@ function M.comment(opts)
     table.insert(lines, fence)
   end
   require("reviewkit.view.input").open_keeping({
-    title = "Comment " .. where .. (outside and " (outside the diff; agent only)" or ""),
+    title = "Comment " .. where .. note,
     lines = lines,
     start_insert = true,
     footer = " :w save · q cancel · first line `nit:` sets the kind ",
   }, function(text, done)
     if vim.trim(text) == "" then
-      return
+      return notify("empty comment discarded")
     end
     local body, kind, suggestion = compose(text)
     core.add_comment({
@@ -560,6 +703,9 @@ function M.edit_comment()
     title = ("Edit %s:%d"):format(comment.path, comment.line),
     lines = render(comment),
   }, function(text, done)
+    if vim.trim(text) == "" then
+      return notify("empty text discarded; the comment is unchanged")
+    end
     local body, kind, suggestion = compose(text)
     core.update_comment(comment.id, { body = body, kind = kind, suggestion = suggestion or vim.NIL }, done)
   end)
@@ -1063,7 +1209,7 @@ function M._reset()
   stop_watching()
   state.attached = false
   state.refreshing = false
-  state.refresh_again = false
+  state.refresh_again = nil
 end
 
 return M

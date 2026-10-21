@@ -81,7 +81,8 @@ pub struct AnchorContext {
 }
 
 /// Whether GitHub would accept the comment; `reason` says why not
-/// (`outside_diff`, or `binary`, which is independent of the host). The
+/// (`outside_diff`, or `binary` / `too_large`, which are independent of the
+/// host). The
 /// other reasons only appear in `Skipped`. Comments outside the diff are
 /// still queued (D4); the sink decides what to skip.
 /// Named after GitHub rather than a neutral `in_diff` because the ranges,
@@ -101,6 +102,7 @@ pub enum Reason {
     Binary,
     NotSupported,
     Delivered,
+    TooLarge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

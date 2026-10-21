@@ -115,7 +115,7 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 |---|---|
 | `:Review diff <base> [<head>]` | review the working tree against `<base>`, or the commit `<head>` (shown read-only, whatever is checked out); `main...` compares with the merge-base, like `git diff main...`; `A..B` is `A B` (so it takes no `<head>`) |
 | `:Review pr <number\|url>` | review a pull request |
-| `:Review resume [id]` / `:Review refresh` | reopen a saved session / recompute it |
+| `:Review resume [id]` / `:Review refresh` | reopen a saved session (this repository's first) / recompute it |
 | `:Review threads [refresh]` | list the pull request's review threads |
 | `:ReviewSubmit herdr\|github\|clipboard` / `:'<,'>ReviewSubmit <sink>` | send the queue (the range form, in the queue list, sends only the selected comments); comments leave it only at the session's own destination (GitHub for a PR, the agent for a local diff), so a PR review can go to an agent first and to GitHub later; GitHub submits are previewed first (`sinks.github.confirm = false` skips it) |
 | `:ReviewClose[!]` | close the session (`!` also deletes its state); asks first while comments are unsent |

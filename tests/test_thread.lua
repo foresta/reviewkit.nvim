@@ -343,4 +343,30 @@ T["thread"]["local sessions have no thread list"] = function()
   eq(notices[#notices].msg:find("only in pull request sessions", 1, true) ~= nil, true)
 end
 
+T["thread"]["a range thread that starts on the other side is found on its own line"] = function()
+  open_pr(nil, pr_session({ threads = { thread({ line = 2, start_line = 5, start_side = "base" }) } }))
+  child.lua("vim.api.nvim_win_set_cursor(0, { 2, 0 })")
+  child.lua("require('reviewkit.orchestrator').thread()")
+  eq(child.lua_get("require('reviewkit.view.thread').is_open()"), true)
+end
+
+T["thread"]["saving an empty reply says it was discarded and queues nothing"] = function()
+  open_pr()
+  child.lua("vim.api.nvim_win_set_cursor(0, { 4, 0 })")
+  child.lua("require('reviewkit.orchestrator').thread()")
+  child.type_keys("r")
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { ' ' })")
+  child.cmd("write")
+  wait(
+    "vim.tbl_contains(vim.tbl_map(function(n) return n.msg:find('discarded', 1, true) ~= nil end, _G.notices), true)"
+  )
+  eq(
+    child.lua_get(
+      "vim.tbl_contains(vim.tbl_map(function(n) return n.msg:find('discarded', 1, true) ~= nil end, _G.notices), true)"
+    ),
+    true
+  )
+  eq(call_with({ "comment add" }), nil)
+end
+
 return T

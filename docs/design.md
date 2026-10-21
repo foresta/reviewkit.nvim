@@ -114,8 +114,10 @@ Target {                    -- 実ファイルは <source.worktree>/<path>。Lua
                             -- 追加に見える）。`file base` / `file head` は同じ 1 MiB を自分の側のサイズで判定し、
                             -- 超えれば読まずに lines を返さない。サイズは git の blob（作業ツリーはファイル）から取る。
                             -- commentable の範囲も空にする（誰も diff を見ていない行に GitHub の行コメントを置かない）。
-                            -- コメントは積めるが `commentable.github = false`（reason は outside_diff）で、review 本文に回る。
-                            -- binary と同じく、アンカーのためにファイルを読まず、行の範囲も検査しない
+                            -- コメントは積めるが `commentable.github = false`（reason は too_large）で、review 本文に回る。
+                            -- binary と同じく、アンカーのためにファイルを読まず、行の範囲も検査しない。
+                            -- 作業ツリー側の anchor.blob は refresh 時の head_blob ではなく、その時点のファイルの
+                            -- `git hash-object`（-w なし。git がストリームで読み、CLI はメモリに載せない）
   viewed: bool              -- Session.viewed の blob が head_blob と一致するとき true。ファイルが変わると自動で false
   stats: { added, removed }
   hunks: Hunk[]
@@ -156,8 +158,10 @@ Comment {
   deliveries: { sink, at, mode: "sent" | "staged" | "copied", url?, consumed }[]   -- consumed: この配送でキューを出た
   created_at, updated_at
 }
-Reason = "outside_diff" | "stale" | "binary" | "not_supported" | "delivered"
-                            -- Comment.commentable.reason は outside_diff / binary だけ（stale は Comment.stale）。
+Reason = "outside_diff" | "stale" | "binary" | "not_supported" | "delivered" | "too_large"
+                            -- Comment.commentable.reason は outside_diff / binary / too_large だけ（stale は Comment.stale）。
+                            -- too_large は Target.too_large のファイルへのコメント（diff を誰も見ていないので行に置かない）。
+                            -- sink-github は outside_diff / binary と同じく review 本文に書く
                             -- stale / not_supported / delivered は SinkResult.skipped の reason にだけ出る
 
 CommentInput { path, side, line, start_line?, kind?, body, suggestion?, reply_to? }
@@ -254,7 +258,8 @@ reviewkit session open --local [--base REV] [--head REV|worktree] [--cwd]
                                                                       A..B は base = A、head = B（空の側は HEAD）。両側を書いた base と --head の併用は E_INVALID
 reviewkit session open --session ID                      -> session   再開
 reviewkit session get     --session ID                   -> session
-reviewkit session list    [--cwd]                        -> data: SessionSummary[]
+reviewkit session list                                   -> data: SessionSummary[]   全リポジトリのセッション。--cwd では絞らない
+                                                            （今のリポジトリを先に並べるのは Lua の core.list）
 reviewkit session refresh --session ID [--path P ...]    -> session   Source 再実行。base / head が動いたら再アンカー。PR は pr.json も取り直す
                                                                      --path は将来の部分更新用で、現状は受け取るだけで全体を再計算する
 reviewkit session close   --session ID [--purge]         -> data: { closed: true }   purge で worktree と state を消す
@@ -419,6 +424,19 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
 - local の再計算: orchestrator が worktree と `.git` を `vim.uv.new_fs_event` で監視し（デバウンス）、`BufWritePost` と
   `FocusGained` でも `refresh` を呼ぶ。エージェントは Neovim の外でファイルを書くため、バッファの保存だけでは足りない。
   `base_spec` が `HEAD` のように動く指定なら、commit で base も動くので `refresh` が base 側も追従する
+- git dir の場所は `tools.git`（既定 `git`）の `rev-parse --git-dir --git-common-dir` で求める。`GIT_DIR` / `GIT_WORK_TREE` /
+  `GIT_INDEX_FILE` などリポジトリを指す環境変数（CLI と同じ一覧と `GIT_CEILING_DIRECTORIES`）は外し
+  （Neovim を起動した環境の値で別のリポジトリを指さないため）、timeout を付ける。
+  git dir が worktree の中にある（realpath で比べる）ときは worktree の再帰監視で足りるので足さない
+- head がコミットの local セッション（`:Review diff A B`、head がブランチ）は作業ツリーを監視しない。代わりに
+  git dir の `HEAD` と common dir の `packed-refs` / `refs/` を監視し、`FocusGained` でも `refresh` する。
+  ブランチに commit が積まれると head が動き、`refresh` で head.sha が変わったら「head moved」を通知する。
+  Linux の inotify は再帰の監視をしないので、`refs/` の直下と `refs/heads/` しか見えない。`feature/x` のような
+  階層のあるブランチの移動は `FocusGained` の `refresh` で拾う
+  reflog や fetch のたびに走る `refresh` は git の読み出しだけで、ネットワークを使わない。PR のセッションは監視しない
+  （refresh が gh と fetch を伴う）
+- 監視と `BufWritePost` / `FocusGained` の `refresh` は通知を出さず（失敗はログと 1 回の警告）、`:Review refresh` は失敗を通知する。
+  実行中に頼まれた `refresh` は終わった後にもう一度走り、その間に頼まれたうち通知を出すものが 1 つでもあれば通知を出す
 - `comment add` で `anchor` に対象行と前後 2 行のテキストを保存する。作業ツリー側の blob は `git hash-object -w` で
   object store に書く（後で差分を取るため。dangling object として `git gc` が回収する）
 - `refresh` で side の sha（作業ツリーなら blob）が変わったとき: `git diff -U0 <old> <new> -- path` の hunk で、
@@ -451,14 +469,21 @@ lua/reviewkit/
                       コメントを置けるのはレビューしているテキストの上だけ。未保存のバッファは断る（保存された内容にアンカーするため）。
                       head がコミットのセッションでは作業ツリーのファイルを場所として扱わず、quickfix の <CR> もコミットの写しを開く。
                       PR の worktree のファイルは読み取り専用にする（編集はコミットとずれ、次の refresh で失われる。セッションを閉じても戻さない）。
-                      コメントの前に checktime し、ディスクで変わっていれば読み直して断る（見えている行とアンカーがずれるため）
+                      コメントの前に checktime し、ディスクで変わっていれば読み直して断る（見えている行とアンカーがずれるため）。
+                      noautoread で読み直しを断った場合は changedtick が変わらないので、バッファを読んだ・書いた時点の
+                      ファイルの mtime（秒とナノ秒。orchestrator が BufReadPost / BufWritePost で記録。FileChangedShellPost は
+                      W11 で読み直しを断っても発火するので使わない）より
+                      ディスクが新しければ断る。記録の無いバッファ（セッションより前に開いた）は ReviewSessionOpened の時点の値を使う。
+                      コミットの head のセッションで作業ツリーのファイルが head 側の窓に入ったとき（:cnext、:edit）は
+                      写しに差し替え、カーソルの行を持ち越す
   view/annotate.lua   extmark の注釈（stale は薄く）
   view/queue.lua      一覧（quickfix）
-  view/input.lua      入力窓
-  view/thread.lua     カーソル行のスレッドを float で表示。r で返信（reply_to 付きコメント）、R で resolve の切り替え
+  view/input.lua      入力窓。空の本文を保存したときは、送らずに捨てたことを通知する（コメント・編集・返信とも）
+  view/thread.lua     カーソル行のスレッドを float で表示。r で返信（reply_to 付きコメント）、R で resolve の切り替え。
+                      範囲スレッドは start_side が side と同じときだけ start_line から line までを覆う（]t と同じ規則）
   view/preview.lua    送信前のプレビュー（SubmitPreview）を見せて確認する
-  orchestrator.lua    :Review の配線、worktree の監視、既定キーマップ
-  sink/clipboard.lua  Lua 側 sink の最小例
+  orchestrator.lua    :Review の配線、worktree の監視、既定キーマップ。:Review resume は core.list の順（今のリポジトリが先）
+  sink/clipboard.lua  Lua 側 sink の最小例。本文が空の decision は写さないので、写しの成否によらず skipped
 plugin/reviewkit.lua  コマンドと maps.lua の <Plug>(reviewkit-*) の定義だけ（orchestrator は読み込まない）
 scripts/gen-types.lua `reviewkit schema` の JSON Schema から types.lua を生成
 ```
@@ -472,6 +497,8 @@ core.open(spec, cb)          spec = { kind = "pr", pr = 123 | url, cwd? } | { ki
 core.resume(id, cb)
 core.refresh(opts, cb)
 core.close(opts, cb)
+core.list(cb)                -- session list。cwd を含む最も深い repo_root のセッションを先に、それぞれ updated_at の新しい順。
+                             -- 各要素に here（今のリポジトリか）を足す。他のリポジトリのものも落とさない
 core.session() / core.targets() / core.comments() / core.decision() / core.threads()
 core.target(path)            -- path の Target（無ければ nil）
 core.relpath(name)           -- バッファ名を session の path に（worktree の外なら nil）。両側を realpath で解決する
