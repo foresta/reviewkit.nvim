@@ -38,6 +38,7 @@ pub trait Git {
 pub struct SystemGit {
     path: PathBuf,
     network_timeout: Duration,
+    partial_clones: std::sync::Mutex<std::collections::HashMap<PathBuf, bool>>,
 }
 
 impl SystemGit {
@@ -54,6 +55,7 @@ impl SystemGit {
         Ok(Self {
             path: path.to_path_buf(),
             network_timeout,
+            partial_clones: Default::default(),
         })
     }
 }
@@ -79,6 +81,29 @@ const INHERITED_REPOSITORY_ENV: &[&str] = &[
 
 impl Git for SystemGit {
     fn run(&self, cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
+        // Spawning in a missing directory fails like a missing program would.
+        if !cwd.is_dir() {
+            return Err(checkout_not_found(cwd));
+        }
+        let bounded = subcommand(args).is_some_and(|a| NETWORK_COMMANDS.contains(&a)) || self.is_partial_clone(cwd);
+        self.exec(cwd, args, bounded)
+    }
+}
+
+impl SystemGit {
+    /// Any command in a partial clone may fetch a missing blob, so all of
+    /// them get the network deadline there.
+    fn is_partial_clone(&self, cwd: &Path) -> bool {
+        let mut known = self.partial_clones.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(partial) = known.get(cwd) {
+            return *partial;
+        }
+        let partial = has_promisor(|args| self.exec(cwd, args, false));
+        known.insert(cwd.to_path_buf(), partial);
+        partial
+    }
+
+    fn exec(&self, cwd: &Path, args: &[&str], bounded: bool) -> Result<Vec<u8>> {
         log::debug!("git {}", args.join(" "));
         let mut command = Command::new(&self.path);
         command
@@ -128,14 +153,16 @@ impl Git for SystemGit {
                 Ok(())
             });
         }
-        let mut child = command
-            .spawn()
-            .map_err(|err| crate::ext::tool::spawn_error("git", err))?;
+        let mut child = command.spawn().map_err(|err| {
+            if cwd.is_dir() {
+                crate::ext::tool::spawn_error("git", err)
+            } else {
+                checkout_not_found(cwd)
+            }
+        })?;
         let stdout = drain(child.stdout.take());
         let stderr = drain(child.stderr.take());
-        let deadline = subcommand(args)
-            .filter(|a| NETWORK_COMMANDS.contains(a))
-            .map(|_| Instant::now() + self.network_timeout);
+        let deadline = bounded.then(|| Instant::now() + self.network_timeout);
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
@@ -160,6 +187,7 @@ impl Git for SystemGit {
                             self.network_timeout
                         ),
                     )
+                    .hint("set REVIEWKIT_GIT_TIMEOUT_MS to wait longer (it also bounds every command in a partial clone, which may fetch missing blobs)")
                     .retryable());
                 }
                 Err(err) => {
@@ -187,6 +215,19 @@ impl Git for SystemGit {
         }
         Ok(stdout)
     }
+}
+
+fn checkout_not_found(cwd: &Path) -> Error {
+    Error::tool("git", ErrorCode::EGit, format!("checkout not found: {}", cwd.display()))
+        .hint("it was moved or removed; open the review again from where the checkout is now")
+}
+
+/// What makes git fetch missing objects on demand: either setting alone is
+/// enough.
+fn has_promisor(run: impl Fn(&[&str]) -> Result<Vec<u8>>) -> bool {
+    run(&["config", "--get", "extensions.partialclone"]).is_ok()
+        || run(&["config", "--type=bool", "--get-regexp", r"^remote\..*\.promisor$"])
+            .is_ok_and(|out| text(&out).lines().any(|l| l.ends_with(" true")))
 }
 
 fn subcommand<'a>(args: &[&'a str]) -> Option<&'a str> {
@@ -515,10 +556,7 @@ impl<'a> Repository<'a> {
     /// A partial clone lacks blobs it fetches on demand from its promisor;
     /// a bare clone of it would miss them with no remote to ask.
     pub fn is_partial(&self) -> bool {
-        self.run(&["config", "--get", "extensions.partialclone"]).is_ok()
-            || self
-                .run(&["config", "--type=bool", "--get-regexp", r"^remote\..*\.promisor$"])
-                .is_ok_and(|out| text(&out).lines().any(|l| l.ends_with(" true")))
+        has_promisor(|args| self.run(args))
     }
 
     pub fn has_commit(&self, sha: &str) -> bool {
