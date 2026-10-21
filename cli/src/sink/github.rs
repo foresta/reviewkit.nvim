@@ -212,7 +212,7 @@ fn review_body(session: &Session, decision_body: &str, outside: &[&Comment]) -> 
             None => format!(" L{}", comment.line),
         };
         let side = if comment.side == Side::Base { " (base)" } else { "" };
-        let mut entry = format!("**`{}`{range}{side}**", comment.path);
+        let mut entry = format!("**{}{range}{side}**", inline_code(&comment.path));
         if let Some(link) = permalink(session, comment) {
             entry.push_str(&format!("\n{link}"));
         }
@@ -220,6 +220,19 @@ fn review_body(session: &Session, decision_body: &str, outside: &[&Comment]) -> 
         parts.push(entry);
     }
     parts.join("\n\n")
+}
+
+/// CommonMark inline code: the delimiter outruns every backtick run inside,
+/// and a space keeps a leading or trailing backtick from joining it.
+fn inline_code(text: &str) -> String {
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let tick = "`".repeat(longest + 1);
+    let pad = if text.starts_with('`') || text.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+    format!("{tick}{pad}{text}{pad}{tick}")
 }
 
 fn skip_reason(comment: &Comment) -> Option<Reason> {
@@ -877,14 +890,21 @@ fn write_pending(session: &Session, plan: &Plan, session_dir: &Path) -> Result<(
     };
     let bytes = serde_json::to_vec_pretty(&pending)
         .map_err(|err| Error::internal(format!("cannot serialize pending_submit.json: {err}")))?;
-    // Atomic, so a crash mid-write cannot leave a file that silently
-    // disables the duplicate check.
-    let mut tmp = tempfile::NamedTempFile::new_in(session_dir)?;
-    std::io::Write::write_all(&mut tmp, &bytes)?;
-    tmp.persist(pending_path(session_dir))
-        .map_err(|err| Error::internal(format!("cannot write pending_submit.json: {}", err.error)))?;
-    Ok(())
+    // Synced before gh runs: a record lost to a power cut after the post
+    // landed would let the next submit post it again.
+    crate::store::write_atomically(&pending_path(session_dir), &bytes)
 }
+
+/// Only for a request that certainly posted nothing; a record kept for it
+/// would hold edits until GitHub can be asked about a submit that never was.
+fn discard_pending(session_dir: &Path) {
+    let path = pending_path(session_dir);
+    if let Err(err) = std::fs::remove_file(&path) {
+        log::warn!("cannot remove {}: {err}", path.display());
+    }
+}
+
+const RECONCILE_HINT: &str = "the next submit checks GitHub for what was already posted before sending";
 
 /// Sends the plan. Everything before gh is called is a hard error; once the
 /// mutation was sent, the answer is turned into a SinkResult per alias so
@@ -894,23 +914,39 @@ pub fn submit(session: &Session, gh: &dyn Gh, repo: &RepoRef, session_dir: &Path
     let plan = plan(session, &time::now())?;
     write_pending(session, &plan, session_dir)?;
     let response = gh::graphql(gh, &repo.host, &plan.mutation, plan.variables.clone()).map_err(|err| {
-        if crate::ext::tool::never_started(&err) {
+        // A rejected token is refused before GitHub reads the request.
+        if crate::ext::tool::never_started(&err) || err.code == ErrorCode::EAuth {
+            discard_pending(session_dir);
             return err;
         }
-        err.outcome_unknown("the next submit checks GitHub for what was already posted before sending")
+        err.outcome_unknown(RECONCILE_HINT)
     })?;
+    fn first_message<'a>(mut errors: impl Iterator<Item = &'a serde_json::Value>) -> String {
+        errors
+            .find_map(|e| e["message"].as_str())
+            .unwrap_or("GitHub answered without data")
+            .to_string()
+    }
+    if response.refused_before_running() {
+        discard_pending(session_dir);
+        return Err(gh::graphql_error(&first_message(response.errors.iter())).retryable());
+    }
     // An error naming no field (GitHub's "may be the result of a timeout")
     // or no data at all does not say what was done; reported as failed, the
     // next submit would post again whatever was in fact created.
     if response.data.is_null() || response.errors.iter().any(|e| e["path"].is_null()) {
-        let message = response
-            .errors
-            .iter()
-            .find(|e| e["path"].is_null())
-            .and_then(|e| e["message"].as_str())
-            .unwrap_or("GitHub answered without data");
-        return Err(gh::graphql_error(message)
-            .outcome_unknown("the next submit checks GitHub for what was already posted before sending"));
+        let message = first_message(response.errors.iter().filter(|e| e["path"].is_null()));
+        let err = gh::graphql_error(&message);
+        // Reconciling happens on its own; clearing the pending review on
+        // GitHub is what the user has to do before it can succeed.
+        let own_hint = (err.code == ErrorCode::EPendingReview)
+            .then(|| err.hint.clone())
+            .flatten();
+        let mut err = err.outcome_unknown(RECONCILE_HINT);
+        if own_hint.is_some() {
+            err.hint = own_hint;
+        }
+        return Err(err);
     }
     let at = time::now();
     let mut sent = Vec::new();
@@ -1110,6 +1146,7 @@ impl super::Sink for GithubSink {
         let pending = pending_path(&session_dir);
         let mut recovered = None;
         if pending.exists() {
+            let mut left_behind = None;
             let (_, found) = store.update_then(
                 id,
                 |s| {
@@ -1121,9 +1158,30 @@ impl super::Sink for GithubSink {
                     Ok(found)
                 },
                 || {
-                    let _ = std::fs::remove_file(&pending);
+                    if let Err(err) = std::fs::remove_file(&pending)
+                        && err.kind() != std::io::ErrorKind::NotFound
+                    {
+                        left_behind = Some(err);
+                    }
                 },
             )?;
+            // Phase 2 would take the record for another submit's and refuse
+            // every send from now on, which submitting again cannot fix.
+            if let Some(err) = left_behind {
+                let ids: Vec<&str> = found
+                    .iter()
+                    .flat_map(|f| f.sent.iter().map(|s| s.comment_id.as_str()))
+                    .collect();
+                return Err(Error::new(
+                    ErrorCode::EIo,
+                    format!("cannot remove {} after reconciling it: {err}", pending.display()),
+                )
+                .details(serde_json::json!({ "recovered": ids }))
+                .hint(format!(
+                    "the earlier submit is reconciled and saved; delete {} and submit again",
+                    pending.display()
+                )));
+            }
             recovered = found;
         }
         // Phase 2: the lock is held across the request. The answer is
@@ -1147,7 +1205,10 @@ impl super::Sink for GithubSink {
                         "another GitHub submit of this session was cut off just now",
                     )
                     .retryable()
-                    .hint("submit again: it checks GitHub for what that one posted first"));
+                    .hint(format!(
+                        "submit again: it checks GitHub for what that one posted first; if this repeats, {} could not be removed",
+                        pending.display()
+                    )));
                 }
                 let repo = repo_ref_of(s)?;
                 let view = crate::core::comments::narrowed(s, opts.comment_ids.as_deref())?;
@@ -1461,6 +1522,17 @@ mod tests {
             )),
             "{body}"
         );
+    }
+
+    #[test]
+    fn a_path_with_backticks_stays_one_code_span_in_the_review_body() {
+        let mut s = pr_session();
+        s.comments[3].path = "a`b``c.rs".into();
+        let body = plan(&s, "t").unwrap().variables["body"].as_str().unwrap().to_string();
+        assert!(body.contains("**```a`b``c.rs``` L6**"), "{body}");
+        s.comments[3].path = "`edge`".into();
+        let body = plan(&s, "t").unwrap().variables["body"].as_str().unwrap().to_string();
+        assert!(body.contains("**`` `edge` `` L6**"), "{body}");
     }
 
     #[test]

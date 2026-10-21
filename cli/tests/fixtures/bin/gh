@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 # Rules: $FAKE_GH_DIR/responses.json, a list of
-#   { "match": ["substring of argv or stdin", ...], "body": <json> | "raw": "text", "stderr": "", "exit": n, "sleep": seconds }
+#   { "match": ["substring of argv or stdin", ...], "body": <json> | "raw": "text", "stderr": "", "exit": n, "sleep": seconds,
+#     "run": [argv] }
+# "run" is executed before answering, to change the state dir while reviewkit waits on gh.
 # First rule whose every match is found wins; calls go to calls.jsonl.
 # Without FAKE_GH_DIR only --version and `auth token` are answered.
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -42,6 +45,8 @@ def emit(text):
 
 for rule in rules:
     if all(m in joined or m in stdin for m in rule.get("match", [])):
+        if "run" in rule:
+            subprocess.run(rule["run"], check=True)
         time.sleep(rule.get("sleep", 0))
         if "raw" in rule:
             emit(rule["raw"])
