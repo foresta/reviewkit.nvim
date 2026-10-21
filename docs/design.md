@@ -342,7 +342,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
 - 選択送信: sink には選んだコメントだけを持ち decision とスレッド操作を持たないセッションの写しを渡し、結果は本物のセッションに
   適用する。Lua の sink にも同じ写しを渡し、`attempted` は選んだ id にする。apply は `attempted` 外の `sent` を無視する
 - 二重送信の防止: gh を呼ぶ前に `pending_submit.json` を書く。次の GitHub への submit で残っていれば threads を取り直し、
-  照合してから消す。行コメントと返信の本文の末尾には、独立した行で `<!-- reviewkit:<hash> -->` を付ける。hash は
+  照合してから消す（消すのは結果を保存した後、ロックを持ったまま。外で消すと次の送信が書いた記録を消しうる）。
+  送信がロックを取った時点で記録が残っていれば（照合を見た後に別の送信が中断した）、書き換えずに再試行可の E_CONFLICT で止める。行コメントと返信の本文の末尾には、独立した行で `<!-- reviewkit:<hash> -->` を付ける。hash は
   （コメントの id, 試行の時刻 `at`）から作るので、同じコメントの前の試行の投稿とも、Web UI で書いた同じ本文とも区別できる。
   照合はこの marker の一致で行い、viewer が分かっていれば投稿者が viewer であることも求める（引用で marker を写した他人の投稿を拾わない）。
   review は、運んだ行コメントのどれかが見つかれば投稿済み（review と行コメントは 1 つの mutation で作られる）。
