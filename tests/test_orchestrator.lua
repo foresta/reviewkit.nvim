@@ -824,6 +824,38 @@ T["orchestrator"]["q asks before throwing away typed text"] = function()
   eq(child.lua_get("vim.bo.buftype"), "")
 end
 
+T["orchestrator"][":wq in the input window saves and closes only the input window"] = function()
+  child.cmd("vsplit")
+  local before = child.lua_get("#vim.api.nvim_tabpage_list_wins(0)")
+  child.lua("require('reviewkit.view.input').open({ title = 't', on_save = function(body) _G.saved = body end })")
+  child.lua("vim.cmd('stopinsert'); vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'note' })")
+  child.cmd("wq")
+  child.lua("vim.wait(1000, function() return _G.saved ~= nil end, 10)")
+  eq(child.lua_get("_G.saved"), "note")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), before)
+end
+
+T["orchestrator"][":wq in the input window over a single window keeps Neovim running"] = function()
+  child.lua("require('reviewkit.view.input').open({ title = 't', on_save = function(body) _G.saved = body end })")
+  child.lua("vim.cmd('stopinsert'); vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'note' })")
+  child.cmd("wq")
+  child.lua("vim.wait(1000, function() return _G.saved ~= nil end, 10)")
+  eq(child.lua_get("_G.saved"), "note")
+  eq(child.lua_get("#vim.api.nvim_tabpage_list_wins(0)"), 1)
+end
+
+T["orchestrator"]["saving twice before the input window closes saves once"] = function()
+  child.lua([[
+    _G.saves = 0
+    require('reviewkit.view.input').open({ title = 't', on_save = function() _G.saves = _G.saves + 1 end })
+    vim.cmd('stopinsert')
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'note' })
+    vim.api.nvim_input('<C-s><C-s>')
+  ]])
+  child.lua("vim.wait(200, function() return false end, 10)")
+  eq(child.lua_get("_G.saves"), 1)
+end
+
 local function github_rules()
   local pr = helpers.session({
     id = "pr/github.com/o/r/7",
