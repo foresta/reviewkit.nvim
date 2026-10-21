@@ -104,6 +104,11 @@ function drain_if_waiting(session)
       accept(envelope.session)
       return
     end
+    -- Only a busy session clears up by itself; asking again after any other
+    -- error would only repeat it every few seconds.
+    if not err or err.code ~= "E_LOCKED" then
+      return
+    end
     -- A submit that fails writes nothing, so no change would ask again.
     state.drained = nil
     vim.defer_fn(function()
@@ -667,14 +672,26 @@ local function ensure_recorded(session, cb)
       if not fresh.pending_apply then
         return cb(nil, fresh)
       end
-      cli.call({ "submit", "apply", "--session", session.id, "--drain" }, {}, function(drain_err, drained)
-        take_session(drain_err, drained, function(_, after)
-          if after and not after.pending_apply then
-            return cb(nil, after)
+      local function drain(tries)
+        -- One drain at a time: a second one would only meet the first's lock.
+        if state.draining and tries > 0 then
+          return vim.defer_fn(function()
+            drain(tries - 1)
+          end, 200)
+        end
+        cli.call({ "submit", "apply", "--session", session.id, "--drain" }, {}, function(drain_err, drained)
+          if drain_err and drain_err.code ~= "E_LOCKED" then
+            return cb(drain_err)
           end
-          refuse()
+          take_session(drain_err, drained, function(_, after)
+            if after and not after.pending_apply then
+              return cb(nil, after)
+            end
+            refuse()
+          end)
         end)
-      end)
+      end
+      drain(50)
     end)
   end)
 end

@@ -85,15 +85,22 @@ pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
                     });
                 Response::with_session(applied, &session)
             }
-            Err(err) if err.code == ErrorCode::ELocked => {
+            // The result is safely queued whatever went wrong; an error here
+            // would make the client deliver it again.
+            Err(err) => {
+                let why = if err.code == ErrorCode::ELocked {
+                    "recorded once the session is free (another submit is running)".to_string()
+                } else {
+                    log::warn!("recording the result failed, it stays queued: {}", err.message);
+                    format!(
+                        "recorded later, by the next change a reviewkit able to write this session makes ({})",
+                        err.message
+                    )
+                };
                 let session = store.load(&session)?;
-                result.summary = format!(
-                    "{}; recorded once the session is free (another submit is running)",
-                    apply::summary(&result)
-                );
+                result.summary = format!("{}; {why}", apply::summary(&result));
                 Response::with_session(result, &session)
             }
-            Err(err) => Err(err),
         };
     }
     let (Some(session_id), Some(sink_name)) = (args.session, args.sink) else {

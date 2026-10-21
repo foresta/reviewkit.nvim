@@ -60,6 +60,9 @@ impl Store {
             .session_dir(&session.id)
             .map(|dir| dir.join(PENDING_SUBMIT_FILE).exists())
             .unwrap_or(false);
+        // A result a newer CLI queued counts too, though only that CLI can
+        // record it: it is a delivery another instance made, and leaving it
+        // out would let a Lua sink deliver the same comments again.
         session.pending_apply = !self.queued_applies(&session.id).is_empty();
     }
 
@@ -71,7 +74,13 @@ impl Store {
             return Err(no_session(id));
         }
         let dir = self.dir.session_dir(id)?.join(APPLIES_DIR);
-        std::fs::create_dir_all(&dir)?;
+        // Not create_dir_all: a session purged meanwhile must not come back
+        // as a directory holding only this file.
+        match std::fs::create_dir(&dir) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(no_session(id)),
+            Err(err) if err.kind() != std::io::ErrorKind::AlreadyExists => return Err(err.into()),
+            _ => {}
+        }
         let bytes = serde_json::to_vec_pretty(queued).map_err(serialize_error)?;
         write_atomically(&dir.join(format!("{}.json", ulid::Ulid::generate())), &bytes)
     }

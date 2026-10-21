@@ -342,6 +342,44 @@ T["core"]["an empty preview after a recovery still explains itself"] = function(
   eq(lines[1], "An earlier submit was cut off: what it already posted is recognised, not sent again.")
 end
 
+T["core"]["a drain that fails for another reason reports that reason and is not retried"] = function()
+  helpers.respond(dir, {
+    {
+      match = { "session open --local" },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ comments = QUEUED, pending_apply = true }) },
+    },
+    {
+      match = { "--drain" },
+      body = {
+        ok = false,
+        error = { code = "E_SCHEMA_VERSION", message = "written by a newer reviewkit", retryable = false, details = {} },
+      },
+      exit = 6,
+    },
+  })
+  open(child)
+  child.lua([[
+    require('reviewkit.core').register_sink('clip', {
+      submit = function(_, _, cb)
+        cb(nil, { sent = {}, failed = {}, skipped = {}, decision = 'not_applicable' })
+      end,
+    })
+    require('reviewkit.core').submit('clip', {}, _G.finish)
+  ]])
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err.code, "E_SCHEMA_VERSION")
+  local drains = function()
+    return #vim.tbl_filter(function(c)
+      return vim.tbl_contains(c.args, "--drain")
+    end, helpers.calls(dir))
+  end
+  local seen = drains()
+  vim.wait(6000, function()
+    return drains() > seen
+  end, 100)
+  eq(drains(), seen)
+end
+
 T["core"]["the clipboard refuses to copy nothing"] = function()
   child.lua([[
     require('reviewkit.sink.clipboard').submit({ comments = {} }, { register = 'r' }, function(err)
