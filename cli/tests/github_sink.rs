@@ -1883,6 +1883,7 @@ fn a_confirmed_submit_is_refused_when_the_session_changed_after_the_preview() {
     decide(&state, &remote, &gh, &id, "comment", "fine");
     let preview = preview_github(&state, &remote, &gh, &id);
     assert!(preview["digest"].is_string());
+    assert_eq!(preview.get("recovered"), None, "nothing was cut off: {preview}");
     assert_eq!(
         preview_github(&state, &remote, &gh, &id)["digest"],
         preview["digest"],
@@ -2823,7 +2824,12 @@ fn a_confirmed_recovery_that_another_instance_recorded_first_reports_it_as_done(
         serde_json::json!([]),
     );
     let preview = preview_github(&state, &remote, &gh, &id);
-    assert_eq!(preview["digest"], "recovered", "{preview}");
+    assert_eq!(preview["recovered"], serde_json::json!([posted]), "{preview}");
+    let digest = preview["digest"].as_str().unwrap();
+    assert!(
+        digest.len() == 24 && digest.bytes().all(|b| b.is_ascii_hexdigit()),
+        "{preview}"
+    );
     let other = submit_github(&state, &remote, &gh, &id);
     assert_eq!(other["data"]["sent"][0]["comment_id"], posted, "{other}");
     let confirmed = submit_confirmed(&state, &remote, &gh, &id, &preview["digest"]);

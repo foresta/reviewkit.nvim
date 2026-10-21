@@ -4,7 +4,7 @@
 local M = {}
 
 M.SCHEMA_VERSION = 1
-M.SCHEMA_REVISION = 11
+M.SCHEMA_REVISION = 12
 
 ---@alias reviewkit.AgentType "claude"|"plain"
 
@@ -349,6 +349,7 @@ M.SCHEMA_REVISION = 11
 ---@field digest? string What `SubmitOptions.expect_digest` is compared with; only sinks that can check it under the session lock give one.
 ---@field mode reviewkit.DeliveryMode
 ---@field raw table The sink's own request, for debugging. Not part of the contract: it changes whenever the sink's transport does.
+---@field recovered? string[] Comments an interrupted submit is found to have posted already. They are not sent again; confirming the preview records them as sent.
 ---@field replies reviewkit.PreviewReply[]
 ---@field sink string
 ---@field skipped reviewkit.Skipped[]

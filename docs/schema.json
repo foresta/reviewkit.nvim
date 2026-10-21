@@ -1461,6 +1461,13 @@
             "description": "The sink's own request, for debugging. Not part of the contract: it\nchanges whenever the sink's transport does.",
             "type": "object"
           },
+          "recovered": {
+            "description": "Comments an interrupted submit is found to have posted already. They\nare not sent again; confirming the preview records them as sent.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "replies": {
             "items": {
               "$ref": "#/$defs/PreviewReply"
@@ -1953,6 +1960,6 @@
     "title": "Contract",
     "type": "object"
   },
-  "schema_revision": 11,
+  "schema_revision": 12,
   "schema_version": 1
 }

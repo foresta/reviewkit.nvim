@@ -14,7 +14,7 @@ pub use crate::model::{SinkInfo, SinkRuntime};
 pub trait Sink: Sync {
     fn name(&self) -> &'static str;
     fn info(&self, ctx: &Context) -> SinkInfo;
-    /// Whether what it delivered leaves the queue (decisions.md).
+    /// Whether what it delivered leaves the queue (docs/design.md §3).
     fn consumes(&self, source: &Source, requested: Option<bool>) -> bool;
     fn targets(&self, _ctx: &Context) -> Result<Vec<SinkTarget>> {
         Err(Error::invalid(format!(
