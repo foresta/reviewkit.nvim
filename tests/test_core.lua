@@ -580,7 +580,19 @@ T["core"]["an older rev from the CLI is ignored and nothing fires after close"] 
   local f = assert(io.open(path .. ".tmp", "w"))
   f:write("{}")
   f:close()
+  local gets_before = #vim.tbl_filter(function(c)
+    return table.concat(c.args, " "):find("session get", 1, true) ~= nil
+  end, helpers.calls(dir))
   os.rename(path .. ".tmp", path)
+  -- The watcher must have asked before "nothing happened" means anything.
+  eq(
+    vim.wait(20000, function()
+      return #vim.tbl_filter(function(c)
+        return table.concat(c.args, " "):find("session get", 1, true) ~= nil
+      end, helpers.calls(dir)) > gets_before
+    end, 20),
+    true
+  )
   child.lua("vim.wait(600, function() return #_G.events > 0 end, 20)")
   eq(helpers.event_names(child), {})
   eq(child.lua_get("require('reviewkit.core').session().rev"), 5)

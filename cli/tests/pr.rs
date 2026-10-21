@@ -394,6 +394,7 @@ fn a_pull_request_refresh_does_not_lock_out_other_commands_while_it_fetches() {
     )
     .unwrap();
 
+    let calls_before = gh.calls().len();
     let refresh = std::process::Command::new(assert_cmd::cargo::cargo_bin("reviewkit"))
         .envs(
             reviewkit(&state, &remote, &gh)
@@ -405,7 +406,17 @@ fn a_pull_request_refresh_does_not_lock_out_other_commands_while_it_fetches() {
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1000));
+    // The refresh is inside its slow gh call once that call is logged.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while gh.calls().len() == calls_before {
+        assert!(std::time::Instant::now() < deadline, "the refresh never reached gh");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let mut refresh = refresh;
+    assert!(
+        refresh.try_wait().unwrap().is_none(),
+        "the refresh must still be fetching"
+    );
     let decided = json(
         &reviewkit(&state, &remote, &gh)
             .args(["decision", "set", "--session", "pr/github.com/o/r/7"])

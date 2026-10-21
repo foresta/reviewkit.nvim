@@ -210,6 +210,7 @@ fn unknown_base_is_invalid_and_outside_a_repo_is_e_git() {
     let plain = tempfile::tempdir().unwrap();
     let out = Command::cargo_bin("reviewkit")
         .unwrap()
+        .envs(common::ISOLATED_GIT)
         .env("REVIEWKIT_GIT", real_git())
         .arg("--state-dir")
         .arg(state.path())
@@ -304,6 +305,7 @@ fn nested_repository_is_not_an_untracked_target_and_clean_tree_is_not_dirty() {
 
     std::fs::create_dir(repo.path().join("nested")).unwrap();
     Process::new(real_git())
+        .envs(common::ISOLATED_GIT)
         .args(["init", "-q"])
         .current_dir(repo.path().join("nested"))
         .status()

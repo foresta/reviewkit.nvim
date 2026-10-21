@@ -207,7 +207,8 @@ T["real binary: a commit in a linked worktree refreshes the session"] = function
   child.cmd("Review diff HEAD")
   assert(child.lua_get("vim.wait(30000, function() return require('reviewkit.core').session() ~= nil end, 20)"))
   eq(child.lua_get("#require('reviewkit.core').targets()"), 1)
-  child.lua("vim.wait(500)")
+  -- The linked worktree's own watchers come in one go after the root's.
+  assert(child.lua_get("vim.wait(30000, function() return require('reviewkit.orchestrator')._watching() >= 3 end, 20)"))
   git(linked, { "commit", "-q", "-am", "agent" })
   assert(child.lua_get("vim.wait(30000, function() return #require('reviewkit.core').targets() == 0 end, 50)"))
   child.stop()

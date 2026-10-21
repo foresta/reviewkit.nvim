@@ -234,7 +234,7 @@ T["thread"]["a base-side thread opens from the base window and its reply goes to
   child.type_keys("r")
   child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'ok' })")
   child.cmd("write")
-  child.lua("vim.wait(2000, function() return require('reviewkit.core').session().rev == 2 end, 20)")
+  eq(child.lua_get("vim.wait(20000, function() return require('reviewkit.core').session().rev == 2 end, 20)"), true)
   local input
   for _, call in ipairs(helpers.calls(dir)) do
     if call.args[1] == "comment" and call.args[2] == "add" then

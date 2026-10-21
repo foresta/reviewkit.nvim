@@ -42,6 +42,7 @@ impl Repo {
 
     pub fn git(&self, args: &[&str]) {
         let status = Process::new(real_git())
+            .envs(ISOLATED_GIT)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
             .args(args)
             .current_dir(self.path())
@@ -51,13 +52,18 @@ impl Repo {
     }
 }
 
+/// The developer's own git config (signing, hooks paths, default branch,
+/// diff settings) would otherwise decide whether these tests pass.
+pub const ISOLATED_GIT: [(&str, &str); 2] = [("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_CONFIG_NOSYSTEM", "1")];
+
 pub fn real_git() -> PathBuf {
     which::which("git").expect("git on PATH")
 }
 
 pub fn reviewkit(state: &tempfile::TempDir, repo: &Repo) -> Command {
     let mut cmd = Command::cargo_bin("reviewkit").unwrap();
-    cmd.env("REVIEWKIT_GIT", real_git())
+    cmd.envs(ISOLATED_GIT)
+        .env("REVIEWKIT_GIT", real_git())
         .env("REVIEWKIT_GH", "/nonexistent/gh")
         .env("REVIEWKIT_HERDR", "/nonexistent/herdr")
         .arg("--state-dir")

@@ -99,7 +99,10 @@ T["orchestrator"]["comment() reads the cursor line, parses the kind and queues t
   eq(input.line, 4)
   eq(input.start_line, nil)
   -- The annotation shows up on the file buffer once the queue changed.
-  child.lua("vim.wait(1000, function() return #require('reviewkit.core').comments() == 1 end, 20)")
+  local annotated = child.lua_get(
+    "vim.wait(20000, function() return #vim.api.nvim_buf_get_extmarks(0, vim.api.nvim_create_namespace('reviewkit_annotate'), 0, -1, {}) > 0 end, 20)"
+  )
+  eq(annotated, true)
   local marks =
     child.lua_get("#vim.api.nvim_buf_get_extmarks(0, vim.api.nvim_create_namespace('reviewkit_annotate'), 0, -1, {})")
   eq(marks, 1)

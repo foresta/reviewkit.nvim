@@ -9,21 +9,29 @@ DEBUG_BIN := target/debug/reviewkit
 MINI_VERSION := v0.18.0
 STYLUA_VERSION := 2.6.0
 LUALS_VERSION := 3.19.2
+RUST_VERSION := 1.99.0
+NVIM_VERSION := v0.12.5
 # Only these spawn the real binary; the rest already ran in test-lua.
 INTEGRATION_TESTS := tests/test_integration.lua tests/test_types.lua
 
 build:
-	cargo build --release
+	cargo build --release --locked
 
-deps: .tests/deps/mini.nvim
+# The stamp names the version, so changing MINI_VERSION clones again instead
+# of testing against whatever was cloned first.
+MINI_STAMP := .tests/deps/mini.nvim.$(MINI_VERSION)
 
-.tests/deps/mini.nvim:
-	git clone --depth 1 --branch $(MINI_VERSION) https://github.com/echasnovski/mini.nvim $@
+deps: $(MINI_STAMP)
+
+$(MINI_STAMP):
+	rm -rf .tests/deps/mini.nvim .tests/deps/mini.nvim.*
+	git clone --depth 1 --branch $(MINI_VERSION) https://github.com/echasnovski/mini.nvim .tests/deps/mini.nvim
+	touch $@
 
 test: test-rust test-lua test-integration
 
 test-rust:
-	cargo test --workspace
+	cargo test --workspace --locked
 
 test-lua: deps
 	$(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua
@@ -32,13 +40,13 @@ test-integration: deps debug-bin
 	REVIEWKIT_REAL_BIN=$(CURDIR)/$(DEBUG_BIN) $(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua $(INTEGRATION_TESTS)
 
 debug-bin:
-	cargo build
+	cargo build --locked
 
 check: check-rust check-lua
 
 check-rust:
 	cargo fmt --all --check
-	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # lua-language-server reads $VIMRUNTIME from .luarc.json; CI shells do not set it.
 check-lua: export VIMRUNTIME ?= $(shell $(NVIM) --clean --headless +'echo $$VIMRUNTIME' +q 2>&1)
@@ -72,3 +80,5 @@ dist-sums:
 print-versions:
 	@echo "stylua=$(STYLUA_VERSION)"
 	@echo "luals=$(LUALS_VERSION)"
+	@echo "rust=$(RUST_VERSION)"
+	@echo "nvim=$(NVIM_VERSION)"

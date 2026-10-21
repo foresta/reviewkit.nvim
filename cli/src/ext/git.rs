@@ -703,6 +703,34 @@ fn text(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// Answers a batched hash-object with one line fewer than asked, and a
+    /// single-path one with that path's id.
+    struct ShortBatch;
+
+    impl Git for ShortBatch {
+        fn run(&self, _cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
+            let paths = &args[2..];
+            if paths.len() > 1 {
+                return Ok(paths[1..]
+                    .iter()
+                    .map(|p| format!("id-{p}\n"))
+                    .collect::<String>()
+                    .into_bytes());
+            }
+            if paths[0] == "gone" {
+                return Err(Error::tool("git", ErrorCode::EGit, "no such file"));
+            }
+            Ok(format!("id-{}\n", paths[0]).into_bytes())
+        }
+    }
+
+    #[test]
+    fn a_batch_answering_too_few_lines_is_hashed_per_path_without_shifting_ids() {
+        let repo = Repository::at(&ShortBatch, PathBuf::from("/repo"));
+        let ids = repo.hash_objects(&["a".into(), "gone".into(), "c".into()]);
+        assert_eq!(ids, vec![Some("id-a".to_string()), None, Some("id-c".to_string())]);
+    }
+
     #[test]
     fn config_before_the_subcommand_keeps_the_network_timeout() {
         assert_eq!(subcommand(&["fetch", "origin"]), Some("fetch"));
