@@ -92,16 +92,51 @@ impl Herdr for SystemHerdr {
         let stdout = stdout.join().unwrap_or_default();
         let stderr = stderr.join().unwrap_or_default();
         if !status.success() {
-            let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
-            let detail = if stderr.is_empty() {
-                String::from_utf8_lossy(&stdout).trim().to_string()
-            } else {
-                stderr
-            };
-            return Err(Error::tool("herdr", ErrorCode::ETool, format!("herdr {what} failed: {detail}")).retryable());
+            return Err(failure(&what, &stdout, &stderr));
         }
         Ok(stdout)
     }
+}
+
+#[derive(Deserialize)]
+struct ErrorBody {
+    error: ErrorDetail,
+}
+
+#[derive(Deserialize)]
+struct ErrorDetail {
+    code: String,
+    #[serde(default)]
+    message: String,
+}
+
+/// Codes herdr answers before it delivers anything: the target does not
+/// exist, so no text can have reached a pane.
+const NOT_FOUND: &[&str] = &["agent_not_found", "pane_not_found"];
+
+fn failure(what: &str, stdout: &[u8], stderr: &[u8]) -> Error {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    let detail = if stderr.is_empty() {
+        String::from_utf8_lossy(stdout).trim().to_string()
+    } else {
+        stderr
+    };
+    let Ok(ErrorBody { error }) = serde_json::from_str::<ErrorBody>(&detail) else {
+        return Error::tool("herdr", ErrorCode::ETool, format!("herdr {what} failed: {detail}")).retryable();
+    };
+    let message = if error.message.is_empty() {
+        &error.code
+    } else {
+        &error.message
+    };
+    let err = Error::tool("herdr", ErrorCode::ETool, format!("herdr {what} failed: {message}"));
+    if NOT_FOUND.contains(&error.code.as_str()) {
+        // Not retryable: the same target is just as missing next time.
+        return err
+            .details(serde_json::json!({ "not_started": true, "herdr_code": error.code }))
+            .hint("the agent or pane is gone; pick another target");
+    }
+    err.details(serde_json::json!({ "herdr_code": error.code })).retryable()
 }
 
 fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
@@ -130,8 +165,6 @@ pub struct Agent {
     pub foreground_cwd: Option<String>,
     #[serde(default)]
     pub terminal_title_stripped: Option<String>,
-    #[serde(default)]
-    pub workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,8 +180,6 @@ pub struct Pane {
     pub foreground_cwd: Option<String>,
     #[serde(default)]
     pub terminal_title_stripped: Option<String>,
-    #[serde(default)]
-    pub workspace_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -214,4 +245,31 @@ pub fn send_text(herdr: &dyn Herdr, pane: &str, text: &str) -> Result<()> {
         .run(&["pane", "send-text", pane, text])
         .map(|_| ())
         .map_err(sent_maybe)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_target_herdr_does_not_know_is_not_started_and_other_errors_are_not() {
+        let missing = failure(
+            "pane send-text",
+            b"",
+            br#"{"error":{"code":"pane_not_found","message":"pane p not found"},"id":"cli:request"}"#,
+        );
+        assert!(crate::ext::tool::never_started(&missing));
+        assert!(!missing.retryable);
+        assert_eq!(missing.message, "herdr pane send-text failed: pane p not found");
+        let other = failure(
+            "agent prompt",
+            b"",
+            br#"{"error":{"code":"server_busy","message":"busy"}}"#,
+        );
+        assert!(!crate::ext::tool::never_started(&other));
+        assert_eq!(other.details["herdr_code"], "server_busy");
+        let plain = failure("agent prompt", b"", b"pane gone");
+        assert!(!crate::ext::tool::never_started(&plain));
+        assert_eq!(plain.message, "herdr agent prompt failed: pane gone");
+    }
 }

@@ -123,7 +123,9 @@ impl Store {
         applied
     }
 
-    fn load_for_write(&self, id: &str) -> Result<Session> {
+    /// For a caller about to do slow work before its write (a PR fetch):
+    /// a session this CLI may not write fails here rather than after it.
+    pub fn load_for_write(&self, id: &str) -> Result<Session> {
         let path = self.dir.session_file(id)?;
         match read_session(&path, id)? {
             (mut session, None) => {
@@ -322,22 +324,41 @@ impl Store {
 
     /// `with_fetch_lock` for a session that may not exist yet: its directory
     /// has to be there before the lock file can be. A first open that fails
-    /// before its first save takes the directory away again.
+    /// before its first save takes the directory away again, still holding
+    /// the lock: after releasing it, a waiting open would already be writing
+    /// its pr.json there. That waiter then holds a lock on a removed file, so
+    /// it makes the directory again and locks anew.
     pub fn with_new_fetch_lock<T>(&self, id: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
         let dir = self.dir.session_dir(id)?;
-        let created = !dir.exists();
-        std::fs::create_dir_all(&dir)?;
-        let result = lock_while(
-            &self.dir.fetch_lock_file(id)?,
-            FETCH_LOCK_TIMEOUT,
-            &format!("session {id}"),
-            f,
-        );
-        if result.is_err() && created && !self.exists(id) {
-            let _ = std::fs::remove_dir_all(&dir);
-            self.remove_empty_parents(&dir);
+        let lock_path = self.dir.fetch_lock_file(id)?;
+        let mut f = Some(f);
+        loop {
+            let created = !dir.exists();
+            std::fs::create_dir_all(&dir)?;
+            // A failing first open may remove the directory between the two.
+            let file = match open_lock_file(&lock_path) {
+                Ok(file) => file,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err.into()),
+            };
+            let outcome = lock_file_while(file, FETCH_LOCK_TIMEOUT, &format!("session {id}"), |file| {
+                if !still_at(file, &lock_path) {
+                    return Ok(None);
+                }
+                let Some(f) = f.take() else {
+                    return Err(Error::internal("the fetch ran twice"));
+                };
+                let result = f();
+                if result.is_err() && created && !self.exists(id) {
+                    let _ = std::fs::remove_dir_all(&dir);
+                    self.remove_empty_parents(&dir);
+                }
+                Ok(Some(result))
+            })?;
+            if let Some(result) = outcome {
+                return result;
+            }
         }
-        result
     }
 
     /// Serializes slow work on one session (fetching a pull request) without
@@ -394,13 +415,21 @@ pub const FETCH_LOCK_TIMEOUT: Duration = Duration::from_secs(180);
 /// Runs `f` while holding an advisory lock on `path`. Polls instead of
 /// blocking so a stuck holder turns into E_LOCKED rather than a hang.
 pub fn lock_while<T>(path: &Path, timeout: Duration, what: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let file = open_lock_file(path)?;
+    lock_file_while(file, timeout, what, |_| f())
+}
+
+fn open_lock_file(path: &Path) -> std::io::Result<File> {
+    File::options().create(true).truncate(false).write(true).open(path)
+}
+
+fn lock_file_while<T>(file: File, timeout: Duration, what: &str, f: impl FnOnce(&File) -> Result<T>) -> Result<T> {
     use std::io::ErrorKind::{Interrupted, WouldBlock};
-    let file = File::options().create(true).truncate(false).write(true).open(path)?;
     let mut lock = fd_lock::RwLock::new(file);
     let deadline = Instant::now() + timeout;
     loop {
         match lock.try_write() {
-            Ok(_guard) => return f(),
+            Ok(guard) => return f(&guard),
             Err(err) if matches!(err.kind(), WouldBlock | Interrupted) => {
                 if Instant::now() >= deadline {
                     return Err(
@@ -412,6 +441,20 @@ pub fn lock_while<T>(path: &Path, timeout: Duration, what: &str, f: impl FnOnce(
             Err(err) => return Err(err.into()),
         }
     }
+}
+
+#[cfg(unix)]
+fn still_at(file: &File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (file.metadata(), std::fs::metadata(path)) {
+        (Ok(locked), Ok(current)) => locked.dev() == current.dev() && locked.ino() == current.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn still_at(_file: &File, path: &Path) -> bool {
+    path.exists()
 }
 
 const WRITER_KEY: &str = "_writer";
@@ -634,6 +677,35 @@ mod tests {
 
     fn store(dir: &tempfile::TempDir) -> Store {
         Store::new(StateDir::new(dir.path().to_path_buf())).with_lock_timeout(Duration::from_millis(100))
+    }
+
+    #[test]
+    fn a_failed_first_open_does_not_take_away_what_a_waiting_open_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "pr/h/o/r/1";
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let first = {
+            let store = store(&dir);
+            std::thread::spawn(move || {
+                store.with_new_fetch_lock(id, || -> Result<()> {
+                    started_tx.send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(300));
+                    Err(Error::invalid("the first fetch failed"))
+                })
+            })
+        };
+        started_rx.recv().unwrap();
+        let store = store(&dir);
+        let pr_file = store.state_dir().pr_file(id).unwrap();
+        store
+            .with_new_fetch_lock(id, || {
+                std::thread::sleep(Duration::from_millis(100));
+                std::fs::write(&pr_file, b"{}")?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(first.join().unwrap().is_err());
+        assert!(pr_file.is_file(), "the waiting open keeps its pr.json");
     }
 
     fn session(id: &str) -> Session {

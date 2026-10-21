@@ -191,15 +191,20 @@ pub fn format_prompt(session: &Session, opts: &HerdrOptions, agent_head: Option<
         .enumerate()
         .map(|(i, c)| {
             let reply = c.reply_to.as_deref().map(|t| reply_context(session, t));
-            let mut notes: Vec<&str> = Vec::new();
-            if let Some(reply) = &reply {
+            let mut notes: Vec<String> = Vec::new();
+            if let Some(reply) = reply {
                 notes.push(reply);
             }
             if c.side == Side::Base {
-                notes.push("refers to the base version of the file");
+                let base_path = crate::core::files::base_git_path(session, &c.path);
+                notes.push(if base_path == c.path {
+                    "refers to the base version of the file".to_string()
+                } else {
+                    format!("refers to the base version of the file, named {base_path} there")
+                });
             }
             if c.stale {
-                notes.push("the line may have shifted since the comment was written");
+                notes.push("the line may have shifted since the comment was written".to_string());
             }
             let mut head = format!("{}. {}", i + 1, reference(c, agent_type));
             if c.kind != crate::model::CommentKind::Issue {
@@ -563,7 +568,6 @@ mod tests {
             cwd: Some(cwd.into()),
             foreground_cwd: Some(fg.into()),
             terminal_title_stripped: None,
-            workspace_id: None,
         }
     }
 
@@ -748,6 +752,32 @@ mod tests {
         assert_eq!(super::super::fence_for("let x = 1;"), "```");
         assert_eq!(super::super::fence_for("```rust\nx\n```"), "````");
         assert_eq!(super::super::fence_for("`````"), "``````");
+    }
+
+    #[test]
+    fn a_base_side_note_on_a_renamed_file_names_its_base_path() {
+        let mut s = session();
+        s.targets.push(crate::model::Target {
+            id: "t_1".into(),
+            path: "src/b.rs".into(),
+            old_path: Some("src/old_b.rs".into()),
+            status: crate::model::TargetStatus::Renamed,
+            reason: crate::model::TargetReason::Changed,
+            base_blob: None,
+            head_blob: None,
+            binary: false,
+            too_large: false,
+            viewed: false,
+            stats: crate::model::Stats::default(),
+            hunks: vec![],
+            commentable: crate::model::CommentableRanges::default(),
+            range: None,
+        });
+        let prompt = format_prompt(&s, &HerdrOptions::default(), None);
+        assert!(
+            prompt.contains("refers to the base version of the file, named src/old_b.rs there"),
+            "{prompt}"
+        );
     }
 
     #[test]

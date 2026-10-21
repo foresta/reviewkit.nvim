@@ -55,7 +55,12 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
 - `retryable` は「同じコマンドをそのまま再実行しても副作用が重複しない」ときだけ true。GitHub への mutation と herdr への
   送信が失敗・timeout したときは、相手に届いたかどうか分からないので false にし、`details.outcome = "unknown"` と
   確かめ方の hint を付ける。GitHub は次の submit が pending の記録と照合する（§5）。herdr には照合が無いので、
-  エージェントの画面で確かめてから送り直す
+  エージェントの画面で確かめてから送り直す。ただし herdr が送り先が無いと答えたとき（stderr の JSON の `error.code` が
+  `agent_not_found` / `pane_not_found`）は何も届いていないので unknown にせず、`details.not_started = true` と
+  `details.herdr_code` を付ける（再試行しても同じく失敗するので `retryable` は false）
+- `E_USAGE` の message は clap のエラーの最初の段落を 1 行にしたもの（足りない引数の名前を含む）。全文は `details.usage`
+- stdout に封筒を書けなかったとき（読み手が先に閉じた、ディスクフル等）は、封筒を返せないので終了コード 74。
+  理由は stderr に書く。ただし読み手が先に閉じた（BrokenPipe）ときは、読む相手がいないので何も書かない
 - private リポジトリの PR を、origin が別のリポジトリの checkout から開くと、reviewkit は `https://<host>/<owner>/<name>.git`
   を自分で組み立てて mirror を作る。この URL の fetch に限り、その host の credential helper を gh（`gh auth git-credential`）に
   差し替える。ユーザーの remote と設定には触れない。認証に失敗したら `E_AUTH`（tool = git、hint `gh auth login --hostname <host>`）
@@ -107,7 +112,10 @@ Target {                    -- 実ファイルは <source.worktree>/<path>。Lua
                             -- too_large: base 側・head 側のどちらかのファイル、または差分が 1 MiB を超える。
                             -- そのとき hunks は空で、View は diff をかけない（片側だけ全文で diff すると全行が
                             -- 追加に見える）。`file base` / `file head` は同じ 1 MiB を自分の側のサイズで判定し、
-                            -- 超えれば読まずに lines を返さない。サイズは git の blob（作業ツリーはファイル）から取る
+                            -- 超えれば読まずに lines を返さない。サイズは git の blob（作業ツリーはファイル）から取る。
+                            -- commentable の範囲も空にする（誰も diff を見ていない行に GitHub の行コメントを置かない）。
+                            -- コメントは積めるが `commentable.github = false`（reason は outside_diff）で、review 本文に回る。
+                            -- binary と同じく、アンカーのためにファイルを読まず、行の範囲も検査しない
   viewed: bool              -- Session.viewed の blob が head_blob と一致するとき true。ファイルが変わると自動で false
   stats: { added, removed }
   hunks: Hunk[]
@@ -222,6 +230,8 @@ SinkResult {
 - sink-github で Decision が無く comments がある場合は `event = comment` で送る（行コメントは review の一部としてしか送れない）。本文は diff の外のコメントの節だけ（無ければ空）
 - sink-herdr のプロンプトは header、Decision の本文（あれば）、番号付きのコメント（`@path#L1-L2` 形式。`plain` は `path:1-2`）の順。
   Decision の event は送れないので、本文が空の Decision は `skipped` として残る。
+  base 側のコメントには base の版を指すと注記し、rename されたファイルなら base での名前（`old_path`）も書く
+  （参照の path は head 側の名前で、エージェントの checkout に base の名前は無い）。
   PR のセッションでは header の次に、PR の番号と URL、head のブランチと commit、その commit を展開した worktree の場所を書く
   （コメントの行番号はその commit のもので、エージェントの checkout とは限らない）。送り先のエージェントの checkout の HEAD が
   PR の head と違えば、プロンプトにそう書き、結果の `summary` にも添える
@@ -314,6 +324,11 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   ロックはプロセス終了で解放される。CLI のロック待ちは短く（2 秒）、Lua の `cli.call` が `E_LOCKED` を間隔を空けて数回再試行する。
   PR の open と refresh（gh と git fetch）はロックの外（fetch.lock の中）で取得し、ロックの中では読み直したセッションに当てるだけにする。
   初回の open も同じで、取得が済んでからロックの中でセッションを作る（取得に失敗したら作りかけのディレクトリを消す）。
+  作りかけのディレクトリは fetch.lock を持ったまま消す（離してから消すと、待っていた open が書いた pr.json ごと消える）。
+  待っていた open はロックを取った後、ロックしたファイルがもうそのパスに無ければ（消された）、ディレクトリを作り直して取り直す。
+  ディレクトリを作ってからロックファイルを開くまでの間に消された場合も、作り直して取り直す。
+  reopen と refresh は取得の前に、セッションが書けるか（新しい版が書いた・壊れている）を確かめる。取得の後で気づくと
+  ネットワークの往復が無駄になり、pr.json だけが新しくなる。
   送信はロックを持ったまま行う（送信中の編集を失わないため。版の照合で外せるようになるまで）。持つのは github の送信
   （中断した送信の照合で gh から PR を取り直す段も含む。gh の呼び出しごとに timeout があり、それが送信の間続く）と herdr の送信（`agent prompt` / `pane send-text`）。
   その間の変更系（コメントの追加・編集、decision）は再試行の後に `E_LOCKED`（hint で送信中の可能性を示す）で失敗する。
@@ -374,7 +389,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   | 経路 | 途中で落ちる | 2 回実行 | 相手が応答しない |
   |---|---|---|---|
   | github | pending が残り、次の github submit が照合してから送る。照合が済むまで、pending に載ったコメントの編集・削除と、decision を運んだ pending があるときの decision の変更は E_CONFLICT（照合が送ったときの本文で探すため、変えると送信済みを見失い二重に投稿する）。`comment clear` も pending に載ったコメントはキューに残す（照合はキューの中を探す） | 照合で送信済みと分かったものは送らない。GitHub へ sent 済みは `delivered` で skip | `outcome = unknown`、再試行不可。pending を次回照合。どのフィールドの失敗かを示さないエラー（タイムアウト等）や data の無い応答も同じ扱い。ただし実行の前に拒否されたと分かるもの（上記）は送っていないので記録を消す。path の無い `E_PENDING_REVIEW` は unknown のまま、hint は pending review の片付け方を示す |
-  | herdr | 送信後・保存前に落ちると記録が無く再送しうる（エージェント宛てで公開されない） | 自分へ sent 済みのコメントと decision は送らない | 全体失敗、`outcome = unknown`。印は試行分だけ |
+  | herdr | 送信後・保存前に落ちると記録が無く再送しうる（エージェント宛てで公開されない） | 自分へ sent 済みのコメントと decision は送らない | 全体失敗、`outcome = unknown`。印は試行分だけ。herdr が送り先が無いと答えたときは `not_started`（§2） |
   | 選択送信（comment_ids） | github は選んだ分だけの COMMENT review を送り、pending には decision を運ばないと記録する（照合しても decision は消さない） | 送った分は消費されてキューに無く、その id は落とされる。全部落ちれば nothing to submit | 経路ごとの規則と同じ |
   | Lua sink（submit apply） | 送信後・apply の CLI が結果をファイルに書く前に落ちると記録されず再送しうる（sink の責任）。書いた後なら次の書き込みが記録する | 消費済みはキューに無い。`version` / `decision_version` が違うものは記録しない。Lua の sink で送る前に Lua はディスク上の Session（`session get`）を読み、記録待ちがあれば記録を試み、残れば E_CONFLICT で止める（別インスタンスの記録待ちも見える。記録が `E_LOCKED` 以外で失敗したときはそのエラーを返す） | sink の責任 |
 - Lua の sink の結果（送信箱）: `submit apply` は受け取った結果に CLI の時刻を `at` として付け、ロックを取る前に
@@ -390,8 +405,12 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   壊れたファイルは `applies/rejected/` に移す（他の書き込みを失敗させない）
 - gh には github.com を含め常に `repo.host` を渡す（`--hostname`、`--repo host/owner/name`）。渡さないと gh は `GH_HOST` に従い、
   GitHub Enterprise を既定にしている利用者の github.com の PR が別のホストに読み書きされる
-- gh は `CLICOLOR_FORCE` / `GH_FORCE_TTY` を外し、`NO_COLOR=1`、`GH_PROMPT_DISABLED=1` で呼ぶ。色を強制した利用者の環境では、
-  パイプ越しでも JSON に色が付いて読めなくなる
+- gh は `CLICOLOR_FORCE` / `GH_FORCE_TTY` を外し、`NO_COLOR=1`、`GH_PROMPT_DISABLED=1` で呼ぶ（`health` の `--version` と
+  `auth token` も含め、すべての呼び出し）。色を強制した利用者の環境では、パイプ越しでも JSON に色が付いて読めなくなる
+- `--pr <番号>` で origin から host を読むときはポートを外す（`gh --hostname` はポート付きの host を知らない）。
+  host は SSH の host alias（`~/.ssh/config` の別名）かもしれないが、ドットの無い GitHub Enterprise の host と見分けられないので、
+  そのまま gh に渡す。origin から読んだ host（github.com 以外）で gh が失敗したとき（`E_AUTH` / `E_TOOL`）は、
+  hint に「host が SSH alias かもしれない。PR の URL を渡す」を添える
 
 ## 6. hunk・コメント可能範囲・行ずれ
 

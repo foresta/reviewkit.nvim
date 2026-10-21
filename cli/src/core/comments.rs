@@ -16,6 +16,8 @@ pub struct SideFile {
     /// Binary content has no lines to anchor to; the comment is still
     /// queued (for an agent) with `Reason::Binary`.
     pub binary: bool,
+    /// Over `TOO_LARGE_BYTES`: like binary, never read, so `lines` is empty.
+    pub too_large: bool,
     pub lines: Vec<String>,
 }
 
@@ -285,16 +287,17 @@ fn target_for<'a>(session: &'a Session, path: &str) -> Option<&'a Target> {
     session.targets.iter().find(|t| t.path == path)
 }
 
-/// E_NOT_COMMENTABLE is reserved for lines that cannot exist; a line outside
-/// the diff is accepted and merely flagged (D4). A malformed range is the
-/// caller's mistake (E_INVALID). Binary files have no line count to check,
-/// and an empty file still has the one virtual line an editor shows.
 /// A range of one line is a single-line comment; keeping both forms would
 /// make sinks and the view tell them apart in each place.
 fn single_line(start_line: Option<u32>, line: u32) -> Option<u32> {
     start_line.filter(|s| *s != line)
 }
 
+/// E_NOT_COMMENTABLE is reserved for lines that cannot exist; a line outside
+/// the diff is accepted and merely flagged (D4). A malformed range is the
+/// caller's mistake (E_INVALID). Binary and too large files have no line
+/// count to check, and an empty file still has the one virtual line an
+/// editor shows.
 fn check_range(path: &str, line: u32, start_line: Option<u32>, file: &SideFile) -> Result<()> {
     if let Some(start) = start_line
         && (start == 0 || start > line)
@@ -307,7 +310,7 @@ fn check_range(path: &str, line: u32, start_line: Option<u32>, file: &SideFile) 
         return Err(Error::invalid("line must be 1 or greater"));
     }
     let len = file.lines.len().max(1);
-    if !file.binary && line as usize > len {
+    if !file.binary && !file.too_large && line as usize > len {
         return Err(not_commentable(
             path,
             &format!("line {line} is outside the file (1..={len})"),
@@ -388,6 +391,7 @@ mod tests {
         SideFile {
             blob: None,
             binary: false,
+            too_large: false,
             lines: lines(n),
         }
     }
@@ -396,6 +400,7 @@ mod tests {
         SideFile {
             blob: None,
             binary: true,
+            too_large: false,
             lines: vec![],
         }
     }

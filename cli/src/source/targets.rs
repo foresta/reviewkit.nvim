@@ -60,7 +60,8 @@ pub fn build(repo: &Repository<'_>, base_sha: &str, head: Option<&str>) -> Resul
 
 /// A one-line change to a large file has a small patch; showing its hunk
 /// against a side `file base` refuses to read would diff the whole file as
-/// added, so either side being large makes the Target too large.
+/// added, so either side being large makes the Target too large. Its ranges
+/// go too: a GitHub line comment there would sit on a diff nobody was shown.
 fn mark_large_sides(repo: &Repository<'_>, base_sha: &str, head: Option<&str>, targets: &mut [Target]) {
     let limit = TOO_LARGE_BYTES as u64;
     let base_path = |t: &Target| t.old_path.clone().unwrap_or_else(|| t.path.clone());
@@ -94,6 +95,7 @@ fn mark_large_sides(repo: &Repository<'_>, base_sha: &str, head: Option<&str>, t
         if base_large || head_large {
             target.too_large = true;
             target.hunks.clear();
+            target.commentable = CommentableRanges::default();
         }
     }
 }
@@ -168,9 +170,13 @@ fn target_from_change(change: RawChange, patch: Patch, repo: &Repository<'_>, he
         viewed: false,
         stats: patch.stats,
         hunks: if too_large { Vec::new() } else { patch.hunks },
-        commentable: CommentableRanges {
-            base: commentable::merge(patch.context_base),
-            head: commentable::merge(patch.context_head),
+        commentable: if too_large {
+            CommentableRanges::default()
+        } else {
+            CommentableRanges {
+                base: commentable::merge(patch.context_base),
+                head: commentable::merge(patch.context_head),
+            }
         },
         range: None,
     }
@@ -184,7 +190,9 @@ fn push_untracked(targets: &mut Vec<Target>, mut untracked: Target) {
         let deleted = targets.remove(index);
         untracked.status = TargetStatus::Modified;
         untracked.base_blob = deleted.base_blob;
-        untracked.commentable.base = deleted.commentable.base;
+        if !untracked.too_large {
+            untracked.commentable.base = deleted.commentable.base;
+        }
     }
     targets.push(untracked);
 }
@@ -242,7 +250,7 @@ fn untracked_target(repo: &Repository<'_>, path: &str) -> Result<Target> {
     })
 }
 
-pub fn count_lines(bytes: &[u8]) -> u32 {
+fn count_lines(bytes: &[u8]) -> u32 {
     if bytes.is_empty() {
         return 0;
     }

@@ -37,18 +37,29 @@ fn main() -> ExitCode {
 fn handle_parse_error(err: clap::Error) -> ExitCode {
     use clap::error::ErrorKind;
     match err.kind() {
-        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
-            // Unwrap is fine: printing help to a closed stdout is not recoverable.
-            err.print().expect("print clap help");
-            ExitCode::SUCCESS
-        }
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => match err.print() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::from(reviewkit::ErrorCode::EIo.exit_code()),
+        },
         _ => {
             let full = err.to_string();
-            let first = full.lines().next().unwrap_or("invalid arguments");
-            let message = first.strip_prefix("error: ").unwrap_or(first).to_string();
             envelope::emit(Err::<Response, _>(
-                Error::usage(message).details(serde_json::json!({ "usage": full })),
+                Error::usage(usage_message(&full)).details(serde_json::json!({ "usage": full })),
             ))
         }
+    }
+}
+
+/// clap lists what is missing on the lines under its first one; the message
+/// stays one line, so they are joined onto it.
+fn usage_message(full: &str) -> String {
+    let mut lines = full.lines().take_while(|l| !l.trim().is_empty());
+    let first = lines.next().unwrap_or("invalid arguments");
+    let first = first.strip_prefix("error: ").unwrap_or(first);
+    let rest: Vec<&str> = lines.map(str::trim).collect();
+    if rest.is_empty() {
+        first.to_string()
+    } else {
+        format!("{first} {}", rest.join(", "))
     }
 }

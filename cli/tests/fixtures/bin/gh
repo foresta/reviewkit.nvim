@@ -16,12 +16,23 @@ joined = " ".join(args)
 stdin = "" if sys.stdin.isatty() else sys.stdin.read()
 fake_dir = os.environ.get("FAKE_GH_DIR")
 
+PINNED = ["CLICOLOR_FORCE", "GH_FORCE_TTY", "NO_COLOR", "GH_PROMPT_DISABLED"]
+
 if fake_dir:
     with open(os.path.join(fake_dir, "calls.jsonl"), "a") as log:
-        log.write(json.dumps({"args": args, "stdin": stdin}) + "\n")
+        env = {k: os.environ[k] for k in PINNED if k in os.environ}
+        log.write(json.dumps({"args": args, "stdin": stdin, "env": env}) + "\n")
+
+
+def emit(text):
+    # Like gh: forcing colour colours JSON even when stdout is a pipe.
+    if os.environ.get("CLICOLOR_FORCE", "0") != "0" or os.environ.get("GH_FORCE_TTY"):
+        text = "\x1b[1;38m" + text + "\x1b[m"
+    sys.stdout.write(text)
+
 
 if args[:1] == ["--version"]:
-    print("gh version 0.0.0-fake")
+    emit("gh version 0.0.0-fake\n")
     sys.exit(0)
 if args[:2] == ["auth", "token"]:
     if os.environ.get("GH_FAKE_AUTH", "1") == "0":
@@ -34,13 +45,6 @@ rules = []
 if fake_dir and os.path.exists(os.path.join(fake_dir, "responses.json")):
     with open(os.path.join(fake_dir, "responses.json")) as f:
         rules = json.load(f)
-
-
-def emit(text):
-    # Like gh: forcing colour colours JSON even when stdout is a pipe.
-    if os.environ.get("CLICOLOR_FORCE", "0") != "0" or os.environ.get("GH_FORCE_TTY"):
-        text = "\x1b[1;38m" + text + "\x1b[m"
-    sys.stdout.write(text)
 
 
 for rule in rules:

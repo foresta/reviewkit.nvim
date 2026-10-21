@@ -708,6 +708,52 @@ fn a_large_file_with_a_small_change_is_too_large_on_both_sides_alike() {
 }
 
 #[test]
+fn a_too_large_file_is_not_commentable_on_github_and_is_not_read_for_anchors() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let big = "line\n".repeat(300_000);
+    repo.write("lock.json", &big);
+    repo.git(&["add", "lock.json"]);
+    repo.git(&["commit", "-q", "-m", "big file"]);
+    repo.write("lock.json", &format!("{big}one more\n"));
+    let body = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let id = body["session"]["id"].as_str().unwrap().to_string();
+    let lock = target(&body["session"], "lock.json");
+    assert_eq!(lock["commentable"]["head"], serde_json::json!([]), "{lock}");
+    assert_eq!(lock["commentable"]["base"], serde_json::json!([]), "{lock}");
+    for (side, line) in [("head", 300_001), ("base", 300_000)] {
+        let added = json(
+            &reviewkit(&state, &repo)
+                .args(["comment", "add", "--session", &id])
+                .write_stdin(format!(
+                    r#"{{"path": "lock.json", "side": "{side}", "line": {line}, "body": "x"}}"#
+                ))
+                .output()
+                .unwrap(),
+        );
+        let comment = added["session"]["comments"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(comment["commentable"]["github"], false, "{side}: {comment}");
+        assert_eq!(comment["commentable"]["reason"], "outside_diff", "{side}");
+        assert_eq!(comment["anchor"]["context"]["lines"], serde_json::json!([]), "{side}");
+    }
+    let refreshed = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "refresh", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    for comment in refreshed["session"]["comments"].as_array().unwrap() {
+        assert_eq!(comment["stale"], false, "{comment}");
+        assert_eq!(comment["commentable"]["github"], false, "{comment}");
+    }
+}
+
+#[test]
 fn a_large_file_whose_name_looks_like_pathspec_magic_is_still_sized() {
     let state = tempfile::tempdir().unwrap();
     let repo = Repo::new();

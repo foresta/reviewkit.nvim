@@ -537,6 +537,31 @@ fn a_failed_send_keeps_the_queue_with_last_error() {
 }
 
 #[test]
+fn a_target_herdr_does_not_know_delivered_nothing() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let root = repo.path().canonicalize().unwrap();
+    let herdr = FakeHerdr::new(serde_json::json!([agent("w1:p1", root.to_str().unwrap())]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let body = json(
+        &cmd(&state, &repo, &herdr)
+            .env("FAKE_HERDR_FAIL", "not_found")
+            .args(["submit", "--session", &id, "--sink", "herdr"])
+            .output()
+            .unwrap(),
+    );
+    let error = &body["data"]["failed"][0]["error"];
+    assert_eq!(error["code"], "E_TOOL", "{error}");
+    assert_eq!(error["details"]["not_started"], true, "{error}");
+    assert_eq!(error["details"]["herdr_code"], "agent_not_found", "{error}");
+    assert!(error["details"].get("outcome").is_none(), "{error}");
+    assert_eq!(
+        error["message"],
+        "herdr agent prompt failed: agent target w1:p1 not found"
+    );
+}
+
+#[test]
 fn empty_queue_and_missing_herdr_fail_before_sending() {
     let state = tempfile::tempdir().unwrap();
     let repo = Repo::new();

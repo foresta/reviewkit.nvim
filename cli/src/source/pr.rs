@@ -33,6 +33,23 @@ pub fn repo_ref_of(repo: &Repository<'_>) -> Result<RepoRef> {
     })
 }
 
+/// gh cannot tell an SSH config alias (`Host work`, `Host github.com-work`)
+/// from a real host, and neither can reviewkit: a dotless name is often a
+/// GitHub Enterprise host. So the host is tried as is, and only a gh failure
+/// on it points at the alias.
+pub fn hint_remote_host(err: Error, host: &str) -> Error {
+    let from_gh = err.tool.as_deref() == Some("gh") && matches!(err.code, ErrorCode::EAuth | ErrorCode::ETool);
+    if !from_gh || host == "github.com" {
+        return err;
+    }
+    let alias = "the remote's host may be an SSH alias; pass the pull request URL instead";
+    let hint = match &err.hint {
+        Some(hint) => format!("{hint}; or {alias}"),
+        None => alias.to_string(),
+    };
+    err.hint(hint)
+}
+
 pub struct PrSource<'a> {
     pub git: &'a dyn Git,
     pub gh: &'a dyn Gh,
@@ -64,6 +81,7 @@ pub fn open(store: &Store, src: &PrSource<'_>, repo_ref: &RepoRef, number: u64) 
         // A reopen may have waited for another fetch; the PR is read again
         // so what that fetch saw is not applied stale.
         let meta = if store.exists(&id) {
+            store.load_for_write(&id)?;
             gh::pr_meta(src.gh, repo_ref, number)?
         } else {
             meta

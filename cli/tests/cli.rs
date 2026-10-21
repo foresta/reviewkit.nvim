@@ -65,6 +65,34 @@ fn health_marks_missing_tool_and_unauthenticated_gh() {
 }
 
 #[test]
+fn health_runs_gh_with_the_same_pinned_environment_as_every_other_call() {
+    let state = tempfile::tempdir().unwrap();
+    let gh_dir = tempfile::tempdir().unwrap();
+    let output = reviewkit(&state)
+        .env("FAKE_GH_DIR", gh_dir.path())
+        .env("CLICOLOR_FORCE", "1")
+        .env("GH_FORCE_TTY", "1")
+        .arg("health")
+        .output()
+        .unwrap();
+    let body = json(&output);
+    assert_eq!(
+        body["data"]["tools"]["gh"]["version"], "gh version 0.0.0-fake",
+        "{body}"
+    );
+    let calls = std::fs::read_to_string(gh_dir.path().join("calls.jsonl")).unwrap();
+    let calls: Vec<serde_json::Value> = calls.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(calls.len(), 2, "--version and auth token: {calls:?}");
+    for call in calls {
+        assert_eq!(
+            call["env"],
+            serde_json::json!({ "NO_COLOR": "1", "GH_PROMPT_DISABLED": "1" }),
+            "{call}"
+        );
+    }
+}
+
+#[test]
 fn schema_lists_contract_types() {
     let state = tempfile::tempdir().unwrap();
     let output = reviewkit(&state).arg("schema").output().unwrap();
@@ -127,6 +155,17 @@ fn no_arguments_is_a_usage_error_with_one_line_message() {
     assert_eq!(body["error"]["code"], "E_USAGE");
     assert!(!body["error"]["message"].as_str().unwrap().contains('\n'));
     assert!(body["error"]["details"]["usage"].as_str().unwrap().contains("Usage:"));
+}
+
+#[test]
+fn a_missing_argument_is_named_in_the_usage_message() {
+    let state = tempfile::tempdir().unwrap();
+    let output = reviewkit(&state).args(["file", "base"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let message = json(&output)["error"]["message"].as_str().unwrap().to_string();
+    assert!(!message.contains('\n'), "{message}");
+    assert!(message.contains("--session <ID>"), "{message}");
+    assert!(message.contains("--path <PATH>"), "{message}");
 }
 
 #[test]
