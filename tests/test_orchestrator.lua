@@ -740,6 +740,36 @@ T["orchestrator"]["a suggestion starts from the selected lines and is sent apart
   eq({ input.kind, input.body, input.suggestion, input.start_line, input.line }, { "nit", "tighter", "l2\nl3", 2, 3 })
 end
 
+T["orchestrator"]["a suggestion holding a code fence keeps all of it"] = function()
+  vim.fn.writefile({ "intro", "```lua", "x()", "```", "outro" }, worktree .. "/src/a.rs")
+  helpers.respond(
+    dir,
+    rules({
+      {
+        match = { "comment add" },
+        body = {
+          ok = true,
+          data = { id = "c_1" },
+          session = helpers.session({ source = { worktree = worktree }, rev = 2 }),
+        },
+      },
+    })
+  )
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.cmd("edit " .. worktree .. "/src/a.rs")
+  child.lua("require('reviewkit.orchestrator').comment({ range = true, line1 = 2, line2 = 4, suggest = true })")
+  eq(
+    child.lua_get("vim.api.nvim_buf_get_lines(0, 0, -1, false)"),
+    { "", "````suggestion", "```lua", "x()", "```", "````" }
+  )
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, 1, false, { 'use a block' })")
+  child.cmd("write")
+  wait_notice("queued src/a.rs:2-4")
+  local input = last_call("add")
+  eq({ input.body, input.suggestion }, { "use a block", "```lua\nx()\n```" })
+end
+
 T["orchestrator"]["editing a comment shows and saves its kind and suggestion"] = function()
   local with = helpers.session({
     source = { worktree = worktree },

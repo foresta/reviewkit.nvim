@@ -215,7 +215,7 @@ pub fn format_prompt(session: &Session, opts: &HerdrOptions, agent_head: Option<
                 let lines = &c.anchor.context.lines;
                 let shown = lines.len().min(MAX_QUOTED_LINES);
                 let quoted = lines[..shown].join("\n");
-                let fence = fence_for(&quoted);
+                let fence = super::fence_for(&quoted);
                 let more = match lines.len() - shown {
                     0 => String::new(),
                     n => format!("\n({n} more lines)"),
@@ -225,7 +225,7 @@ pub fn format_prompt(session: &Session, opts: &HerdrOptions, agent_head: Option<
             if c.suggestion.as_deref().is_some_and(|s| s.trim().is_empty()) {
                 block.push("Suggested change: delete these lines.".to_string());
             } else if let Some(suggestion) = c.suggestion.as_deref() {
-                let fence = fence_for(suggestion);
+                let fence = super::fence_for(suggestion);
                 block.push(format!(
                     "Suggested replacement:\n{fence}\n{}\n{fence}",
                     suggestion.trim_end()
@@ -272,13 +272,6 @@ fn pr_context(session: &Session, agent_head: Option<&str>) -> Option<String> {
 
 fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
-}
-
-/// One more backtick than the longest run inside, so a suggestion that
-/// itself contains a code fence cannot close ours early.
-fn fence_for(text: &str) -> String {
-    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
-    "`".repeat(longest.max(2) + 1)
 }
 
 fn kind_label(kind: crate::model::CommentKind) -> &'static str {
@@ -752,9 +745,9 @@ mod tests {
 
     #[test]
     fn suggestion_fence_grows_past_inner_backticks() {
-        assert_eq!(fence_for("let x = 1;"), "```");
-        assert_eq!(fence_for("```rust\nx\n```"), "````");
-        assert_eq!(fence_for("`````"), "``````");
+        assert_eq!(super::super::fence_for("let x = 1;"), "```");
+        assert_eq!(super::super::fence_for("```rust\nx\n```"), "````");
+        assert_eq!(super::super::fence_for("`````"), "``````");
     }
 
     #[test]

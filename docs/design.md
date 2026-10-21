@@ -131,7 +131,7 @@ Comment {
   id: "c_<ulid>"   path   side: "base"|"head"   line: int   start_line: int|null
                             -- path は side によらず Target.path（head 側の名前）。base 側の実体は Target.old_path で引く
   kind: "issue|suggestion|question|praise|nit"          -- 既定 issue
-  body: string   suggestion: string|null                -- ```suggestion ブロック用。sink-github が整形する
+  body: string   suggestion: string|null                -- ```suggestion ブロック用。sink-github が整形する。フェンスは中のバッククォートの連なりより長くする
   reply_to: thread_id|null   -- 返信はスレッドに付くので、行やファイルの存在を検査せず、再アンカーもしない
   anchor: { base_sha, head_sha: sha|null, blob: sha|null, context: { before: string[], lines: string[], after: string[] } }
                             -- 作業ツリー側は head_sha が null。代わりに blob（git hash-object）で固定する
@@ -417,6 +417,7 @@ lua/reviewkit/
   log.lua             CLI の呼び出しとエラーの直近の記録（:ReviewLog）
   maps.lua            既定キーマップの表（mode、lhs、action、desc、diff ビューのバッファだけか）
   install.lua         ensure()（Releases から取得して検証、合わなければ cargo build → <plugin>/bin/）
+  fence.lua           中のコードブロックで閉じない Markdown のフェンス（suggestion の入力窓と clipboard）
   view/diff.lua       タブ・左右ウィンドウ・次 / 前の移動。base 側は file base で取得した読み取り専用バッファ。
                       左右の位置合わせと色付けは Neovim の diff モード（diffthis）。hunk 間の移動とコメント可否は Target から
                       コメントを置けるのはレビューしているテキストの上だけ。未保存のバッファは断る（保存された内容にアンカーするため）。
