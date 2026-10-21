@@ -31,7 +31,9 @@ function M.open(opts)
 
   local width = math.min(90, vim.o.columns - 8)
   local height = math.min(14, vim.o.lines - 8)
-  local win = api.nvim_open_win(buf, true, {
+  -- A window that cannot open (E11 and the like) would leave the buffer
+  -- behind, hidden and named.
+  local opened, win = pcall(api.nvim_open_win, buf, true, {
     relative = "editor",
     row = math.floor((vim.o.lines - height) / 2) - 1,
     col = math.floor((vim.o.columns - width) / 2),
@@ -43,6 +45,10 @@ function M.open(opts)
     footer = opts.footer or " :w save · q cancel ",
     footer_pos = "right",
   })
+  if not opened then
+    pcall(api.nvim_buf_delete, buf, { force = true })
+    error(win, 0)
+  end
   vim.wo[win].wrap = true
 
   local saved = false
@@ -96,11 +102,7 @@ function M.open_keeping(opts, save)
         if not err then
           return
         end
-        local msg = ("[reviewkit] %s: %s"):format(err.code, err.message)
-        if err.hint then
-          msg = msg .. "\n" .. err.hint
-        end
-        vim.notify(msg, vim.log.levels.ERROR)
+        require("reviewkit.notify").error(err)
         local again =
           vim.tbl_extend("force", opts, { lines = vim.split(text, "\n", { plain = true }), modified = true })
         local function reopen()

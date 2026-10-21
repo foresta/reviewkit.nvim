@@ -22,14 +22,7 @@ local state = {
   mapped_bufs = {}, ---@type table<integer, true>
 }
 
----@param err reviewkit.Error
-local function notify_error(err)
-  local msg = ("[reviewkit] %s: %s"):format(err.code, err.message)
-  if err.hint then
-    msg = msg .. "\n" .. err.hint
-  end
-  vim.notify(msg, vim.log.levels.ERROR)
-end
+local notify_error = require("reviewkit.notify").error
 
 ---@param msg string
 local function notify(msg)

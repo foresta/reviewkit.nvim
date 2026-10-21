@@ -1072,3 +1072,40 @@ fn a_waiting_result_is_recorded_on_request_and_a_broken_one_is_set_aside() {
     assert_eq!(comment_ids(&state, &repo, &herdr, &id), vec![ids[0].clone()]);
     assert!(session_dir(&state, &id).join("applies/rejected/0-broken.json").exists());
 }
+
+#[test]
+fn a_result_queued_by_a_newer_cli_stays_waiting_and_is_left_for_it() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let applies = session_dir(&state, &id).join("applies");
+    std::fs::create_dir_all(&applies).unwrap();
+    std::fs::write(
+        applies.join("01ZZZZZZZZZZZZZZZZZZZZZZZZ.json"),
+        r#"{"revision": 999999, "consume": true, "result": {"sink": "slack", "sent": [], "failed": [], "skipped": [], "decision": "not_applicable"}}"#,
+    )
+    .unwrap();
+    let got = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["session", "get", "--session", &id])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        got["session"]["pending_apply"], true,
+        "another instance's delivery is still unrecorded"
+    );
+    let decided = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["decision", "set", "--session", &id])
+            .write_stdin(r#"{"event": "approve", "body": ""}"#)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(decided["ok"], true);
+    assert!(
+        applies.join("01ZZZZZZZZZZZZZZZZZZZZZZZZ.json").exists(),
+        "left for the newer CLI"
+    );
+}
