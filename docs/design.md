@@ -350,6 +350,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   「自分の、同じ state・同じ本文の、試行の開始以後の review」で探す。marker を付ける前の版が書いた pending（`marked` が無い）は
   本文と時刻で照合する。本文で照合する場合（decision だけの review と、古い pending）は、viewer が取れなければ照合せず、
   再試行可のエラーで止める（誰の投稿でも一致してしまうため）。
+  照合はキューだけでなく履歴（中断の後に別の sink が消費したもの）も探し、見つかったコメントに GitHub への配送を記録する
+  （記録しないと履歴から戻して二重に投稿できてしまう）。
   marker は表示（threads、`pr.json`）に出す前に剥がし（本文の最後の行だけ。途中の同じ形の行は他人の本文）、照合は剥がす前の本文で行う。
   残っている間は Session の `pending_submit` が true（ファイルの有無から毎回求める）で、Lua は開いたときに知らせる。
   記録には review が decision を運んだかも残し、運んでいない review（comment だけの送信）を照合しても decision は消さない
