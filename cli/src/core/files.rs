@@ -91,9 +91,9 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
             if meta.len() > limit {
                 // Not the Target's head_blob: that is the file as of the last
                 // refresh. Not `-w`: nothing diffs a file this large later.
-                return Ok(Some(large(repo.hash_object(path).ok())));
+                return Ok(Some(large(Some(repo.hash_object(path)?))));
             }
-            (std::fs::read(&full)?, repo.hash_object_write(path).ok())
+            (std::fs::read(&full)?, Some(repo.hash_object_write(path)?))
         }
     };
     let binary = is_binary(&bytes);
@@ -131,6 +131,57 @@ pub fn is_binary(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct HashFails;
+
+    impl Git for HashFails {
+        fn run(&self, _cwd: &Path, _args: &[&str]) -> Result<Vec<u8>> {
+            Err(Error::tool("git", crate::error::ErrorCode::EGit, "hash-object failed")
+                .details(serde_json::json!({ "exit": 128 })))
+        }
+    }
+
+    fn worktree_session(dir: &Path) -> Session {
+        use crate::model::{HeadRef, Repo, RevRef, Source};
+        Session::new(
+            "local/x/y".into(),
+            Repo {
+                root: dir.to_path_buf(),
+                host: None,
+                owner: None,
+                name: None,
+                remote_url: None,
+            },
+            Source::Local {
+                base_spec: "HEAD".into(),
+                head_spec: "worktree".into(),
+                worktree: dir.to_path_buf(),
+            },
+            RevRef {
+                r#ref: Some("HEAD".into()),
+                sha: "a".repeat(40),
+            },
+            HeadRef {
+                r#ref: None,
+                sha: None,
+                dirty: true,
+            },
+            "t".into(),
+        )
+    }
+
+    #[test]
+    fn a_working_tree_file_git_cannot_hash_is_an_error_not_a_file_without_a_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("small.txt"), "a\n").unwrap();
+        std::fs::write(dir.path().join("large.txt"), vec![b'a'; TOO_LARGE_BYTES + 1]).unwrap();
+        let session = worktree_session(dir.path());
+        let repo = Repository::at(&HashFails, dir.path().to_path_buf());
+        for path in ["small.txt", "large.txt"] {
+            let err = read_side(&session, &repo, Side::Head, path).err();
+            assert_eq!(err.map(|e| e.code), Some(crate::error::ErrorCode::EGit), "{path}");
+        }
+    }
 
     #[test]
     fn a_nul_in_the_first_8000_bytes_means_binary() {

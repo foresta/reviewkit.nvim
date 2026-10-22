@@ -472,12 +472,15 @@ function M.resume(id)
       prompt = "Resume review session",
       format_item = function(s)
         local root = s.repo_root or ""
-        return ("%s  %s  (%d comment%s, %s)"):format(
+        -- Still selectable: opening it reports the moved checkout with a
+        -- hint, which a missing entry could not.
+        return ("%s  %s  (%d comment%s, %s)%s"):format(
           s.here and vim.fs.basename(root) or vim.fn.fnamemodify(root, ":~"),
           s.title or s.id,
           s.comments or 0,
           s.comments == 1 and "" or "s",
-          (s.updated_at or ""):sub(1, 16)
+          (s.updated_at or ""):sub(1, 16),
+          s.missing and "  (moved)" or ""
         )
       end,
     }, function(choice)

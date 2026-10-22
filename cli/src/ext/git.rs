@@ -551,7 +551,17 @@ impl<'a> Repository<'a> {
             Ok(out) => Ok(text(&out).trim_end() == "blob"),
             // Only git exiting is an answer about the path; a missing
             // checkout or a timeout says nothing about it.
-            Err(err) if !err.details["exit"].is_null() => Ok(false),
+            Err(err) if !err.details["exit"].is_null() => {
+                // A pruned base sha or a removed PR mirror fails the same way
+                // as a missing path; reading it as "no file" would hide that.
+                if !self.has_commit(rev) {
+                    return Err(
+                        Error::tool("git", ErrorCode::EGit, format!("commit {rev} is not in the repository"))
+                            .hint("refresh the review; if it stays, close it and open it again"),
+                    );
+                }
+                Ok(false)
+            }
             Err(err) => Err(err),
         }
     }
@@ -804,6 +814,39 @@ mod tests {
             }
             Ok(format!("id-{}\n", paths[0]).into_bytes())
         }
+    }
+
+    /// `cat-file -t <rev>:<path>` always exits non-zero, like a path that is
+    /// not there; whether the rev itself exists is `commit_exists`.
+    struct NoPathAt {
+        commit_exists: bool,
+    }
+
+    impl Git for NoPathAt {
+        fn run(&self, _cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
+            let exited =
+                |msg: &str| Err(Error::tool("git", ErrorCode::EGit, msg).details(serde_json::json!({ "exit": 128 })));
+            match args {
+                ["cat-file", "-e", _] if self.commit_exists => Ok(Vec::new()),
+                ["cat-file", "-e", _] => exited("not a valid object"),
+                _ => exited("path does not exist"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_missing_path_at_an_existing_rev_is_not_a_blob() {
+        let repo = Repository::at(&NoPathAt { commit_exists: true }, PathBuf::from("/repo"));
+        assert!(!repo.is_blob("abc", "gone.txt").unwrap());
+    }
+
+    #[test]
+    fn a_missing_rev_is_a_git_error_not_a_missing_path() {
+        let repo = Repository::at(&NoPathAt { commit_exists: false }, PathBuf::from("/repo"));
+        let err = repo.is_blob("abc", "a.txt").unwrap_err();
+        assert_eq!(err.code, ErrorCode::EGit);
+        assert!(err.message.contains("abc"), "{}", err.message);
+        assert!(err.hint.is_some());
     }
 
     #[test]

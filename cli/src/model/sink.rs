@@ -277,8 +277,9 @@ fn degrade<T: serde::de::DeserializeOwned>(value: Option<&mut serde_json::Value>
     }
 }
 
-/// The sink's own code is kept in `details.code` and in the message, which
-/// is what `last_error` shows.
+/// The sink's own code is kept in `details.code` (`details.reported_code`
+/// when the sink's details already use `code`) and in the message, which is
+/// what `last_error` shows.
 fn degrade_error(error: &mut serde_json::Value, sink: &str) {
     if is_known::<Error>(error) {
         return;
@@ -292,19 +293,23 @@ fn degrade_error(error: &mut serde_json::Value, sink: &str) {
     };
     let known_code = serde_json::from_value::<crate::error::ErrorCode>(original.clone()).ok();
     let mut degraded = Error::new(known_code.unwrap_or(crate::error::ErrorCode::ETool), message);
+    // The sink's own details are kept for diagnosis whatever else was broken.
+    let mut details = match field("details") {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
     if known_code.is_none() {
         if let serde_json::Value::String(code) = &original {
             degraded.message = format!("{code}: {}", degraded.message);
         }
-        // The sink's own details are kept for diagnosis; the code it
-        // reported goes beside them.
-        let mut details = match field("details") {
-            serde_json::Value::Object(map) => map,
-            _ => serde_json::Map::new(),
+        let key = if details.contains_key("code") {
+            "reported_code"
+        } else {
+            "code"
         };
-        details.insert("code".into(), original);
-        degraded = degraded.details(serde_json::Value::Object(details));
+        details.insert(key.into(), original);
     }
+    degraded = degraded.details(serde_json::Value::Object(details));
     degraded.tool = field("tool")
         .as_str()
         .map(str::to_string)
@@ -317,4 +322,41 @@ fn degrade_error(error: &mut serde_json::Value, sink: &str) {
         degraded.message
     );
     *error = serde_json::to_value(degraded).unwrap_or(serde_json::Value::Null);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn degraded(mut error: serde_json::Value) -> serde_json::Value {
+        degrade_error(&mut error, "clipboard");
+        error
+    }
+
+    #[test]
+    fn a_known_code_beside_broken_fields_keeps_the_sinks_details() {
+        let error = degraded(serde_json::json!({"code": "E_TOOL", "retryable": "yes", "details": {"register": "+"}}));
+        assert_eq!(error["code"], "E_TOOL");
+        assert_eq!(error["details"]["register"], "+", "{error}");
+    }
+
+    #[test]
+    fn an_unknown_code_does_not_overwrite_the_sinks_own_details_code() {
+        let error = degraded(serde_json::json!({
+            "code": "E_CLIPBOARD",
+            "message": "busy",
+            "details": {"code": "EBUSY", "register": "+"},
+        }));
+        assert_eq!(error["code"], "E_TOOL");
+        assert_eq!(error["details"]["code"], "EBUSY", "{error}");
+        assert_eq!(error["details"]["reported_code"], "E_CLIPBOARD", "{error}");
+        assert_eq!(error["details"]["register"], "+");
+    }
+
+    #[test]
+    fn an_unknown_code_goes_to_details_code_when_the_sink_gave_none() {
+        let error = degraded(serde_json::json!({"code": "E_CLIPBOARD", "message": "busy"}));
+        assert_eq!(error["details"]["code"], "E_CLIPBOARD", "{error}");
+        assert!(error["details"].get("reported_code").is_none());
+    }
 }

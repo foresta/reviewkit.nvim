@@ -245,6 +245,32 @@ T["orchestrator"][":Review resume without an id lists sessions by what they comp
   eq(child.lua_get("_G.shown"):find("proj  main..worktree", 1, true) ~= nil, true)
 end
 
+T["orchestrator"][":Review resume marks a session whose checkout moved"] = function()
+  helpers.respond(dir, {
+    {
+      match = { "session list" },
+      body = {
+        ok = true,
+        data = {
+          {
+            id = "local/abc/0123",
+            kind = "local",
+            repo_root = "/work/gone",
+            title = "main..worktree",
+            comments = 0,
+            updated_at = "2026-10-20T01:02:03Z",
+            missing = true,
+          },
+        },
+      },
+    },
+  })
+  child.lua([[vim.ui.select = function(items, opts) _G.shown = opts.format_item(items[1]) end]])
+  child.cmd("Review resume")
+  child.lua("vim.wait(20000, function() return _G.shown ~= nil end, 20)")
+  eq(child.lua_get("_G.shown"):find("(moved)", 1, true) ~= nil, true)
+end
+
 T["orchestrator"]["<Plug> maps exist at plugin load without loading the orchestrator"] = function()
   eq(child.lua_get("vim.fn.maparg('<Plug>(reviewkit-comment)', 'n') ~= ''"), true)
   eq(child.lua_get("package.loaded['reviewkit.orchestrator'] == nil"), true)

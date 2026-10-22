@@ -170,6 +170,10 @@ pub struct SessionSummary {
     pub comments: usize,
     pub decision: bool,
     pub updated_at: String,
+    /// The local checkout was moved or removed, so opening it fails. Always
+    /// false for a pull request, whose worktree a refresh rebuilds.
+    #[serde(default)]
+    pub missing: bool,
 }
 
 /// A merge-base base is kept as `A...`, which already carries its dots.
@@ -225,6 +229,10 @@ impl Session {
             comments: self.comments.len(),
             decision: self.decision.is_some(),
             updated_at: self.updated_at.clone(),
+            missing: match &self.source {
+                Source::Local { worktree, .. } => !worktree.is_dir(),
+                Source::Pr { .. } => false,
+            },
         }
     }
 }

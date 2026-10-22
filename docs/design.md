@@ -25,7 +25,7 @@ Rust CLI `reviewkit` と Lua の間で受け渡すデータ、CLI のサブコ�
 
   | フィールド | 知らない値の読み替え |
   |---|---|
-  | `failed[].error` / `thread_actions[].error` | `code` が知らない値か無ければ `E_TOOL`。元の `code` は `details.code` と `message` の先頭（`"E_CLIPBOARD: ..."`）に残す。`tool` が無ければ sink 名。`error` 自体が無いか壊れていても同じ形に作り直す |
+  | `failed[].error` / `thread_actions[].error` | `code` が知らない値か無ければ `E_TOOL`。元の `code` は `details.code` と `message` の先頭（`"E_CLIPBOARD: ..."`）に残す。sink 自身の `details` に `code` が既にあれば上書きせず、元の `code` は `details.reported_code` に置く。`code` が既知で他のフィールドが壊れているときも `details` は残す。`tool` が無ければ sink 名。`error` 自体が無いか壊れていても同じ形に作り直す |
   | `skipped[].reason` | `not_supported` |
   | `mode` | `copied`（消費せず、同じ sink への再送も止めない。`sent` と読むと届いていないかもしれないものを送信済みにする） |
   | `decision` | `not_applicable`（decision はキューに残る） |
@@ -275,6 +275,8 @@ reviewkit session open --session ID                      -> session   再開
 reviewkit session get     --session ID                   -> session
 reviewkit session list                                   -> data: SessionSummary[]   全リポジトリのセッション。--cwd では絞らない
                                                             （今のリポジトリを先に並べるのは Lua の core.list）
+                                                            SessionSummary.missing: local のチェックアウト（worktree）が移動・削除されて無い。
+                                                            開くと checkout not found（E_GIT）になる。PR は refresh が worktree を作り直すので常に false
 reviewkit session refresh --session ID [--path P ...]    -> session   Source 再実行。base / head が動いたら再アンカー。PR は pr.json も取り直す
                                                                      --path は将来の部分更新用で、現状は受け取るだけで全体を再計算する
 reviewkit session close   --session ID [--purge]         -> data: { closed: true }   purge で worktree と state を消す。PR は共有の mirror から
@@ -364,7 +366,9 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   PR の取得はセッションごとの fetch.lock で直列にし、リポジトリごとの mirror は `mirror.lock` で守る（作成は一時ディレクトリから rename）。
   git の fetch / clone は `REVIEWKIT_GIT_TIMEOUT_MS`（既定 120 秒）で打ち切り、認証のプロンプトは出さない。部分 clone（`extensions.partialClone` か `remote.<name>.promisor=true`）では
   どのコマンドも足りない blob を取りに行きうるので、すべてのコマンドを同じ時間で打ち切る。チェックアウトが移動・削除されていれば、
-  git が無いのではなく「checkout not found」（E_GIT）として返す。
+  git が無いのではなく「checkout not found」（E_GIT）として返す。読む rev 自体が無い（gc された base の sha、消された PR の mirror）ときも、
+  path が無いとは読まず E_GIT（hint: refresh するか開き直す）で返す。作業ツリーの `git hash-object` の失敗も握りつぶさず返す
+  （blob の無い anchor は後で追従できない）。
   git は呼び出し元の環境に左右されないよう、リポジトリを指す変数（`GIT_DIR`、`GIT_WORK_TREE`、`GIT_INDEX_FILE` など。
   フックやコミットエディタから起動した Neovim が持つ）と pathspec の解釈を変える変数を外し、`GIT_OPTIONAL_LOCKS=0` で
   `status` が index.lock を取らないようにし（利用者の `git add` / `commit` と衝突しない）、制御端末を持たない新しいセッションで
@@ -469,7 +473,10 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   交差していても、周囲の edit 分だけずらした位置に `context`（before / lines / after）がそのまま見つかれば追従する
   （末尾改行の追加など）。見つからなければ `stale`。追従できた時点で `stale` は解ける。blob が同じなら何もしない。
   base 側のコメントも同じ規則で base の変化に追従する。rename された path のコメントは新しい path に付け替える。
-  blob の差分が取れないとき（blob が無い、古い blob が gc で消えた）は、今の位置の行テキストと `anchor.context.lines` の一致だけで判定する
+  blob の差分が取れないとき（blob が無い、古い blob が gc で消えた）は、今の位置の行テキストと `anchor.context.lines` の一致だけで判定する。
+  `anchor.context.lines` が空のコメント（binary / too_large のファイルに積んだもの）は file 単位として扱い、文脈が無いことでは
+  `stale` にしない。`line` はそのまま残し、ファイルが読めるようになった refresh でその位置の文脈を取り直す。
+  空のテキストファイル（anchor.blob が空の blob）へのコメントは例外で、中身が入れば仮想の 1 行目が無くなるので `stale` になる
 - `stale` の扱い: view は薄く表示、sink-github は `skipped(stale)`、sink-herdr は「行がずれた可能性あり」を添えて送る。
   `comment update` で `line` を付け直すと解消する
 
@@ -508,7 +515,8 @@ lua/reviewkit/
   view/thread.lua     カーソル行のスレッドを float で表示。r で返信（reply_to 付きコメント）、R で resolve の切り替え。
                       範囲スレッドは start_side が side と同じときだけ start_line から line までを覆う（]t と同じ規則）
   view/preview.lua    送信前のプレビュー（SubmitPreview）を見せて確認する
-  orchestrator.lua    :Review の配線、worktree の監視、既定キーマップ。:Review resume は core.list の順（今のリポジトリが先）
+  orchestrator.lua    :Review の配線、worktree の監視、既定キーマップ。:Review resume は core.list の順（今のリポジトリが先）。
+                      missing のセッションは "(moved)" を付けて並べ、選べる（開くと checkout not found とその hint を出す。選べなくすると開けない理由が伝わらない）
   sink/clipboard.lua  Lua 側 sink の最小例。本文が空の decision は写さないので、写しの成否によらず skipped
 plugin/reviewkit.lua  コマンドと maps.lua の <Plug>(reviewkit-*) の定義だけ（orchestrator は読み込まない）
 scripts/gen-types.lua `reviewkit schema` の JSON Schema から types.lua を生成

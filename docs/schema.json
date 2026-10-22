@@ -1066,6 +1066,11 @@
           "kind": {
             "type": "string"
           },
+          "missing": {
+            "default": false,
+            "description": "The local checkout was moved or removed, so opening it fails. Always\nfalse for a pull request, whose worktree a refresh rebuilds.",
+            "type": "boolean"
+          },
           "repo_root": {
             "type": "string"
           },
@@ -1964,6 +1969,6 @@
     "title": "Contract",
     "type": "object"
   },
-  "schema_revision": 13,
+  "schema_revision": 14,
   "schema_version": 1
 }
