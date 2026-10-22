@@ -267,6 +267,12 @@ T["core"]["a delivery waiting for a newer CLI refuses the Lua sink with a hint t
     { match = { "--drain" }, body = { ok = true, data = vim.NIL, session = waiting } },
   })
   open(child)
+  local function drains()
+    return #vim.tbl_filter(function(call)
+      return vim.tbl_contains(call.args, "--drain")
+    end, helpers.calls(dir))
+  end
+  local before = drains()
   child.lua([[
     _G.delivered = false
     require('reviewkit.core').register_sink('clip', {
@@ -282,6 +288,7 @@ T["core"]["a delivery waiting for a newer CLI refuses the Lua sink with a hint t
   eq(d.err.retryable, false)
   eq(d.err.hint:find(":ReviewInstall", 1, true) ~= nil, true)
   eq(child.lua_get("_G.delivered"), false)
+  eq(drains(), before)
 end
 
 T["core"]["a Lua sink checks the disk for another instance's waiting delivery first"] = function()

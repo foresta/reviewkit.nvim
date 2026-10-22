@@ -968,21 +968,7 @@ function M.submit_range(sink, first, last)
   if #ids == 0 then
     return notify("no comment on the selected lines")
   end
-  local function go(name)
-    M.submit(name, { comment_ids = ids })
-  end
-  if sink then
-    return go(sink)
-  end
-  vim.ui.select(
-    core.sink_names(),
-    { prompt = ("Send %d comment%s to"):format(#ids, #ids == 1 and "" or "s") },
-    function(choice)
-      if choice then
-        go(choice)
-      end
-    end
-  )
+  M.submit(sink, { comment_ids = ids })
 end
 
 function M.history()

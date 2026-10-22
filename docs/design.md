@@ -516,6 +516,8 @@ lua/reviewkit/
   view/annotate.lua   extmark の注釈（stale は薄く）
   view/queue.lua      一覧（quickfix）
   view/input.lua      入力窓。空の本文を保存したときは、送らずに捨てたことを通知する（コメント・編集・返信とも）
+                      保存が断られたら本文を残して開き直す。ただし相手が消えた（E_NO_SESSION / E_NO_COMMENT / E_NO_TARGET /
+                      E_NO_THREAD）ときは保存し直しても通らないので、開き直さず本文を無名レジスタに入れて知らせる
   view/thread.lua     カーソル行のスレッドを float で表示。r で返信（reply_to 付きコメント）、R で resolve の切り替え。
                       範囲スレッドは start_side が side と同じときだけ start_line から line までを覆う（]t と同じ規則）
   view/preview.lua    送信前のプレビュー（SubmitPreview）を見せて確認する
@@ -580,16 +582,17 @@ require("reviewkit").setup({
     herdr = { agent_type = "claude", header = nil, match_foreground_cwd = true },   -- HerdrOptions として渡す
     -- どの sink の表にも consume = true | false を書ける（SubmitOptions.consume。既定は sink が決める。
     -- github は二重投稿を避けるため常に消費し、clipboard の写しは消費しない）
-    github = { confirm = true },                    -- :ReviewSubmit github は送る内容を見せて確認する
+    github = { confirm = true },                    -- :ReviewSubmit github は送る内容を見せて確認する。false にすると
+                                                    -- PR セッションの既定の送信（<leader>rs、sink を省いた :ReviewSubmit）も確認なしで公開投稿される
     clipboard = { register = "+" },
   },
 })
 ```
 
 `:Review pr <number|url>`、`:Review diff <base> [<head>]`、`:Review resume [id]`、`:Review refresh`、`:Review threads [refresh]`、
-`:ReviewSubmit [herdr|github|clipboard]`（`:'<,'>ReviewSubmit` はキューの一覧で選んだ行だけ。sink を省くと、`<leader>rs` と同じくセッションの主な送り先 = PR は github（確認あり。`sinks.github.confirm = false` で省く）、local は herdr）、`:ReviewClose[!]`、`:ReviewHistory`、`:ReviewInstall`、`:ReviewLog`。
+`:ReviewSubmit [herdr|github|clipboard]`（`:'<,'>ReviewSubmit` はキューの一覧で選んだ行だけ。範囲の有無によらず、sink を省くと `<leader>rs` と同じくセッションの主な送り先 = PR は github（確認あり。`sinks.github.confirm = false` で確認を省くと、プレビューなしで公開投稿される）、local は herdr。sink を書けばそれが優先）、`:ReviewClose[!]`、`:ReviewHistory`、`:ReviewInstall`、`:ReviewLog`。
 quickfix の一覧では、履歴の `r` でキューへ戻し、キューの `D` で配送済みを履歴へ移す（確認あり）。キューの一覧で行を選んで
-`<leader>rs`（visual）か `:'<,'>ReviewSubmit {sink}` を使うと、その行のコメントだけを送る（`comment_ids`）。`:ReviewClose` は未送信の
+`<leader>rs`（visual）か `:'<,'>ReviewSubmit [sink]` を使うと、その行のコメントだけを送る（`comment_ids`）。送り先は範囲の無い形と同じ規則で決まり、選ばせない。`:ReviewClose` は未送信の
 コメントがあると確認する（`!` の purge ではコメントも消えると明示する）。diff ビューのバッファだけのキーは
 `]f` `[f`（ファイル）、`]h` `[h`（hunk）、`]t` `[t`（行のあるスレッド。outdated とファイル単位はスレッド一覧から）、
 `]u`（未読の次のファイル）。`setup()` を呼ばなくてもコマンドは使える。

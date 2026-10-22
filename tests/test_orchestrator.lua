@@ -452,7 +452,9 @@ T["orchestrator"]["visual <leader>rs in the queue list submits the selected line
   wait_notice("1 file to review")
   child.lua("require('reviewkit.view.queue').show_comments()")
   child.cmd("copen")
-  child.lua("vim.ui.select = function(items, _, on_choice) on_choice('herdr') end")
+  child.lua(
+    "_G.asked = false; vim.ui.select = function(items, _, on_choice) _G.asked = true; on_choice('clipboard') end"
+  )
   child.lua("vim.api.nvim_win_set_cursor(0, { 2, 0 })")
   child.type_keys("V", "\\rs")
   wait_for_call("--sink herdr")
@@ -463,6 +465,28 @@ T["orchestrator"]["visual <leader>rs in the queue list submits the selected line
     end
   end
   eq(sent.comment_ids, { "c_2" })
+  eq(child.lua_get("_G.asked"), false)
+end
+
+T["orchestrator"]["a range without a sink goes to the session's destination"] = function()
+  helpers.respond(dir, two_comment_rules())
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("require('reviewkit.view.queue').show_comments()")
+  child.cmd("copen")
+  child.lua(
+    "_G.asked = false; vim.ui.select = function(items, _, on_choice) _G.asked = true; on_choice('clipboard') end"
+  )
+  child.cmd("2ReviewSubmit")
+  wait_for_call("--sink herdr")
+  local sent
+  for _, call in ipairs(helpers.calls(dir)) do
+    if table.concat(call.args, " "):find("--sink herdr", 1, true) then
+      sent = vim.json.decode(call.stdin)
+    end
+  end
+  eq(sent.comment_ids, { "c_2" })
+  eq(child.lua_get("_G.asked"), false)
 end
 
 T["orchestrator"]["a range outside the queue list is refused"] = function()
@@ -723,7 +747,7 @@ T["orchestrator"]["a save refused twice reopens with the same text each time"] =
     _G.saves = {}
     require("reviewkit.view.input").open_keeping({ title = "x" }, function(text, done)
       table.insert(_G.saves, text)
-      done({ code = "E_NO_COMMENT", message = "gone", retryable = false, details = {} })
+      done({ code = "E_INVALID", message = "bad input", retryable = false, details = {} })
     end)
   ]])
   child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'kept', 'text' })")
@@ -737,6 +761,28 @@ T["orchestrator"]["a save refused twice reopens with the same text each time"] =
       "#vim.tbl_filter(function(w) return vim.api.nvim_win_get_config(w).relative ~= '' end, vim.api.nvim_list_wins())"
     ),
     1
+  )
+end
+
+T["orchestrator"]["a save refused because its thread is gone does not reopen and keeps the text in the register"] = function()
+  child.lua([[
+    _G.saves = {}
+    require("reviewkit.view.input").open_keeping({ title = "x" }, function(text, done)
+      table.insert(_G.saves, text)
+      done({ code = "E_NO_THREAD", message = "thread PRRT_1 not found", retryable = false, details = {} })
+    end)
+  ]])
+  child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'my', 'reply' })")
+  child.cmd("write")
+  wait_notice("unnamed register")
+  child.lua("vim.wait(200, function() return false end)")
+  eq(child.lua_get("_G.saves"), { "my\nreply" })
+  eq(child.lua_get("vim.fn.getreg('\"')"), "my\nreply")
+  eq(
+    child.lua_get(
+      "#vim.tbl_filter(function(w) return vim.api.nvim_win_get_config(w).relative ~= '' end, vim.api.nvim_list_wins())"
+    ),
+    0
   )
 end
 

@@ -138,7 +138,6 @@ pub fn reanchor(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
     Ok(())
 }
 
-/// git's id of the empty blob, for SHA-1 and SHA-256 repositories.
 fn is_empty_blob(id: &str) -> bool {
     matches!(
         id,
