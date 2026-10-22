@@ -106,6 +106,10 @@ pub fn run(ctx: &Context, command: SessionCommand) -> Result<Response> {
 /// would fail every comment and viewed toggle with E_LOCKED. Local sessions
 /// only run local git and refresh under the lock.
 pub fn refresh(ctx: &Context, git: &SystemGit, store: &Store, id: &str) -> Result<crate::model::Session> {
+    refresh_inner(ctx, git, store, id).map_err(|err| crate::ext::git::name_session(err, id))
+}
+
+fn refresh_inner(ctx: &Context, git: &SystemGit, store: &Store, id: &str) -> Result<crate::model::Session> {
     let current = store.load(id)?;
     let (session, ()) = match &current.source {
         Source::Local { worktree, .. } => {

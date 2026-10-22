@@ -115,10 +115,10 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 |---|---|
 | `:Review diff <base> [<head>]` | review the working tree against `<base>`, or the commit `<head>` (shown read-only, whatever is checked out); `main...` compares with the merge-base, like `git diff main...`; `A..B` is `A B` (so it takes no `<head>`) |
 | `:Review pr <number\|url>` | review a pull request |
-| `:Review resume [id]` / `:Review refresh` | reopen a saved session (this repository's first) / recompute it |
+| `:Review resume [id]` / `:Review refresh` | reopen a saved session (this repository's first) / recompute it; picking a session marked `(moved)`, whose checkout was moved or removed, offers to delete it instead |
 | `:Review threads [refresh]` | list the pull request's review threads |
 | `:ReviewSubmit [herdr\|github\|clipboard]` / `:'<,'>ReviewSubmit [sink]` | send the queue (the range form, in the queue list, sends only the selected comments); without a sink, either form goes to the session's own destination; comments leave it only at the session's own destination (GitHub for a PR, the agent for a local diff), so a PR review can go to an agent first and to GitHub later; GitHub submits are previewed first; with `sinks.github.confirm = false` they are posted, publicly, with no preview, the default submit of a PR session included |
-| `:ReviewClose[!]` | close the session (`!` also deletes its state); asks first while comments are unsent |
+| `:ReviewClose[!]` | close the session (`!` also deletes its state); asks first, naming the session, while comments are unsent |
 | `:ReviewHistory` | list the comments that left the queue; `r` puts back one that `D` moved there (a comment that reached its destination stays, since editing it would deliver it twice) |
 | `:ReviewInstall` | install or update the CLI (release download, else `cargo build`) |
 | `:ReviewLog` | show recent CLI calls and errors |
