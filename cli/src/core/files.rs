@@ -91,9 +91,9 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
             if meta.len() > limit {
                 // Not the Target's head_blob: that is the file as of the last
                 // refresh. Not `-w`: nothing diffs a file this large later.
-                return Ok(Some(large(Some(repo.hash_object(path)?))));
+                return Ok(Some(large(worktree_blob(repo, path, false)?)));
             }
-            (std::fs::read(&full)?, Some(repo.hash_object_write(path)?))
+            (std::fs::read(&full)?, worktree_blob(repo, path, true)?)
         }
     };
     let binary = is_binary(&bytes);
@@ -108,6 +108,36 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
         too_large: false,
         lines,
     }))
+}
+
+/// The id only lets the comment follow the file later; a file git cannot
+/// hash (a clean filter that cannot run, objects that cannot be written)
+/// is still read, or one such file would fail every refresh of the session.
+/// Only git refusing the file is tolerated: git that cannot start or times
+/// out is reported, as everywhere else.
+fn worktree_blob(repo: &Repository<'_>, path: &str, write: bool) -> Result<Option<String>> {
+    let refused = |err: &Error| !err.details["exit"].is_null();
+    let hashed = if write {
+        // Without the object nothing can diff it later, but the id alone
+        // still tells whether the file changed.
+        match repo.hash_object_write(path) {
+            Err(err) if refused(&err) => repo.hash_object(path),
+            other => other,
+        }
+    } else {
+        repo.hash_object(path)
+    };
+    match hashed {
+        Ok(id) => Ok(Some(id)),
+        Err(err) if refused(&err) => {
+            log::warn!(
+                "cannot hash {path}; its comments will not follow edits: {}",
+                err.message
+            );
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Editor line numbers: a trailing newline does not start a line, and CRLF
@@ -141,6 +171,28 @@ mod tests {
         }
     }
 
+    struct GitCannotStart;
+
+    impl Git for GitCannotStart {
+        fn run(&self, _cwd: &Path, _args: &[&str]) -> Result<Vec<u8>> {
+            Err(Error::tool(
+                "git",
+                crate::error::ErrorCode::EToolMissing,
+                "cannot run git",
+            ))
+        }
+    }
+
+    #[test]
+    fn a_git_that_cannot_start_is_reported_not_read_as_a_file_without_a_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("small.txt"), "a\n").unwrap();
+        let session = worktree_session(dir.path());
+        let repo = Repository::at(&GitCannotStart, dir.path().to_path_buf());
+        let err = read_side(&session, &repo, Side::Head, "small.txt").err();
+        assert_eq!(err.map(|e| e.code), Some(crate::error::ErrorCode::EToolMissing));
+    }
+
     fn worktree_session(dir: &Path) -> Session {
         use crate::model::{HeadRef, Repo, RevRef, Source};
         Session::new(
@@ -171,16 +223,23 @@ mod tests {
     }
 
     #[test]
-    fn a_working_tree_file_git_cannot_hash_is_an_error_not_a_file_without_a_blob() {
+    fn a_working_tree_file_git_cannot_hash_is_still_read_without_a_blob() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("small.txt"), "a\n").unwrap();
         std::fs::write(dir.path().join("large.txt"), vec![b'a'; TOO_LARGE_BYTES + 1]).unwrap();
         let session = worktree_session(dir.path());
         let repo = Repository::at(&HashFails, dir.path().to_path_buf());
         for path in ["small.txt", "large.txt"] {
-            let err = read_side(&session, &repo, Side::Head, path).err();
-            assert_eq!(err.map(|e| e.code), Some(crate::error::ErrorCode::EGit), "{path}");
+            let side = read_side(&session, &repo, Side::Head, path).unwrap().unwrap();
+            assert_eq!(side.blob, None, "{path}");
         }
+        assert_eq!(
+            read_side(&session, &repo, Side::Head, "small.txt")
+                .unwrap()
+                .unwrap()
+                .lines,
+            vec!["a"]
+        );
     }
 
     #[test]

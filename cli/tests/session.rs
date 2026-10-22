@@ -1277,3 +1277,50 @@ fn a_session_whose_checkout_moved_is_listed_as_missing() {
     std::fs::rename(&moved, repo.path()).unwrap();
     assert_eq!(listed["data"][0]["missing"], true, "{listed}");
 }
+
+#[test]
+fn a_checkout_whose_objects_cannot_be_written_still_takes_comments_and_refreshes() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.write("keep.txt", "changed\n");
+    let opened = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let id = opened["session"]["id"].as_str().unwrap().to_string();
+    repo.write("keep.txt", "changed again\n");
+    let objects = repo.path().join(".git/objects");
+    let set_mode = |mode: u32| {
+        for entry in walk(&objects) {
+            std::fs::set_permissions(&entry, std::os::unix::fs::PermissionsExt::from_mode(mode)).unwrap();
+        }
+    };
+    set_mode(0o555);
+    let added = reviewkit(&state, &repo)
+        .args(["comment", "add", "--session", &id])
+        .write_stdin(r#"{"path": "keep.txt", "side": "head", "line": 1, "body": "x"}"#)
+        .output()
+        .unwrap();
+    let refreshed = reviewkit(&state, &repo)
+        .args(["session", "refresh", "--session", &id])
+        .output()
+        .unwrap();
+    set_mode(0o755);
+    let added: serde_json::Value = serde_json::from_slice(&added.stdout).unwrap();
+    let refreshed: serde_json::Value = serde_json::from_slice(&refreshed.stdout).unwrap();
+    assert_eq!(added["ok"], true, "{added}");
+    assert_eq!(refreshed["ok"], true, "{refreshed}");
+    assert_eq!(refreshed["session"]["comments"].as_array().unwrap().len(), 1);
+}
+
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![dir.to_path_buf()];
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        if entry.file_type().unwrap().is_dir() {
+            dirs.extend(walk(&entry.path()));
+        }
+    }
+    dirs
+}

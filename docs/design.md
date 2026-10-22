@@ -368,8 +368,10 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   git の fetch / clone は `REVIEWKIT_GIT_TIMEOUT_MS`（既定 120 秒）で打ち切り、認証のプロンプトは出さない。部分 clone（`extensions.partialClone` か `remote.<name>.promisor=true`）では
   どのコマンドも足りない blob を取りに行きうるので、すべてのコマンドを同じ時間で打ち切る。チェックアウトが移動・削除されていれば、
   git が無いのではなく「checkout not found」（E_GIT）として返す。読む rev 自体が無い（gc された base の sha、消された PR の mirror）ときも、
-  path が無いとは読まず E_GIT（hint: refresh するか開き直す）で返す。作業ツリーの `git hash-object` の失敗も握りつぶさず返す
-  （blob の無い anchor は後で追従できない）。
+  path が無いとは読まず E_GIT（hint: refresh するか開き直す）で返す。作業ツリーの `git hash-object` が終了コードで
+  ファイルを拒んだときだけはコマンドを止めない（実行できない clean filter、書き込めない objects。1 つのファイルで refresh 全体が失敗し続けるため）。
+  git が起動できない・時間切れのときは、ほかと同じく E_TOOL_MISSING / E_GIT で返す。
+  `-w` が失敗したら書き込みなしの id を、それも失敗したら blob なしで記録して警告を出す（そのコメントは編集を追従できない）。
   git は呼び出し元の環境に左右されないよう、リポジトリを指す変数（`GIT_DIR`、`GIT_WORK_TREE`、`GIT_INDEX_FILE` など。
   フックやコミットエディタから起動した Neovim が持つ）と pathspec の解釈を変える変数を外し、`GIT_OPTIONAL_LOCKS=0` で
   `status` が index.lock を取らないようにし（利用者の `git add` / `commit` と衝突しない）、制御端末を持たない新しいセッションで
