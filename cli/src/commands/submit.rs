@@ -60,7 +60,7 @@ pub fn run(ctx: &Context, args: SubmitArgs) -> Result<Response> {
             let (session, ()) = store.update_if_changed(&session, |_| Ok(()))?;
             return Response::with_session(serde_json::Value::Null, &session);
         }
-        let mut result: SinkResult = super::stdin_json_lenient()?;
+        let mut result: SinkResult = super::stdin_json_lenient(SinkResult::degrade_unknown_values)?;
         // Also the key that keeps a replayed result from being recorded twice,
         // so a sink's own (possibly coarse) time is not trusted for it.
         result.at = time::now();
