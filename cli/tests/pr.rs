@@ -288,8 +288,37 @@ fn close_purge_removes_the_worktree_but_keeps_the_mirror() {
             .unwrap(),
     );
     assert!(!worktree.exists());
-    assert!(state.path().join("repos/github.com/o/r/mirror.git/HEAD").exists());
+    let mirror = state.path().join("repos/github.com/o/r/mirror.git");
+    assert!(mirror.join("HEAD").exists());
     assert!(!state.path().join("sessions/pr/github.com/o/r/7").exists());
+    assert_eq!(
+        git_in(&mirror, &["for-each-ref", "refs/reviewkit"]),
+        "",
+        "the PR's refs leave the shared mirror"
+    );
+}
+
+#[test]
+fn reopening_an_open_pull_request_reads_its_metadata_once() {
+    let state = tempfile::tempdir().unwrap();
+    let remote = Remote::new();
+    let gh = FakeGh::new(&remote, "OPEN", serde_json::json!([]));
+    let open = || {
+        json(
+            &reviewkit(&state, &remote, &gh)
+                .args(["session", "open", "--pr", "https://github.com/o/r/pull/7"])
+                .output()
+                .unwrap(),
+        )
+    };
+    open();
+    let before = gh.calls().len();
+    open();
+    let views = gh.calls()[before..]
+        .iter()
+        .filter(|c| c["args"].to_string().contains("\"view\""))
+        .count();
+    assert_eq!(views, 1);
 }
 
 #[test]

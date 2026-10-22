@@ -44,7 +44,12 @@ pub fn add(session: &mut Session, input: CommentInput, file: Option<SideFile>) -
         ))
         .hint("comments use the head-side path on both sides"));
     }
-    if input.reply_to.is_some() {
+    if let Some(thread_id) = &input.reply_to {
+        // Queued, it would fail every submit until removed by hand.
+        if !session.threads.iter().any(|t| &t.id == thread_id) {
+            return Err(Error::new(ErrorCode::ENoThread, format!("no such thread: {thread_id}"))
+                .hint("refresh the session to see the current threads"));
+        }
         return Ok(push_reply(session, input, file));
     }
     let file = file.ok_or_else(|| not_commentable(&input.path, "the path does not exist on that side"))?;

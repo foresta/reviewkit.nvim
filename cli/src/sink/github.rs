@@ -273,6 +273,19 @@ pub fn plan(session: &Session, attempt: &str) -> Result<Plan> {
             });
             continue;
         }
+        // Sent, a reply into a deleted thread fails the alias on every
+        // attempt; held back, it stays queued for the user to move or drop.
+        if comment
+            .reply_to
+            .as_ref()
+            .is_some_and(|thread_id| !session.threads.iter().any(|t| &t.id == thread_id))
+        {
+            skipped.push(Skipped {
+                comment_id: comment.id.clone(),
+                reason: Reason::Stale,
+            });
+            continue;
+        }
         // A reply is posted into its thread, not at a line, so a moved or
         // outdated line is no reason to hold it back.
         if let Some(reason) = skip_reason(comment).filter(|_| comment.reply_to.is_none()) {
@@ -485,6 +498,7 @@ pub fn preview(session: &Session) -> Result<SubmitPreview> {
         raw: serde_json::to_value(&plan).unwrap_or_default(),
         digest: Some(digest(session)?),
         recovered: Vec::new(),
+        recovered_decision: false,
     })
 }
 
@@ -1117,8 +1131,9 @@ impl super::Sink for GithubSink {
             let repo = repo_ref_of(&session)?;
             if let Some(found) = reconcile_pending(&mut session, &gh, &repo, &session_dir)? {
                 let ids: Vec<String> = found.sent.iter().map(|s| s.comment_id.clone()).collect();
+                let decision = found.decision == DecisionStatus::Sent;
                 crate::core::apply::apply(&mut session, found, true)?;
-                recovered = Some(ids);
+                recovered = Some((ids, decision));
             }
         }
         let planned = crate::core::comments::narrowed(&session, opts.comment_ids.as_deref())
@@ -1139,10 +1154,11 @@ impl super::Sink for GithubSink {
                 mode: DeliveryMode::Sent,
                 raw: serde_json::Value::Null,
                 digest: Some(empty_digest()),
-                recovered: recovered.unwrap_or_default(),
+                recovered: recovered.as_ref().map(|r| r.0.clone()).unwrap_or_default(),
+                recovered_decision: recovered.is_some_and(|r| r.1),
             }),
             Ok(mut preview) => {
-                preview.recovered = recovered.unwrap_or_default();
+                (preview.recovered, preview.recovered_decision) = recovered.unwrap_or_default();
                 Ok(preview)
             }
             other => other,
@@ -1236,6 +1252,10 @@ impl super::Sink for GithubSink {
                 if view.is_some() && s.decision.is_some() {
                     result.decision = DecisionStatus::Skipped;
                 }
+                let mut result = crate::core::apply::apply(s, result, consume)?;
+                // Merged only into the report: phase 1 recorded these
+                // deliveries under its own time, which a second apply would
+                // not recognise as the same and record again.
                 if let Some(recovered) = &recovered {
                     result.sent.splice(0..0, recovered.sent.clone());
                     if let Some(attempted) = result.attempted.as_mut() {
@@ -1246,8 +1266,12 @@ impl super::Sink for GithubSink {
                     if recovered.decision == DecisionStatus::Sent && s.decision.is_none() {
                         result.decision = DecisionStatus::Sent;
                     }
+                    result.summary = crate::core::apply::summary(&result);
+                    if let Some(last) = s.last_submit.as_mut() {
+                        last.result = result.clone();
+                    }
                 }
-                crate::core::apply::apply(s, result, consume)
+                Ok(result)
             },
             remove_pending,
         );
@@ -1366,6 +1390,19 @@ mod tests {
             reason: Some(Reason::OutsideDiff),
         };
         s.comments[4].reply_to = Some("PRRT_1".into());
+        s.threads = vec![crate::model::Thread {
+            id: "PRRT_1".into(),
+            path: "src/a.rs".into(),
+            side: Side::Head,
+            line: Some(7),
+            start_line: None,
+            start_side: None,
+            original_line: Some(7),
+            resolved: false,
+            outdated: false,
+            subject_type: crate::model::SubjectType::Line,
+            comments: vec![],
+        }];
         s.decision = Some(Decision {
             event: DecisionEvent::RequestChanges,
             body: "please".into(),
@@ -1511,6 +1548,19 @@ mod tests {
         let plan = plan(&s, "t").unwrap();
         assert_eq!(plan.replies.len(), 1);
         assert!(plan.skipped.iter().all(|sk| sk.comment_id != "c_5"));
+    }
+
+    #[test]
+    fn a_reply_whose_thread_is_gone_is_skipped_as_stale() {
+        let mut s = pr_session();
+        s.threads.clear();
+        let plan = plan(&s, "t").unwrap();
+        assert!(plan.replies.is_empty());
+        assert!(
+            plan.skipped
+                .iter()
+                .any(|sk| sk.comment_id == "c_5" && sk.reason == Reason::Stale)
+        );
     }
 
     #[test]

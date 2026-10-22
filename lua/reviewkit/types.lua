@@ -4,7 +4,7 @@
 local M = {}
 
 M.SCHEMA_VERSION = 1
-M.SCHEMA_REVISION = 12
+M.SCHEMA_REVISION = 13
 
 ---@alias reviewkit.AgentType "claude"|"plain"
 
@@ -350,6 +350,7 @@ M.SCHEMA_REVISION = 12
 ---@field mode reviewkit.DeliveryMode
 ---@field raw table The sink's own request, for debugging. Not part of the contract: it changes whenever the sink's transport does.
 ---@field recovered? string[] Comments an interrupted submit is found to have posted already. They are not sent again; confirming the preview records them as sent.
+---@field recovered_decision? boolean The interrupted submit's review is found to have carried the decision; confirming the preview records it as sent.
 ---@field replies reviewkit.PreviewReply[]
 ---@field sink string
 ---@field skipped reviewkit.Skipped[]

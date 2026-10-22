@@ -1468,6 +1468,10 @@
             },
             "type": "array"
           },
+          "recovered_decision": {
+            "description": "The interrupted submit's review is found to have carried the decision;\nconfirming the preview records it as sent.",
+            "type": "boolean"
+          },
           "replies": {
             "items": {
               "$ref": "#/$defs/PreviewReply"
@@ -1960,6 +1964,6 @@
     "title": "Contract",
     "type": "object"
   },
-  "schema_revision": 12,
+  "schema_revision": 13,
   "schema_version": 1
 }

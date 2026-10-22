@@ -413,6 +413,14 @@ T["core"]["an empty preview after a recovery still explains itself"] = function(
   eq(vim.tbl_contains(lines, "Found on GitHub from that submit, recorded on send (2)"), true)
 end
 
+T["core"]["the preview says when the recovery found the decision posted"] = function()
+  local lines = child.lua_get([[require('reviewkit.view.preview').lines(
+    { sink = 'github', comment_ids = {}, body_comment_ids = {}, skipped = {}, replies = {}, thread_actions = {},
+      mode = 'sent', raw = {}, digest = 'd0', recovered = {}, recovered_decision = true },
+    { comments = {}, pending_submit = true })]])
+  eq(vim.tbl_contains(lines, "That submit's decision was found on GitHub; it is recorded on send."), true)
+end
+
 T["core"]["a drain that fails for another reason reports that reason and is not retried"] = function()
   helpers.respond(dir, {
     {

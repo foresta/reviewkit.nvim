@@ -370,6 +370,7 @@ pub fn preview(
         raw: serde_json::to_value(&request).unwrap_or_default(),
         digest: None,
         recovered: vec![],
+        recovered_decision: false,
     })
 }
 

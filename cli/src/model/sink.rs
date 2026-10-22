@@ -175,6 +175,10 @@ pub struct SubmitPreview {
     /// are not sent again; confirming the preview records them as sent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recovered: Vec<String>,
+    /// The interrupted submit's review is found to have carried the decision;
+    /// confirming the preview records it as sent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recovered_decision: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
