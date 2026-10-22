@@ -222,8 +222,6 @@ pub fn checkout_not_found(cwd: &Path) -> Error {
         .hint("it was moved or removed; open the review again from where the checkout is now")
 }
 
-/// What makes git fetch missing objects on demand: either setting alone is
-/// enough.
 fn has_promisor(run: impl Fn(&[&str]) -> Result<Vec<u8>>) -> bool {
     run(&["config", "--get", "extensions.partialclone"]).is_ok()
         || run(&["config", "--type=bool", "--get-regexp", r"^remote\..*\.promisor$"])

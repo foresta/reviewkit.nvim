@@ -15,7 +15,7 @@ return {
   { "n", "<leader>rT", "threads", "reviewkit: list the pull request's threads" },
   { "n", "<leader>rq", "toggle_queue", "reviewkit: toggle the queue list" },
   { "n", "<leader>rv", "toggle_viewed", "reviewkit: toggle viewed for this file" },
-  { "n", "<leader>rs", "submit_default", "reviewkit: submit to herdr" },
+  { "n", "<leader>rs", "submit_default", "reviewkit: submit to the session's own destination" },
   { "x", "<leader>rs", "submit_selected", "reviewkit: submit the selected comments of the queue list" },
   { "n", "<leader>ro", "open_diff", "reviewkit: open the side-by-side view" },
   { "n", "]f", "next_file", "reviewkit: next target", true },

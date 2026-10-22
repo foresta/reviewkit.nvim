@@ -10,7 +10,7 @@ Rust CLI `reviewkit` と Lua の間で受け渡すデータ、CLI のサブコ�
 - **Lua は Session を書き換えない**。読み取り（コメント可能判定、注釈、移動）はキャッシュで同期的に済ませ、
   CLI を呼ぶのは変更と refresh のときだけ
 - **CLI は対話しない**。選択が要るとき（herdr の pane が複数）は `E_AMBIGUOUS` と候補を返し、
-  Lua が `vim.ui.select` で選んで `--target` 付きで再実行する
+  Lua が `vim.ui.select` で選び、SubmitOptions の `target` に入れて（`--options -` の stdin）再実行する
 - **呼び出しは常に非同期**（`vim.system` + callback）
 - **enum は追加のみ**。Lua は未知の値を落とさず通す。同じ `schema_version` 内ではフィールドの追加しかしない
 - **入力は厳格、保存は寛容**。stdin の JSON と sink のオプションに知らないキーや enum 値があれば `E_INVALID`
@@ -109,6 +109,7 @@ Session {
   last_submit: { sink, at, result: SinkResult } | null
   pending_submit: bool      -- 中断された GitHub 送信が残っている（読むたびに state dir から求める）
   pending_apply: bool       -- Lua の sink が配送した結果が、ロックを待って記録されていない（同上）
+  pending_apply_newer: bool -- 記録待ちのうち、この CLI より新しい revision が書いたものがある（同上）。それはその版の CLI しか記録できない
   history: Comment[]        -- キューを出たコメント（deliveries 付き）。宛先に届いて消費されたものと、`comment clear` で
                             -- 移しただけのもの。保存はするが封筒では常に空。
                             -- `history list` で取る。200 件を超えたら、消費済み（宛先に届いた）ものから古い順に捨てる。
@@ -292,7 +293,7 @@ reviewkit file head   --session ID --path P              -> 同じ形。head が
                                                             view はこれを読み取り専用で head 側に出す（作業ツリーの別ブランチや未コミットの
                                                             変更で、表示とコメントの行がずれないため）。文字コードは fileencodings の順に試す
 
-reviewkit comment add    --session ID  (stdin: CommentInput)         -> session
+reviewkit comment add    --session ID  (stdin: CommentInput)         -> data: { id }, session
 reviewkit comment update --session ID --id CID (stdin: CommentPatch) -> session
 reviewkit comment remove --session ID --id CID                       -> session
 reviewkit comment list   --session ID [--path P]                     -> data: Comment[]
@@ -424,7 +425,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   | github | pending が残り、次の github submit が照合してから送る。照合が済むまで、pending に載ったコメントの編集・削除と、decision を運んだ pending があるときの decision の変更は E_CONFLICT（照合が送ったときの本文で探すため、変えると送信済みを見失い二重に投稿する）。`comment clear` も pending に載ったコメントはキューに残す（照合はキューの中を探す） | 照合で送信済みと分かったものは送らない。GitHub へ sent 済みは `delivered` で skip | `outcome = unknown`、再試行不可。pending を次回照合。どのフィールドの失敗かを示さないエラー（タイムアウト等）や data の無い応答も同じ扱い。ただし実行の前に拒否されたと分かるもの（上記）は送っていないので記録を消す。path の無い `E_PENDING_REVIEW` は unknown のまま、hint は pending review の片付け方を示す |
   | herdr | 送信後・保存前に落ちると記録が無く再送しうる（エージェント宛てで公開されない） | 自分へ sent 済みのコメントと decision は送らない | 全体失敗、`outcome = unknown`。印は試行分だけ。herdr が送り先が無いと答えたときは `not_started`（§2） |
   | 選択送信（comment_ids） | github は選んだ分だけの COMMENT review を送り、pending には decision を運ばないと記録する（照合しても decision は消さない） | 送った分は消費されてキューに無く、その id は落とされる。全部落ちれば nothing to submit | 経路ごとの規則と同じ |
-  | Lua sink（submit apply） | 送信後・apply の CLI が結果をファイルに書く前に落ちると記録されず再送しうる（sink の責任）。書いた後なら次の書き込みが記録する | 消費済みはキューに無い。`version` / `decision_version` が違うものは記録しない。Lua の sink で送る前に Lua はディスク上の Session（`session get`）を読み、記録待ちがあれば記録を試み、残れば E_CONFLICT で止める（別インスタンスの記録待ちも見える。記録が `E_LOCKED` 以外で失敗したときはそのエラーを返す） | sink の責任 |
+  | Lua sink（submit apply） | 送信後・apply の CLI が結果をファイルに書く前に落ちると記録されず再送しうる（sink の責任）。書いた後なら次の書き込みが記録する | 消費済みはキューに無い。`version` / `decision_version` が違うものは記録しない。Lua の sink で送る前に Lua はディスク上の Session（`session get`）を読み、記録待ちがあれば記録を試み、残れば E_CONFLICT で止める（別インスタンスの記録待ちも見える。記録が `E_LOCKED` 以外で失敗したときはそのエラーを返す。記録待ちが新しい版の書いたもの（`pending_apply_newer`）なら待っても記録されないので、CLI の更新（`:ReviewInstall`）を促す）。2 つのインスタンスが同時に送る場合の排他は無い（配送はロックの外で行うため。sink の責任） | sink の責任 |
 - Lua の sink の結果（送信箱）: `submit apply` は受け取った結果に CLI の時刻を `at` として付け、ロックを取る前に
   `<session>/applies/<ulid>.json`（`{ revision, consume, result }`）へ書く。ロックが取れればその場で記録して `ok`。書いた後に
   記録できなければ（他の送信がロックを持っている、新しい版が書いたセッションなど）、記録待ちのまま `ok`（`summary` に理由と
@@ -434,7 +435,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   `submit apply --drain` で記録を促す（ロックを持つ送信が保存すると監視で気づく。`E_LOCKED` で失敗したときだけ間隔を空けて
   促し直す。他のエラーは待っても直らないので、Session が次に変わるまで促さない）。
   プレビュー（`--dry-run`）は記録待ちを適用した写しから作る（送信は書き込みの冒頭で適用するので、そうしないと digest が合わない）。新しい版が書いたファイルは読まずに残す（`pending_apply` には数える。別インスタンスの配送なので、
-  数えないと Lua の sink が同じコメントをもう一度送る）。
+  数えないと Lua の sink が同じコメントをもう一度送る。`pending_apply_newer` も true にし、Lua は CLI の更新を促す）。
   壊れたファイルは `applies/rejected/` に移す（他の書き込みを失敗させない）
 - gh には github.com を含め常に `repo.host` を渡す（`--hostname`、`--repo host/owner/name`）。渡さないと gh は `GH_HOST` に従い、
   GitHub Enterprise を既定にしている利用者の github.com の PR が別のホストに読み書きされる
@@ -583,7 +584,7 @@ require("reviewkit").setup({
 ```
 
 `:Review pr <number|url>`、`:Review diff <base> [<head>]`、`:Review resume [id]`、`:Review refresh`、`:Review threads [refresh]`、
-`:ReviewSubmit herdr|github|clipboard`（`:'<,'>ReviewSubmit` はキューの一覧で選んだ行だけ）、`:ReviewClose[!]`、`:ReviewHistory`、`:ReviewInstall`、`:ReviewLog`。
+`:ReviewSubmit [herdr|github|clipboard]`（`:'<,'>ReviewSubmit` はキューの一覧で選んだ行だけ。sink を省くと、`<leader>rs` と同じくセッションの主な送り先 = PR は github（確認あり。`sinks.github.confirm = false` で省く）、local は herdr）、`:ReviewClose[!]`、`:ReviewHistory`、`:ReviewInstall`、`:ReviewLog`。
 quickfix の一覧では、履歴の `r` でキューへ戻し、キューの `D` で配送済みを履歴へ移す（確認あり）。キューの一覧で行を選んで
 `<leader>rs`（visual）か `:'<,'>ReviewSubmit {sink}` を使うと、その行のコメントだけを送る（`comment_ids`）。`:ReviewClose` は未送信の
 コメントがあると確認する（`!` の purge ではコメントも消えると明示する）。diff ビューのバッファだけのキーは

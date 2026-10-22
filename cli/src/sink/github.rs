@@ -218,8 +218,8 @@ fn review_body(session: &Session, decision_body: &str, outside: &[&Comment]) -> 
     parts.join("\n\n")
 }
 
-/// CommonMark inline code: the delimiter outruns every backtick run inside,
-/// and a space keeps a leading or trailing backtick from joining it.
+/// The space is not optional: CommonMark would join a leading or trailing
+/// backtick to the delimiter.
 fn inline_code(text: &str) -> String {
     let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let tick = "`".repeat(longest + 1);

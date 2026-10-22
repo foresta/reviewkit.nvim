@@ -117,7 +117,7 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 | `:Review pr <number\|url>` | review a pull request |
 | `:Review resume [id]` / `:Review refresh` | reopen a saved session (this repository's first) / recompute it |
 | `:Review threads [refresh]` | list the pull request's review threads |
-| `:ReviewSubmit herdr\|github\|clipboard` / `:'<,'>ReviewSubmit <sink>` | send the queue (the range form, in the queue list, sends only the selected comments); comments leave it only at the session's own destination (GitHub for a PR, the agent for a local diff), so a PR review can go to an agent first and to GitHub later; GitHub submits are previewed first (`sinks.github.confirm = false` skips it) |
+| `:ReviewSubmit [herdr\|github\|clipboard]` / `:'<,'>ReviewSubmit <sink>` | send the queue (the range form, in the queue list, sends only the selected comments); without a sink, to the session's own destination; comments leave it only at the session's own destination (GitHub for a PR, the agent for a local diff), so a PR review can go to an agent first and to GitHub later; GitHub submits are previewed first (`sinks.github.confirm = false` skips it) |
 | `:ReviewClose[!]` | close the session (`!` also deletes its state); asks first while comments are unsent |
 | `:ReviewHistory` | list the comments that left the queue; `r` puts back one that `D` moved there (a comment that reached its destination stays, since editing it would deliver it twice) |
 | `:ReviewInstall` | install or update the CLI (release download, else `cargo build`) |
@@ -150,7 +150,7 @@ Default keys (disable with `setup({ set_keymaps = false })`; `<Plug>(reviewkit-*
 `<leader>rc` comment, `<leader>rS` suggest a replacement, `<leader>rm` move a comment of this file
 here (all three also on a visual selection), `<leader>re` / `<leader>rx` edit / remove the comment here,
 `<leader>rd` decision, `<leader>rv` toggle viewed, `<leader>rq` queue, `<leader>rt` / `<leader>rT`
-thread here / thread list, `<leader>rs` submit to herdr (visual, in the queue list: submit the selected
+thread here / thread list, `<leader>rs` submit to the session's own destination (visual, in the queue list: submit the selected
 comments), `<leader>ro` side-by-side view.
 Inside the side-by-side view: `]f` / `[f` next / previous file, `]h` / `[h` next / previous hunk,
 `]t` / `[t` next / previous thread, `]u` next file not viewed yet.

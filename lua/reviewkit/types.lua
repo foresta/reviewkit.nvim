@@ -4,7 +4,7 @@
 local M = {}
 
 M.SCHEMA_VERSION = 1
-M.SCHEMA_REVISION = 14
+M.SCHEMA_REVISION = 15
 
 ---@alias reviewkit.AgentType "claude"|"plain"
 
@@ -233,6 +233,7 @@ M.SCHEMA_REVISION = 14
 ---@field id string
 ---@field last_submit? reviewkit.LastSubmit
 ---@field pending_apply? boolean A client sink's delivery waiting for the session lock to be recorded; derived like `pending_submit`.
+---@field pending_apply_newer? boolean Some of those were queued by a newer CLI, which alone can record them: waiting does not clear `pending_apply`, updating the CLI does.
 ---@field pending_submit? boolean Derived from the state dir on every read rather than stored: a crash between sending and saving is exactly when the stored value is wrong.
 ---@field repo reviewkit.Repo
 ---@field rev integer

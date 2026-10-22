@@ -202,6 +202,35 @@ T["cli"]["health reports a missing git as an error and says what gh is for"] = f
   eq(has("pull requests"), true)
 end
 
+T["cli"]["health names the override whose tool path does not exist"] = function()
+  local missing = dir .. "/no-such-gh"
+  helpers.respond(dir, {
+    {
+      match = { "health" },
+      body = {
+        ok = true,
+        data = {
+          tools = { git = { path = "/bin/git", version = "2" }, gh = { path = missing }, herdr = { path = "/bin/sh" } },
+          gh_auth = vim.NIL,
+          state_dir = { path = "/tmp/s", writable = true },
+        },
+      },
+    },
+  })
+  child.lua(([[
+    require("reviewkit").setup({ tools = { gh = %q } })
+    _G.reported = {}
+    for _, level in ipairs({ "start", "ok", "warn", "error", "info" }) do
+      vim.health[level] = function(msg) table.insert(_G.reported, level .. ": " .. msg) end
+    end
+    require("reviewkit.health").check()
+  ]]):format(missing))
+  local reported = table.concat(child.lua_get("_G.reported"), "\n")
+  eq(reported:find("gh: not found at " .. missing .. " (set by tools.gh)", 1, true) ~= nil, true)
+  eq(reported:find("found at " .. missing .. " but", 1, true), nil)
+  eq(reported:find("herdr: found at /bin/sh but --version failed", 1, true) ~= nil, true)
+end
+
 T["cli"]["git run by the tests and their child Neovims ignores the global and system config"] = function()
   local outside = [[
     (function()
