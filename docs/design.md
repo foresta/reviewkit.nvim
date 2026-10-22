@@ -17,7 +17,20 @@ Rust CLI `reviewkit` と Lua の間で受け渡すデータ、CLI のサブコ�
   （`details.unknown_fields` にパス）。古い CLI が新しいオプションを黙って捨て、頼んだのと違うものを送らないため。
   session.json などの保存ファイルの読み込みは寛容なまま（新しい CLI が書いたものを古い CLI が読めるように）。
   `submit apply` も寛容に読み、知らないキーはログに出す（Lua の sink が配送した後の報告なので、拒否すると記録が残らず再送で二重に届く。
-  版のずれは先に契約の revision の照合で止まる）
+  版のずれは先に契約の revision の照合で止まる）。知らない enum 値も拒否せず、起きたと確かなこと以上を記録しない値に読み替えてログに出す（下表）。
+  読み替えは `submit apply` の入力だけで行い、CLI が返す・保存する SinkResult は既知の値だけを持つ
+
+  欠落は読み替えない（契約違反なので E_INVALID）。例外は `error`（無くても作り直す）と `thread_actions[].action`（無ければその要素を捨てる）。
+  `mode` を省くと既定の `sent` になる（§3）。
+
+  | フィールド | 知らない値の読み替え |
+  |---|---|
+  | `failed[].error` / `thread_actions[].error` | `code` が知らない値か無ければ `E_TOOL`。元の `code` は `details.code` と `message` の先頭（`"E_CLIPBOARD: ..."`）に残す。`tool` が無ければ sink 名。`error` 自体が無いか壊れていても同じ形に作り直す |
+  | `skipped[].reason` | `not_supported` |
+  | `mode` | `copied`（消費せず、同じ sink への再送も止めない。`sent` と読むと届いていないかもしれないものを送信済みにする） |
+  | `decision` | `not_applicable`（decision はキューに残る） |
+  | `thread_actions[].status` | `failed`（スレッド操作はキューに残る） |
+  | `thread_actions[].action` | その要素を捨てる（記録する種類が無い。スレッド操作はキューに残る） |
 - Lua の core が同時に持つ Session は 1 つ。イベントの `data.session_id` は将来複数にするための印
 
 ## 2. 応答の封筒と終了コード
@@ -522,6 +535,7 @@ core.preview(sink, opts, cb) -- submit --dry-run。cb(err, SubmitPreview)。返�
 core.register_sink(name, impl)  -- impl = { submit, available?, consumes? }。available() は boolean, reason? を返す。
                              -- consumes(session, requested) は送れたコメントをキューから消すか（既定 false）
                              -- submit の結果で省いた sent / failed / skipped / thread_actions は空、decision は not_applicable で補う。
+                             -- 知らない error.code / reason / mode / decision は拒否されず、§1 の表の値に読み替えて記録される
                              -- decision を送った sink は decision = "sent" を返す（省くと配送が記録されず、次の送信で同じ decision をもう一度送る）
 core.sinks(cb)               -- sink list と登録済みの Lua sink（runtime = "lua"）をマージ。同名は Lua を優先
 core.sink_names()            -- 最後の sinks() と登録済みの名前。:ReviewSubmit の補完用（同期）

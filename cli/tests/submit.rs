@@ -1134,3 +1134,102 @@ fn a_result_queued_by_a_newer_cli_stays_waiting_and_is_left_for_it() {
         "left for the newer CLI"
     );
 }
+
+fn queued_ids(state: &tempfile::TempDir, repo: &Repo, herdr: &FakeHerdr, id: &str) -> (String, String) {
+    let listed = json(
+        &cmd(state, repo, herdr)
+            .args(["comment", "list", "--session", id])
+            .output()
+            .unwrap(),
+    );
+    (
+        listed["data"][0]["id"].as_str().unwrap().to_string(),
+        listed["data"][1]["id"].as_str().unwrap().to_string(),
+    )
+}
+
+#[test]
+fn submit_apply_records_sent_comments_beside_an_unknown_error_code() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let (first, second) = queued_ids(&state, &repo, &herdr, &id);
+    let result = serde_json::json!({
+        "sink": "custom",
+        "sent": [{"comment_id": first}],
+        "failed": [
+            {"comment_id": second, "error": {"code": "E_CLIPBOARD", "message": "register busy", "details": {"register": "+"}}},
+            {"comment_id": null, "error": {"message": "no code at all"}},
+        ],
+        "skipped": [],
+        "decision": "not_applicable"
+    });
+    let body = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "apply", "--session", &id, "--consume"])
+            .write_stdin(result.to_string())
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(body["ok"], true, "{body}");
+    let comments = body["session"]["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1, "the delivered comment leaves the queue: {body}");
+    assert_eq!(comments[0]["id"], second);
+    assert_eq!(comments[0]["last_error"]["code"], "E_TOOL");
+    assert!(
+        comments[0]["last_error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("E_CLIPBOARD"),
+        "{body}"
+    );
+    let failed = &body["data"]["failed"];
+    assert_eq!(failed[0]["error"]["details"]["code"], "E_CLIPBOARD");
+    assert_eq!(failed[0]["error"]["details"]["register"], "+");
+    assert_eq!(failed[1]["error"]["code"], "E_TOOL");
+    assert_eq!(body["session"]["pending_apply"], false);
+}
+
+#[test]
+fn submit_apply_degrades_unknown_reasons_modes_and_statuses() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let (first, second) = queued_ids(&state, &repo, &herdr, &id);
+    let result = serde_json::json!({
+        "sink": "custom",
+        "sent": [{"comment_id": first}],
+        "failed": [],
+        "skipped": [{"comment_id": second, "reason": "muted_by_user"}],
+        "thread_actions": [
+            {"thread_id": "T_1", "action": "resolve", "status": "queued_remotely"},
+            {"thread_id": "T_2", "action": "pin", "status": "sent"},
+        ],
+        "decision": "drafted",
+        "mode": "printed"
+    });
+    let body = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["submit", "apply", "--session", &id, "--consume"])
+            .write_stdin(result.to_string())
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(body["ok"], true, "{body}");
+    let data = &body["data"];
+    assert_eq!(data["skipped"][0]["reason"], "not_supported");
+    assert_eq!(data["mode"], "copied");
+    assert_eq!(data["decision"], "not_applicable");
+    assert_eq!(data["thread_actions"].as_array().unwrap().len(), 1, "{data}");
+    assert_eq!(data["thread_actions"][0]["status"], "failed");
+    let comments = body["session"]["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 2, "an unknown mode never consumes: {body}");
+    assert_eq!(comments[0]["deliveries"][0]["sink"], "custom");
+    assert_eq!(comments[0]["deliveries"][0]["mode"], "copied");
+    assert!(
+        body["session"]["decision"].is_object(),
+        "an unknown decision status keeps the decision"
+    );
+}

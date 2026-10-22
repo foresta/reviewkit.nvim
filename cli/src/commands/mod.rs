@@ -46,10 +46,12 @@ pub fn stdin_json<T: serde::de::DeserializeOwned>() -> Result<T> {
 /// For a report of something already done (a client sink's delivery):
 /// refusing it would leave the delivery unrecorded, so extra keys are only
 /// logged. Version skew is stopped earlier, by the contract revision check.
-pub fn stdin_json_lenient<T: serde::de::DeserializeOwned>() -> Result<T> {
+/// `prepare` runs on the raw JSON first, for values a typed parse would refuse.
+pub fn stdin_json_lenient<T: serde::de::DeserializeOwned>(prepare: impl FnOnce(&mut serde_json::Value)) -> Result<T> {
     let mut unknown = Vec::new();
-    let parsed: std::result::Result<T, _> =
-        serde_ignored::deserialize(stdin_value()?, |path| unknown.push(path.to_string()));
+    let mut value = stdin_value()?;
+    prepare(&mut value);
+    let parsed: std::result::Result<T, _> = serde_ignored::deserialize(value, |path| unknown.push(path.to_string()));
     let parsed = parsed.map_err(|err| Error::invalid(format!("invalid input: {err}")))?;
     if !unknown.is_empty() {
         log::warn!("ignored unknown fields: {}", unknown.join(", "));
