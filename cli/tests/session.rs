@@ -254,6 +254,34 @@ fn user_diff_config_and_odd_paths_do_not_break_targets() {
 }
 
 #[test]
+fn a_small_user_rename_limit_does_not_turn_renames_into_deletes() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let lines = |name: &str| (1..=50).map(|i| format!("{name} line {i}\n")).collect::<String>();
+    repo.write("a.txt", &lines("a"));
+    repo.write("b.txt", &lines("b"));
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-q", "-m", "base"]);
+    for name in ["a", "b"] {
+        repo.git(&["mv", &format!("{name}.txt"), &format!("{name}-moved.txt")]);
+        repo.write(&format!("{name}-moved.txt"), &(lines(name) + "extra\n"));
+    }
+    repo.git(&["config", "diff.renameLimit", "1"]);
+    let session = &json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    )["session"];
+    for name in ["a", "b"] {
+        let moved = target(session, &format!("{name}-moved.txt"));
+        assert_eq!(moved["status"], "renamed", "{moved}");
+        assert_eq!(moved["old_path"], format!("{name}.txt"));
+        assert_eq!(moved["stats"]["added"], 1, "the patch pairs the rename too: {moved}");
+    }
+}
+
+#[test]
 fn user_diff_algorithm_does_not_change_the_hunks() {
     let state = tempfile::tempdir().unwrap();
     let repo = Repo::new();
