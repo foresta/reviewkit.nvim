@@ -1107,3 +1107,48 @@ fn a_moved_checkout_is_reported_as_missing_not_as_a_missing_git() {
         "{body}"
     );
 }
+
+#[test]
+fn reading_or_commenting_on_a_file_of_a_moved_checkout_names_the_checkout() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.write("keep.txt", "changed\n");
+    let opened = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let id = opened["session"]["id"].as_str().unwrap().to_string();
+    let moved = repo.path().with_extension("moved");
+    std::fs::rename(repo.path(), &moved).unwrap();
+    let run = |args: &[&str], stdin: &str| {
+        let out = Command::cargo_bin("reviewkit")
+            .unwrap()
+            .envs(common::ISOLATED_GIT)
+            .env("REVIEWKIT_GIT", real_git())
+            .arg("--state-dir")
+            .arg(state.path())
+            .args(args)
+            .write_stdin(stdin)
+            .output()
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let base = run(&["file", "base", "--session", &id, "--path", "keep.txt"], "");
+    let added = run(
+        &["comment", "add", "--session", &id],
+        r#"{"path": "keep.txt", "side": "head", "line": 1, "body": "x"}"#,
+    );
+    std::fs::rename(&moved, repo.path()).unwrap();
+    for body in [base, added] {
+        assert_eq!(body["error"]["code"], "E_GIT", "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("checkout not found"),
+            "{body}"
+        );
+    }
+}
