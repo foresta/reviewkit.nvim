@@ -504,7 +504,8 @@ lua/reviewkit/
                       左右の位置合わせと色付けは Neovim の diff モード（diffthis）。hunk 間の移動とコメント可否は Target から
                       コメントを置けるのはレビューしているテキストの上だけ。未保存のバッファは断る（保存された内容にアンカーするため）。
                       head がコミットのセッションでは作業ツリーのファイルを場所として扱わず、quickfix の <CR> もコミットの写しを開く。
-                      PR の worktree のファイルは読み取り専用にする（編集はコミットとずれ、次の refresh で失われる。セッションを閉じても戻さない）。
+                      PR の worktree のファイルは読み取り専用にする（編集はコミットとずれ、次の refresh で失われる）。最初に保護したときの
+                      modifiable / readonly を覚えておき、セッションを閉じたらその値に戻す（元から読み取り専用だったファイルはそのまま）。
                       コメントの前に checktime し、ディスクで変わっていれば読み直して断る（見えている行とアンカーがずれるため）。
                       noautoread で読み直しを断った場合は changedtick が変わらないので、バッファを読んだ・書いた時点の
                       ファイルの mtime（秒とナノ秒。orchestrator が BufReadPost / BufWritePost で記録。FileChangedShellPost は
