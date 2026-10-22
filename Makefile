@@ -3,7 +3,9 @@
 .PHONY: print-versions build debug-bin dist dist-sums deps test test-rust test-lua test-integration check check-rust check-lua fmt gen-types gen-schema
 
 NVIM ?= nvim
-DEBUG_BIN := target/debug/reviewkit
+# Asked from cargo, not assumed: CARGO_TARGET_DIR or build.target-dir moves
+# the build, and a fixed path would keep testing a stale binary there.
+DEBUG_BIN = $(shell cargo metadata --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/debug/reviewkit
 # Pinned so a new release of a test or lint tool cannot turn the gate red
 # on its own; CI reads the same values.
 MINI_VERSION := v0.18.0
@@ -37,7 +39,7 @@ test-lua: deps
 	$(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua
 
 test-integration: deps debug-bin
-	REVIEWKIT_REAL_BIN=$(CURDIR)/$(DEBUG_BIN) $(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua $(INTEGRATION_TESTS)
+	REVIEWKIT_REAL_BIN=$(DEBUG_BIN) $(NVIM) --headless -u scripts/minimal_init.lua -l scripts/run_tests.lua $(INTEGRATION_TESTS)
 
 debug-bin:
 	cargo build --locked

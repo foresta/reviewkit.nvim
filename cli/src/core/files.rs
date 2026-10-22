@@ -93,7 +93,13 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
                 // refresh. Not `-w`: nothing diffs a file this large later.
                 return Ok(Some(large(worktree_blob(repo, path, false)?)));
             }
-            (std::fs::read(&full)?, worktree_blob(repo, path, true)?)
+            // Removed since `metadata` (a delete-then-write save, a checkout
+            // mid-refresh): failing here would fail the whole refresh.
+            let bytes = match std::fs::read(&full) {
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                other => other?,
+            };
+            (bytes, worktree_blob(repo, path, true)?)
         }
     };
     let binary = is_binary(&bytes);

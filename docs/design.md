@@ -61,6 +61,8 @@ Lua は `error.code` で分岐する。`details` は常にオブジェクト（�
   コメントは積める（D4）。その場合 `commentable.github = false` で、sink-github は review 本文の「Comments outside the diff」節に
   `path`（インラインコード。path 中のどのバッククォートの連なりより長い区切りで囲む）と行、`blob/<sha>/path#L..` のリンク、本文を書いて送る（`SubmitPreview.body_comment_ids`）。stale だけは `skipped`。
   issue 以外の kind は本文の先頭に `**nit:**` のように付ける
+- rename されたファイルの古い path へのコメントは `E_INVALID`（`details.reason = "renamed"`、`details.path` に head 側の path）。
+  本文を直しても通らないことを、message に頼らず判別できるようにするため
 - `E_AMBIGUOUS` は `details.candidates` に候補（`SinkTarget[]`）を載せる。cwd に一致する agent が 0 件なら全 agent を候補にする
 - コードは「何が起きたか」を表し、ツール名を含めない。どのツールかは `error.tool`（"git" / "gh" / "herdr"）で示すので、
   sink や source を足してもコードは増えない。最初のリリース以降、コードは追加だけで改名しない。`E_GIT` は「git が動いて
@@ -374,7 +376,7 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   path が無いとは読まず E_GIT（hint: refresh するか開き直す）で返す。作業ツリーの `git hash-object` が終了コードで
   ファイルを拒んだときだけはコマンドを止めない（実行できない clean filter、書き込めない objects。1 つのファイルで refresh 全体が失敗し続けるため）。
   git が起動できない・時間切れのときは、ほかと同じく E_TOOL_MISSING / E_GIT で返す。
-  `-w` が失敗したら書き込みなしの id を、それも失敗したら blob なしで記録して警告を出す（そのコメントは編集を追従できない）。
+  `-w` が失敗したら書き込みなしの id を、それも失敗したら blob なしで記録し、stderr にログを残す（利用者への警告にはならない。そのコメントは編集を追従できない）。
   git は呼び出し元の環境に左右されないよう、リポジトリを指す変数（`GIT_DIR`、`GIT_WORK_TREE`、`GIT_INDEX_FILE` など。
   フックやコミットエディタから起動した Neovim が持つ）と pathspec の解釈を変える変数を外し、`GIT_OPTIONAL_LOCKS=0` で
   `status` が index.lock を取らないようにし（利用者の `git add` / `commit` と衝突しない）、制御端末を持たない新しいセッションで

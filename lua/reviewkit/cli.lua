@@ -37,6 +37,14 @@ function M.resolve()
   end
   local root = plugin_root()
   if cfg.dev then
+    -- cargo builds there instead when it is set; the fixed paths below would
+    -- then hold a stale binary from before it was set.
+    local target_dir = vim.env.CARGO_TARGET_DIR
+    if target_dir and target_dir ~= "" then
+      target_dir = vim.fs.normalize(target_dir:sub(1, 1) == "/" and target_dir or root .. "/" .. target_dir)
+      table.insert(candidates, target_dir .. "/debug/reviewkit")
+      table.insert(candidates, target_dir .. "/release/reviewkit")
+    end
     table.insert(candidates, root .. "/cli/target/debug/reviewkit")
     table.insert(candidates, root .. "/cli/target/release/reviewkit")
     table.insert(candidates, root .. "/target/debug/reviewkit")

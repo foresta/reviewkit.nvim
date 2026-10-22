@@ -347,6 +347,17 @@ fn base_side_comments_use_the_head_path_even_for_renames_and_deletions() {
     assert_eq!(c["anchor"]["context"]["lines"], serde_json::json!(["two"]));
     assert_eq!(c["anchor"]["blob"].as_str().unwrap().len(), 40);
 
+    let refused = add(
+        &state,
+        &repo,
+        &id,
+        serde_json::json!({"path": "old.txt", "side": "base", "line": 2, "body": "was old.txt"}),
+    );
+    let old_path: serde_json::Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(old_path["error"]["code"], "E_INVALID");
+    assert_eq!(old_path["error"]["details"]["reason"], "renamed");
+    assert_eq!(old_path["error"]["details"]["path"], "new.txt");
+
     let deleted = json(&add(
         &state,
         &repo,

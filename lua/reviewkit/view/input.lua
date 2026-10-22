@@ -99,7 +99,19 @@ function M.open(opts)
   return buf, win
 end
 
-local GONE = { E_NO_SESSION = true, E_NO_COMMENT = true, E_NO_TARGET = true, E_NO_THREAD = true }
+local GONE = {
+  E_NO_SESSION = true,
+  E_NO_COMMENT = true,
+  E_NO_TARGET = true,
+  E_NO_THREAD = true,
+  E_NOT_COMMENTABLE = true,
+}
+
+---@param err reviewkit.Error
+local function unfixable(err)
+  return GONE[err.code]
+    or (err.code == "E_INVALID" and type(err.details) == "table" and err.details.reason == "renamed")
+end
 
 --- The window closes on `:w` before the CLI answers; a save refused then
 --- (a submit holding the session, a rejected input) would lose the text.
@@ -113,9 +125,10 @@ function M.open_keeping(opts, save)
           return
         end
         require("reviewkit.notify").error(err)
-        -- Reopening for what the text cannot fix (the comment, thread or
-        -- session it was for is gone) would refuse it on every save.
-        if GONE[err.code] then
+        -- Reopening for what the text cannot fix (the comment, thread,
+        -- session or line it was for is gone, or its path was renamed)
+        -- would refuse it on every save.
+        if unfixable(err) then
           vim.fn.setreg('"', text)
           return vim.notify("[reviewkit] the text is kept in the unnamed register", vim.log.levels.WARN)
         end
