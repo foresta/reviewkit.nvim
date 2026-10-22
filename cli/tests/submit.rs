@@ -1039,6 +1039,7 @@ fn a_lua_sink_result_waits_out_a_held_session_and_is_recorded_by_the_next_write(
     let queued = apply_sent(&state, &repo, &herdr, &id, &ids[0]);
     assert_eq!(queued["ok"], true, "{queued}");
     assert_eq!(queued["session"]["pending_apply"], true);
+    assert_eq!(queued["session"]["pending_apply_newer"], false);
     assert_eq!(queued["session"]["comments"].as_array().unwrap().len(), 2);
 
     drop(held);
@@ -1121,6 +1122,10 @@ fn a_result_queued_by_a_newer_cli_stays_waiting_and_is_left_for_it() {
         got["session"]["pending_apply"], true,
         "another instance's delivery is still unrecorded"
     );
+    assert_eq!(
+        got["session"]["pending_apply_newer"], true,
+        "only a newer CLI can record it"
+    );
     let decided = json(
         &cmd(&state, &repo, &herdr)
             .args(["decision", "set", "--session", &id])
@@ -1133,6 +1138,33 @@ fn a_result_queued_by_a_newer_cli_stays_waiting_and_is_left_for_it() {
         applies.join("01ZZZZZZZZZZZZZZZZZZZZZZZZ.json").exists(),
         "left for the newer CLI"
     );
+}
+
+#[test]
+fn a_result_a_newer_cli_queued_with_values_this_one_does_not_know_is_left_alone() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let herdr = FakeHerdr::new(serde_json::json!([]));
+    let id = session_with_comments(&state, &repo, &herdr);
+    let applies = session_dir(&state, &id).join("applies");
+    std::fs::create_dir_all(&applies).unwrap();
+    let file = applies.join("01ZZZZZZZZZZZZZZZZZZZZZZZZ.json");
+    std::fs::write(
+        &file,
+        r#"{"revision": 999999, "consume": true, "result": {"sink": "slack", "mode": "beamed", "sent": [], "failed": [], "skipped": [], "decision": "not_applicable"}}"#,
+    )
+    .unwrap();
+    let decided = json(
+        &cmd(&state, &repo, &herdr)
+            .args(["decision", "set", "--session", &id])
+            .write_stdin(r#"{"event": "approve", "body": ""}"#)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(decided["ok"], true, "{decided}");
+    assert!(file.exists(), "not set aside: only the newer CLI can read it");
+    assert_eq!(decided["session"]["pending_apply"], true);
+    assert_eq!(decided["session"]["pending_apply_newer"], true);
 }
 
 fn queued_ids(state: &tempfile::TempDir, repo: &Repo, herdr: &FakeHerdr, id: &str) -> (String, String) {

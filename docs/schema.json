@@ -977,6 +977,11 @@
             "description": "A client sink's delivery waiting for the session lock to be recorded;\nderived like `pending_submit`.",
             "type": "boolean"
           },
+          "pending_apply_newer": {
+            "default": false,
+            "description": "Some of those were queued by a newer CLI, which alone can record\nthem: waiting does not clear `pending_apply`, updating the CLI does.",
+            "type": "boolean"
+          },
           "pending_submit": {
             "default": false,
             "description": "Derived from the state dir on every read rather than stored: a crash\nbetween sending and saving is exactly when the stored value is wrong.",
@@ -1969,6 +1974,6 @@
     "title": "Contract",
     "type": "object"
   },
-  "schema_revision": 14,
+  "schema_revision": 15,
   "schema_version": 1
 }

@@ -110,8 +110,7 @@ struct ErrorDetail {
     message: String,
 }
 
-/// Codes herdr answers before it delivers anything: the target does not
-/// exist, so no text can have reached a pane.
+/// The target does not exist, so no text can have reached a pane.
 const NOT_FOUND: &[&str] = &["agent_not_found", "pane_not_found"];
 
 fn failure(what: &str, stdout: &[u8], stderr: &[u8]) -> Error {

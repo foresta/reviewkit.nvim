@@ -567,7 +567,6 @@ fn fenced_lines(lines: &[&str]) -> Vec<bool> {
     fenced
 }
 
-/// The fence character, its run length, and whether nothing follows it.
 fn fence_of(line: &str) -> Option<(char, usize, bool)> {
     let line = line.trim_end_matches(['\n', '\r']);
     let indent = line.len() - line.trim_start_matches(' ').len();

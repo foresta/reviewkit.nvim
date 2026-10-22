@@ -256,6 +256,34 @@ T["core"]["a delivery waiting to be recorded is drained once per change and hold
   eq(child.lua_get("_G.delivered"), false)
 end
 
+T["core"]["a delivery waiting for a newer CLI refuses the Lua sink with a hint to update the CLI"] = function()
+  local waiting = helpers.session({ rev = 2, pending_apply = true, pending_apply_newer = true, comments = QUEUED })
+  helpers.respond(dir, {
+    {
+      match = { "session open --local" },
+      body = { ok = true, data = vim.NIL, session = helpers.session({ comments = QUEUED }) },
+    },
+    { match = { "session get" }, body = { ok = true, data = vim.NIL, session = waiting } },
+    { match = { "--drain" }, body = { ok = true, data = vim.NIL, session = waiting } },
+  })
+  open(child)
+  child.lua([[
+    _G.delivered = false
+    require('reviewkit.core').register_sink('clip', {
+      submit = function(_, _, cb)
+        _G.delivered = true
+        cb(nil, { sent = {}, failed = {}, skipped = {}, decision = 'not_applicable' })
+      end,
+    })
+    require('reviewkit.core').submit('clip', {}, _G.finish)
+  ]])
+  local d = child.lua_get("_G.wait_done()")
+  eq(d.err.code, "E_CONFLICT")
+  eq(d.err.retryable, false)
+  eq(d.err.hint:find(":ReviewInstall", 1, true) ~= nil, true)
+  eq(child.lua_get("_G.delivered"), false)
+end
+
 T["core"]["a Lua sink checks the disk for another instance's waiting delivery first"] = function()
   helpers.respond(dir, {
     {

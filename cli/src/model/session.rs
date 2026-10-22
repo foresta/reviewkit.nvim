@@ -33,6 +33,10 @@ pub struct Session {
     /// derived like `pending_submit`.
     #[serde(default)]
     pub pending_apply: bool,
+    /// Some of those were queued by a newer CLI, which alone can record
+    /// them: waiting does not clear `pending_apply`, updating the CLI does.
+    #[serde(default)]
+    pub pending_apply_newer: bool,
     /// Comments that left the queue, with their deliveries, so a consumed
     /// comment can still be looked up instead of being gone. Always empty in
     /// a response, which would otherwise grow with every send; read it with
@@ -207,6 +211,7 @@ impl Session {
             last_submit: None,
             pending_submit: false,
             pending_apply: false,
+            pending_apply_newer: false,
             history: Vec::new(),
             etags: Etags::default(),
             created_at: now.clone(),

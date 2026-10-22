@@ -3,6 +3,27 @@ local types = require("reviewkit.types")
 
 local M = {}
 
+---@param name string
+---@return string?
+local function override_of(name)
+  if require("reviewkit.config").get().tools[name] then
+    return "tools." .. name
+  end
+  local env = "REVIEWKIT_" .. name:upper()
+  if (vim.env[env] or "") ~= "" then
+    return env
+  end
+end
+
+--- Not fs_stat alone: the CLI spawns a bare command name from PATH.
+---@param path string
+local function exists(path)
+  if not path:find("/", 1, true) then
+    return vim.fn.exepath(path) ~= ""
+  end
+  return vim.uv.fs_stat(path) ~= nil
+end
+
 function M.check()
   local health = vim.health
   health.start("reviewkit")
@@ -54,6 +75,14 @@ function M.check()
     local tool = data.tools[name]
     if tool.version then
       health.ok(name .. ": " .. tool.version)
+    elseif tool.path and not exists(tool.path) then
+      local by = override_of(name)
+      local msg = name .. ": not found at " .. tool.path .. (by and (" (set by " .. by .. ")") or "")
+      if name == "git" then
+        health.error(msg, { "fix the path or unset the override" })
+      else
+        health.warn(msg, { "fix the path or unset the override" })
+      end
     elseif tool.path then
       health.warn(name .. ": found at " .. tool.path .. " but --version failed")
     elseif name == "git" then

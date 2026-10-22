@@ -1,5 +1,3 @@
---- A Markdown fence longer than any run of backticks in the lines, so a
---- code block inside does not close it early.
 ---@param lines string[]
 ---@return string
 return function(lines)

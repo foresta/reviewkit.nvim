@@ -360,10 +360,24 @@ local function attach()
     end
     local name = vim.api.nvim_buf_get_name(buf)
     if name ~= "" and core.relpath(name) then
+      -- A reload protects again; recording then would remember our own values.
+      if not vim.b[buf].reviewkit_protected then
+        vim.b[buf].reviewkit_protected = { modifiable = vim.bo[buf].modifiable, readonly = vim.bo[buf].readonly }
+      end
       vim.bo[buf].modifiable = false
       vim.bo[buf].readonly = true
     end
   end
+  core.on("ReviewSessionClosed", function()
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      local prior = vim.api.nvim_buf_is_valid(buf) and vim.b[buf].reviewkit_protected
+      if prior then
+        vim.b[buf].reviewkit_protected = nil
+        vim.bo[buf].modifiable = prior.modifiable
+        vim.bo[buf].readonly = prior.readonly
+      end
+    end
+  end, group)
   core.on("ReviewSessionOpened", function()
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
       if vim.api.nvim_buf_is_loaded(buf) then
@@ -843,11 +857,12 @@ end
 ---@param sink? string
 ---@param opts? table
 function M.submit(sink, opts)
-  sink = sink or "herdr"
   opts = opts or {}
-  if not core.session() then
+  local session = core.session()
+  if not session then
     return notify("no review session is open")
   end
+  sink = sink or (session.source.kind == "pr" and "github" or "herdr")
   -- Posting to GitHub is public and cannot be taken back (an APPROVE
   -- included), so it is shown before it is sent unless switched off.
   if sink == "github" and not opts.confirmed and config.get().sinks.github.confirm ~= false then
@@ -1099,7 +1114,7 @@ local actions = {
   end,
   toggle_viewed = M.toggle_viewed,
   submit_default = function()
-    M.submit("herdr")
+    M.submit()
   end,
   submit_selected = function()
     vim.cmd("normal! \27")

@@ -53,8 +53,6 @@ fn tool_info(name: &str, tool: Option<&std::path::Path>, tool_name: &str) -> Sin
     }
 }
 
-/// A Markdown fence longer than any run of backticks in `text`, so a code
-/// block inside it does not close it early.
 pub(crate) fn fence_for(text: &str) -> String {
     let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     "`".repeat(longest.max(2) + 1)

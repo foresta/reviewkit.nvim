@@ -244,6 +244,7 @@ expression: full_session()
   },
   "pending_submit": false,
   "pending_apply": false,
+  "pending_apply_newer": false,
   "history": [],
   "etags": {
     "targets": "",

@@ -63,7 +63,11 @@ impl Store {
         // A result a newer CLI queued counts too, though only that CLI can
         // record it: it is a delivery another instance made, and leaving it
         // out would let a Lua sink deliver the same comments again.
-        session.pending_apply = !self.queued_applies(&session.id).is_empty();
+        let queued = self.queued_applies(&session.id);
+        session.pending_apply = !queued.is_empty();
+        session.pending_apply_newer = queued
+            .iter()
+            .any(|path| std::fs::read(path).is_ok_and(|bytes| written_by_newer(&bytes)));
     }
 
     /// A client sink's result is on disk before the lock is waited for: the
@@ -105,12 +109,14 @@ impl Store {
     fn drain_applies(&self, session: &mut Session, set_aside_bad: bool) -> Vec<PathBuf> {
         let mut applied = Vec::new();
         for path in self.queued_applies(&session.id) {
-            let queued = std::fs::read(&path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<QueuedApply>(&bytes).ok());
+            let bytes = std::fs::read(&path).ok();
+            // Fields a newer CLI added would be dropped by applying it here,
+            // and values it added would make it look unreadable.
+            if bytes.as_deref().is_some_and(written_by_newer) {
+                continue;
+            }
+            let queued = bytes.and_then(|bytes| serde_json::from_slice::<QueuedApply>(&bytes).ok());
             match queued {
-                // Fields a newer CLI added would be dropped by applying it here.
-                Some(queued) if queued.revision > SCHEMA_REVISION => {}
                 Some(queued) => match crate::core::apply::apply(session, queued.result, queued.consume) {
                     Ok(_) => applied.push(path),
                     Err(err) if set_aside_bad => set_aside(&path, &err.to_string()),
@@ -383,6 +389,16 @@ impl Store {
 pub const PENDING_SUBMIT_FILE: &str = "pending_submit.json";
 
 pub const APPLIES_DIR: &str = "applies";
+
+/// Not `QueuedApply`: a newer CLI's result may not parse here.
+#[derive(Deserialize)]
+struct QueuedRevision {
+    revision: u32,
+}
+
+fn written_by_newer(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<QueuedRevision>(bytes).is_ok_and(|q| q.revision > SCHEMA_REVISION)
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QueuedApply {

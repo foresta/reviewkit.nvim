@@ -699,7 +699,17 @@ end
 ---@param session reviewkit.Session
 ---@param cb fun(err: reviewkit.Error?, session: reviewkit.Session?)
 local function ensure_recorded(session, cb)
-  local function refuse()
+  ---@param waiting reviewkit.Session?
+  local function refuse(waiting)
+    if waiting and waiting.pending_apply_newer then
+      return cb({
+        code = "E_CONFLICT",
+        message = "an earlier delivery waits to be recorded by a newer reviewkit CLI",
+        hint = "update the CLI (:ReviewInstall); this one cannot record it, so waiting will not help",
+        retryable = false,
+        details = { reason = "pending_apply_newer" },
+      })
+    end
     cb({
       code = "E_CONFLICT",
       message = "an earlier delivery is still waiting to be recorded",
@@ -731,7 +741,7 @@ local function ensure_recorded(session, cb)
             if after and not after.pending_apply then
               return cb(nil, after)
             end
-            refuse()
+            refuse(after or fresh)
           end)
         end)
       end

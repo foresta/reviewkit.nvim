@@ -50,8 +50,8 @@ fn handle_parse_error(err: clap::Error) -> ExitCode {
     }
 }
 
-/// clap lists what is missing on the lines under its first one; the message
-/// stays one line, so they are joined onto it.
+/// Not clap's first line alone: clap lists what is missing on the lines
+/// under it.
 fn usage_message(full: &str) -> String {
     let mut lines = full.lines().take_while(|l| !l.trim().is_empty());
     let first = lines.next().unwrap_or("invalid arguments");

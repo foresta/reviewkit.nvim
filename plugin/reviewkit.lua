@@ -46,7 +46,7 @@ vim.api.nvim_create_user_command("ReviewSubmit", function(cmd)
 end, {
   nargs = "?",
   range = true,
-  desc = "reviewkit: send the queue through a sink (default: herdr); with a range, the selected comments of the queue list",
+  desc = "reviewkit: send the queue through a sink (default: github for a pull request, else herdr); with a range, the selected comments of the queue list",
   complete = function()
     return require("reviewkit.core").sink_names()
   end,
