@@ -29,12 +29,22 @@ local root = vim.fn.fnamemodify(script_dir, ":h")
 local out_path = root .. "/lua/reviewkit/types.lua"
 
 if not args.bin then
-  for _, candidate in ipairs({
+  local candidates = {}
+  -- cargo builds there instead when it is set; the fixed paths below would
+  -- then hold a stale binary from before it was set.
+  local target_dir = os.getenv("CARGO_TARGET_DIR")
+  if target_dir and target_dir ~= "" then
+    target_dir = target_dir:sub(1, 1) == "/" and target_dir or root .. "/" .. target_dir
+    table.insert(candidates, target_dir .. "/debug/reviewkit")
+    table.insert(candidates, target_dir .. "/release/reviewkit")
+  end
+  vim.list_extend(candidates, {
     root .. "/cli/target/debug/reviewkit",
     root .. "/cli/target/release/reviewkit",
     root .. "/target/debug/reviewkit",
     root .. "/target/release/reviewkit",
-  }) do
+  })
+  for _, candidate in ipairs(candidates) do
     if vim.fn.executable(candidate) == 1 then
       args.bin = candidate
       break

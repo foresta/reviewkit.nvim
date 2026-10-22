@@ -125,9 +125,10 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 
 To send only some comments, select their lines in the queue list (`<leader>rq`) and press
 `<leader>rs`, or run `:'<,'>ReviewSubmit [sink]` there; without a sink they go to the session's own
-destination, like the whole queue. A selection never carries the decision
-or thread actions, so you can ask the agent to fix a few things and post the rest, decision
-included, to GitHub later.
+destination, like the whole queue: the agent for a local diff, GitHub for a pull request (previewed
+first unless `sinks.github.confirm = false`). A selection never carries the decision or thread
+actions, so in a pull request you can send a few comments to the agent with
+`:'<,'>ReviewSubmit herdr` and post the rest, decision included, to GitHub later.
 
 A comment leaves the queue only when it reaches the session's own destination: GitHub for a
 pull request, the agent (herdr) for a local diff. Sending a PR review to the agent first keeps the
@@ -152,7 +153,7 @@ Default keys (disable with `setup({ set_keymaps = false })`; `<Plug>(reviewkit-*
 here (all three also on a visual selection), `<leader>re` / `<leader>rx` edit / remove the comment here,
 `<leader>rd` decision, `<leader>rv` toggle viewed, `<leader>rq` queue, `<leader>rt` / `<leader>rT`
 thread here / thread list, `<leader>rs` submit to the session's own destination (visual, in the queue list: submit the selected
-comments), `<leader>ro` side-by-side view.
+comments there too, which is GitHub in a pull request), `<leader>ro` side-by-side view.
 Inside the side-by-side view: `]f` / `[f` next / previous file, `]h` / `[h` next / previous hunk,
 `]t` / `[t` next / previous thread, `]u` next file not viewed yet.
 

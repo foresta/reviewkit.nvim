@@ -42,7 +42,8 @@ pub fn add(session: &mut Session, input: CommentInput, file: Option<SideFile>) -
             "{} was renamed; comment on {} instead",
             input.path, renamed.path
         ))
-        .hint("comments use the head-side path on both sides"));
+        .hint("comments use the head-side path on both sides")
+        .details(serde_json::json!({ "reason": "renamed", "path": renamed.path })));
     }
     if let Some(thread_id) = &input.reply_to {
         // Queued, it would fail every submit until removed by hand.

@@ -862,6 +862,39 @@ T["orchestrator"]["a save refused because its thread is gone does not reopen and
   )
 end
 
+for _, case in ipairs({
+  {
+    name = "its line is gone",
+    err = "{ code = 'E_NOT_COMMENTABLE', message = 'f: line 3 is outside the file (1..=1)', retryable = false, details = {} }",
+  },
+  {
+    name = "its path was renamed",
+    err = "{ code = 'E_INVALID', message = 'old was renamed; comment on new instead', retryable = false, details = { reason = 'renamed', path = 'new' } }",
+  },
+}) do
+  T["orchestrator"]["a save refused because " .. case.name .. " does not reopen and keeps the text in the register"] = function()
+    child.lua(([[
+      _G.saves = {}
+      require("reviewkit.view.input").open_keeping({ title = "x" }, function(text, done)
+        table.insert(_G.saves, text)
+        done(%s)
+      end)
+    ]]):format(case.err))
+    child.lua("vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'my', 'note' })")
+    child.cmd("write")
+    wait_notice("unnamed register")
+    child.lua("vim.wait(200, function() return false end)")
+    eq(child.lua_get("_G.saves"), { "my\nnote" })
+    eq(child.lua_get("vim.fn.getreg('\"')"), "my\nnote")
+    eq(
+      child.lua_get(
+        "#vim.tbl_filter(function(w) return vim.api.nvim_win_get_config(w).relative ~= '' end, vim.api.nvim_list_wins())"
+      ),
+      0
+    )
+  end
+end
+
 T["orchestrator"]["a suggestion starts from the selected lines and is sent apart from the body"] = function()
   helpers.respond(
     dir,
