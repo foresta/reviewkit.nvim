@@ -217,7 +217,7 @@ impl SystemGit {
     }
 }
 
-fn checkout_not_found(cwd: &Path) -> Error {
+pub fn checkout_not_found(cwd: &Path) -> Error {
     Error::tool("git", ErrorCode::EGit, format!("checkout not found: {}", cwd.display()))
         .hint("it was moved or removed; open the review again from where the checkout is now")
 }
@@ -546,10 +546,14 @@ impl<'a> Repository<'a> {
             .and_then(|out| text(&out).trim_end().parse().ok())
     }
 
-    pub fn is_blob(&self, rev: &str, path: &str) -> bool {
-        self.run(&["cat-file", "-t", &format!("{rev}:{path}")])
-            .map(|out| text(&out).trim_end() == "blob")
-            .unwrap_or(false)
+    pub fn is_blob(&self, rev: &str, path: &str) -> Result<bool> {
+        match self.run(&["cat-file", "-t", &format!("{rev}:{path}")]) {
+            Ok(out) => Ok(text(&out).trim_end() == "blob"),
+            // Only git exiting is an answer about the path; a missing
+            // checkout or a timeout says nothing about it.
+            Err(err) if !err.details["exit"].is_null() => Ok(false),
+            Err(err) => Err(err),
+        }
     }
 
     /// The `shallow` file rather than `--is-shallow-repository`, which git

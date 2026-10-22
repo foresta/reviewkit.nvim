@@ -70,7 +70,7 @@ pub fn run(ctx: &Context, command: FileCommand) -> Result<Response> {
 }
 
 fn side_file(repo: &crate::ext::git::Repository<'_>, rev: &str, path: &str) -> Result<BaseFile> {
-    if !repo.is_blob(rev, path) {
+    if !repo.is_blob(rev, path)? {
         return Ok(BaseFile {
             exists: false,
             binary: false,

@@ -54,7 +54,7 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
     let (bytes, blob) = match (side, session.head.sha.as_deref()) {
         (Side::Base, _) => {
             let git_path = base_git_path(session, path);
-            if !repo.is_blob(&session.base.sha, git_path) {
+            if !repo.is_blob(&session.base.sha, git_path)? {
                 return Ok(None);
             }
             let blob = target
@@ -66,7 +66,7 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
             (repo.read_blob(&session.base.sha, git_path)?, blob)
         }
         (Side::Head, Some(sha)) => {
-            if !repo.is_blob(sha, path) {
+            if !repo.is_blob(sha, path)? {
                 return Ok(None);
             }
             let blob = target
@@ -78,7 +78,12 @@ pub fn read_side(session: &Session, repo: &Repository<'_>, side: Side, path: &st
             (repo.read_blob(sha, path)?, blob)
         }
         (Side::Head, None) => {
-            let full = session.source.worktree().join(path);
+            let worktree = session.source.worktree();
+            // Otherwise a moved checkout reads as a file that does not exist.
+            if !worktree.is_dir() {
+                return Err(crate::ext::git::checkout_not_found(worktree));
+            }
+            let full = worktree.join(path);
             let meta = match std::fs::metadata(&full) {
                 Ok(meta) if meta.is_file() => meta,
                 _ => return Ok(None),
