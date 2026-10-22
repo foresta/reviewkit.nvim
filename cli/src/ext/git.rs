@@ -359,6 +359,11 @@ impl<'a> Repository<'a> {
             "--raw",
             "-z",
             "-M",
+            // The user's diff.renameLimit would turn renames into a delete
+            // plus an add, here and not on GitHub. Git's own default rather
+            // than -l0, which means 32767: rename detection is quadratic and
+            // runs under the session lock.
+            "-l1000",
             "--abbrev=40",
             "--no-color",
             "--no-ext-diff",
@@ -386,6 +391,7 @@ impl<'a> Repository<'a> {
             "diff",
             "-U3",
             "-M",
+            "-l1000",
             "--no-color",
             "--no-ext-diff",
             "--src-prefix=a/",
