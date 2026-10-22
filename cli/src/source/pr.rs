@@ -89,6 +89,7 @@ fn canonical(repo_ref: &RepoRef, meta: &PrMeta) -> RepoRef {
 }
 
 pub fn open(store: &Store, src: &PrSource<'_>, repo_ref: &RepoRef, number: u64) -> Result<Session> {
+    let asked = std::time::SystemTime::now();
     let meta = gh::pr_meta(src.gh, repo_ref, number)?;
     let repo_ref = &canonical(repo_ref, &meta);
     let id = session_id(repo_ref, number);
@@ -96,11 +97,16 @@ pub fn open(store: &Store, src: &PrSource<'_>, repo_ref: &RepoRef, number: u64) 
     // session lock is held just to apply what was fetched, so other commands
     // are not failed with E_LOCKED while GitHub and git are slow.
     let (session, ()) = store.with_new_fetch_lock(&id, || {
-        // A reopen may have waited for another fetch; the PR is read again
-        // so what that fetch saw is not applied stale.
+        // Not keyed on waiting for the lock: a fetch that ran wholly
+        // between the read and the lock saw a newer PR too, and only the
+        // pr.json it wrote tells. Without one, the read above is current.
         let meta = if store.exists(&id) {
             store.load_for_write(&id)?;
-            gh::pr_meta(src.gh, repo_ref, number)?
+            if written_since(&store.state_dir().pr_file(&id)?, asked) {
+                gh::pr_meta(src.gh, repo_ref, number)?
+            } else {
+                meta
+            }
         } else {
             meta
         };
@@ -109,6 +115,12 @@ pub fn open(store: &Store, src: &PrSource<'_>, repo_ref: &RepoRef, number: u64) 
         store.open_or_create(&id, || Ok(draft), |s| refresh::apply(s, snapshot, src.git))
     })?;
     Ok(session)
+}
+
+fn written_since(path: &Path, since: std::time::SystemTime) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .is_ok_and(|modified| modified >= since)
 }
 
 /// The checkout at --cwd only counts as "this repository" when its origin
@@ -306,8 +318,8 @@ fn materialize_locked(
     } else {
         Repository::init_bare(src.git, &mirror_dir, &remote)?
     };
-    let pr_ref = format!("refs/reviewkit/pr/{}", meta.number);
-    let base_ref = format!("refs/reviewkit/base/{}", meta.number);
+    let pr_ref = pr_ref_name(meta.number);
+    let base_ref = base_ref_name(meta.number);
     let have = mirror.rev_parse(&pr_ref);
     // An open PR's base ref must be GitHub's base oid, not merely present: a
     // retargeted PR (a stacked PR moved onto main) names another branch whose
@@ -384,6 +396,14 @@ fn materialize_locked(
     Ok(Checkout { worktree, head, base })
 }
 
+fn pr_ref_name(number: u64) -> String {
+    format!("refs/reviewkit/pr/{number}")
+}
+
+fn base_ref_name(number: u64) -> String {
+    format!("refs/reviewkit/base/{number}")
+}
+
 fn missing_on_remote(message: &str) -> bool {
     [
         "not our ref",
@@ -456,10 +476,11 @@ pub fn read_pr_info(path: &Path) -> Result<Option<PrInfo>> {
     }
 }
 
-/// `session close --purge` for a PR: the worktree goes, the mirror stays
-/// (it is shared by every PR of the repository and cheap to keep).
+/// `session close --purge` for a PR: the worktree and the PR's refs go,
+/// the mirror stays (it is shared by every PR of the repository and cheap
+/// to keep).
 pub fn purge(session: &Session, git: &dyn Git, state: &StateDir) {
-    if let (Some(host), Some(owner), Some(name), Source::Pr { worktree, .. }) = (
+    if let (Some(host), Some(owner), Some(name), Source::Pr { worktree, number, .. }) = (
         &session.repo.host,
         &session.repo.owner,
         &session.repo.name,
@@ -472,7 +493,10 @@ pub fn purge(session: &Session, git: &dyn Git, state: &StateDir) {
         }
         let _ = with_mirror_lock(&mirror_dir, || {
             if mirror_dir.exists() {
-                Repository::at(git, mirror_dir.clone()).worktree_remove(worktree);
+                let mirror = Repository::at(git, mirror_dir.clone());
+                mirror.worktree_remove(worktree);
+                mirror.delete_ref(&pr_ref_name(*number));
+                mirror.delete_ref(&base_ref_name(*number));
             } else {
                 let _ = std::fs::remove_dir_all(worktree);
             }

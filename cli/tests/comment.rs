@@ -526,56 +526,6 @@ fn the_pre_rename_name_is_rejected_with_a_hint() {
 }
 
 #[test]
-fn a_reply_needs_no_line_that_still_exists() {
-    let state = tempfile::tempdir().unwrap();
-    let repo = Repo::new();
-    let id = open(&state, &repo);
-    let body = json(&add(
-        &state,
-        &repo,
-        &id,
-        serde_json::json!({"path": "gone.txt", "side": "head", "line": 40, "body": "still relevant", "reply_to": "PRRT_1"}),
-    ));
-    let reply = &body["session"]["comments"][0];
-    assert_eq!(reply["reply_to"], "PRRT_1");
-    assert_eq!(reply["commentable"]["github"], true);
-    assert_eq!(reply["stale"], false);
-
-    let refreshed = json(
-        &reviewkit(&state, &repo)
-            .args(["session", "refresh", "--session", &id])
-            .output()
-            .unwrap(),
-    );
-    assert_eq!(refreshed["session"]["comments"][0]["stale"], false);
-    assert_eq!(refreshed["session"]["comments"][0]["line"], 40);
-
-    let reply_id = reply["id"].as_str().unwrap().to_string();
-    let moved = reviewkit(&state, &repo)
-        .args(["comment", "update", "--session", &id, "--id", &reply_id])
-        .write_stdin(r#"{"line": 2}"#)
-        .output()
-        .unwrap();
-    assert_eq!(moved.status.code(), Some(2));
-    let edited = json(
-        &reviewkit(&state, &repo)
-            .args(["comment", "update", "--session", &id, "--id", &reply_id])
-            .write_stdin(r#"{"body": "edited"}"#)
-            .output()
-            .unwrap(),
-    );
-    assert_eq!(edited["session"]["comments"][0]["body"], "edited");
-
-    let line_comment = add(
-        &state,
-        &repo,
-        &id,
-        serde_json::json!({"path": "gone.txt", "side": "head", "line": 1, "body": "not a reply"}),
-    );
-    assert!(!line_comment.status.success());
-}
-
-#[test]
 fn a_comment_needs_a_body_or_a_suggestion() {
     let state = tempfile::tempdir().unwrap();
     let repo = Repo::new();

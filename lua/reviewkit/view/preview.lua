@@ -55,6 +55,10 @@ function M.lines(preview, session, opts)
     end
     table.insert(lines, "")
   end
+  if preview.recovered_decision then
+    table.insert(lines, "That submit's decision was found on GitHub; it is recorded on send.")
+    table.insert(lines, "")
+  end
   if preview.decision then
     table.insert(lines, ("Review: %s"):format(EVENTS[preview.decision] or preview.decision))
   end

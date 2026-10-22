@@ -674,6 +674,12 @@ impl<'a> Repository<'a> {
             let _ = self.run(&["worktree", "prune"]);
         }
     }
+
+    pub fn delete_ref(&self, name: &str) {
+        if let Err(err) = self.run(&["update-ref", "-d", name]) {
+            log::warn!("cannot delete {name}: {}", err.message);
+        }
+    }
 }
 
 /// `https://host/owner/name(.git)`, `ssh://git@host/owner/name` and

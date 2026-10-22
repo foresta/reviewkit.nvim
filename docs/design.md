@@ -156,6 +156,8 @@ Comment {
   kind: "issue|suggestion|question|praise|nit"          -- 既定 issue
   body: string   suggestion: string|null                -- ```suggestion ブロック用。sink-github が整形する。フェンスは中のバッククォートの連なりより長くする
   reply_to: thread_id|null   -- 返信はスレッドに付くので、行やファイルの存在を検査せず、再アンカーもしない
+                            -- comment add はセッションの threads に無い thread_id を E_NO_THREAD で拒否する（積むと送信が毎回失敗する）。
+                            -- refresh でスレッドが消えた返信は、sink-github が `skipped`（reason = `stale`）にしてキューに残す
   anchor: { base_sha, head_sha: sha|null, blob: sha|null, context: { before: string[], lines: string[], after: string[] } }
                             -- 作業ツリー側は head_sha が null。代わりに blob（git hash-object）で固定する
   stale: bool
@@ -243,7 +245,7 @@ SinkResult {
   （渡した時点の `Decision.updated_at`）が今と違えば、記録も消去もしない。herdr は自分へ `sent` 済みの decision を再送しない。
   `last_submit` に結果を記録する
 - sink-github は GitHub へ `sent` 済みのコメントを送らない（`skipped`、reason = `delivered`）。履歴から戻したコメントが
-  再投稿されないため
+  再投稿されないため。返信先のスレッドが Session の threads に無い返信も送らない（`skipped`、reason = `stale`）
 - sink-github で Decision が無く comments がある場合は `event = comment` で送る（行コメントは review の一部としてしか送れない）。本文は diff の外のコメントの節だけ（無ければ空）
 - sink-herdr のプロンプトは header、Decision の本文（あれば）、番号付きのコメント（`@path#L1-L2` 形式。`plain` は `path:1-2`）の順。
   Decision の event は送れないので、本文が空の Decision は `skipped` として残る。
@@ -275,7 +277,8 @@ reviewkit session list                                   -> data: SessionSummary
                                                             （今のリポジトリを先に並べるのは Lua の core.list）
 reviewkit session refresh --session ID [--path P ...]    -> session   Source 再実行。base / head が動いたら再アンカー。PR は pr.json も取り直す
                                                                      --path は将来の部分更新用で、現状は受け取るだけで全体を再計算する
-reviewkit session close   --session ID [--purge]         -> data: { closed: true }   purge で worktree と state を消す
+reviewkit session close   --session ID [--purge]         -> data: { closed: true }   purge で worktree と state を消す。PR は共有の mirror から
+                                                            その PR の参照（`refs/reviewkit/pr/<n>`、`refs/reviewkit/base/<n>`）も mirror.lock の中で消す
 
 reviewkit target list --session ID                       -> data: Target[]
 reviewkit target viewed --session ID --path P [--undo]   -> session   既読の付け外し。head_blob を一緒に記録する
@@ -329,7 +332,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   decision やコメントを変えた・refresh した場合は送らず、Lua はプレビューを出し直す。`--expect-rev` は使わない（既読や
   送る内容に関係の無い変更でも弾くため）。
 - `SubmitPreview.recovered`（github だけ）は、中断した送信の照合で GitHub に届いていたと分かったコメントの id。再送はせず、
-  確認した送信で送信済みとして保存する。照合だけで送るものが無くなったときのプレビューは行コメント等が空で、`digest` は
+  確認した送信で送信済みとして保存する。`SubmitPreview.recovered_decision` は照合で decision も投稿済みと分かったとき true
+  （false のときは省く）。照合だけで送るものが無くなったときのプレビューは行コメント等が空で、`digest` は
   「何も送らない」内容のハッシュになる。これを確認すると submit が照合を保存する
   （その間に別のインスタンスが保存していれば ok で `already recorded`）。照合を保存した後で送信が断られたときは、
   エラーの `details.recovered` に照合で送信済みと分かったコメントの id が入る
@@ -348,6 +352,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   作りかけのディレクトリは fetch.lock を持ったまま消す（離してから消すと、待っていた open が書いた pr.json ごと消える）。
   待っていた open はロックを取った後、ロックしたファイルがもうそのパスに無ければ（消された）、ディレクトリを作り直して取り直す。
   ディレクトリを作ってからロックファイルを開くまでの間に消された場合も、作り直して取り直す。
+  reopen は fetch.lock の前に読んだ PR のメタ（`gh pr view`）を使い、ロックを待つ間に別の取得が `pr.json` を書いていたときだけ
+  読み直す（その取得が見た新しい head を古いメタで上書きしないため）。
   reopen と refresh は取得の前に、セッションが書けるか（新しい版が書いた・壊れている）を確かめる。取得の後で気づくと
   ネットワークの往復が無駄になり、pr.json だけが新しくなる。
   送信はロックを持ったまま行う（送信中の編集を失わないため。版の照合で外せるようになるまで）。持つのは github の送信
@@ -399,7 +405,8 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   本文と時刻で照合する。本文で照合する場合（decision だけの review と、古い pending）は、viewer が取れなければ照合せず、
   再試行可のエラーで止める（誰の投稿でも一致してしまうため）。
   照合はキューだけでなく履歴（中断の後に別の sink が消費したもの）も探し、見つかったコメントに GitHub への配送を記録する
-  （記録しないと履歴から戻して二重に投稿できてしまう）。
+  （記録しないと履歴から戻して二重に投稿できてしまう）。配送の記録は照合の保存で 1 回だけ行い、続く送信の結果には
+  照合で見つかったものを報告として載せるが、配送は記録し直さない。
   marker は表示（threads、`pr.json`）に出す前に剥がし、照合は剥がす前の本文で行う。剥がすのは reviewkit の形
   （`<!-- reviewkit:` と 16 進 12 桁と ` -->` だけの行）に限り、本文のどこにあっても剥がす（照合が行の位置を問わず marker を
   探すのと揃える。GitHub で marker の後ろに追記された本文でも剥がれる）。ただし閉じたコードブロック（```` ``` ```` / `~~~`）の中の
