@@ -271,6 +271,82 @@ T["orchestrator"][":Review resume marks a session whose checkout moved"] = funct
   eq(child.lua_get("_G.shown"):find("(moved)", 1, true) ~= nil, true)
 end
 
+local MOVED = {
+  id = "local/def/gone",
+  kind = "local",
+  repo_root = "/work/gone",
+  title = "main..worktree",
+  comments = 2,
+  updated_at = "2026-10-20T01:02:03Z",
+  missing = true,
+}
+
+local function session_calls(verb)
+  local found = {}
+  for _, call in ipairs(helpers.calls(dir)) do
+    local joined = table.concat(call.args, " ")
+    if joined:find("session " .. verb, 1, true) then
+      table.insert(found, joined)
+    end
+  end
+  return found
+end
+
+T["orchestrator"]["deleting a moved session from :Review resume purges only that id"] = function()
+  helpers.respond(
+    dir,
+    rules({
+      { match = { "session list" }, body = { ok = true, data = { MOVED } } },
+      { match = { "session close" }, body = { ok = true, data = { closed = true } } },
+    })
+  )
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("vim.ui.select = function(items, _, on_choice) on_choice(items[1]) end")
+  child.lua("_G.asked = nil; vim.fn.confirm = function(msg) _G.asked = msg return 1 end")
+  child.cmd("Review resume")
+  wait_notice("deleted")
+  local asked = child.lua_get("_G.asked")
+  eq(asked:find("main..worktree", 1, true) ~= nil, true)
+  eq(asked:find("/work/gone", 1, true) ~= nil, true)
+  eq(asked:find("2 unsent comments", 1, true) ~= nil, true)
+  eq(session_calls("close"), { "session close --session local/def/gone --purge" })
+  eq(session_calls("open --session"), {})
+  eq(child.lua_get("require('reviewkit.core').session().id"), "local/abc/HEAD..worktree")
+end
+
+T["orchestrator"]["cancelling the delete of a moved session leaves it"] = function()
+  helpers.respond(dir, {
+    { match = { "session list" }, body = { ok = true, data = { MOVED } } },
+    { match = { "session close" }, body = { ok = true, data = { closed = true } } },
+  })
+  child.lua("vim.ui.select = function(items, _, on_choice) on_choice(items[1]) end")
+  child.lua("_G.asked = nil; vim.fn.confirm = function(msg) _G.asked = msg return 2 end")
+  child.cmd("Review resume")
+  child.lua("vim.wait(20000, function() return _G.asked ~= nil end, 20)")
+  eq(session_calls("close"), {})
+  eq(session_calls("open --session"), {})
+end
+
+T["orchestrator"]["ReviewClose! names the session it deletes"] = function()
+  local session = helpers.session({
+    source = { worktree = worktree },
+    repo = { root = worktree },
+    comments = { { id = "c_1", path = "src/a.rs", side = "head", line = 3, body = "hm" } },
+  })
+  helpers.respond(dir, {
+    { match = { "session open --local" }, body = { ok = true, data = vim.NIL, session = session } },
+    { match = { "session refresh" }, body = { ok = true, data = vim.NIL, session = session } },
+    { match = { "session close" }, body = { ok = true, data = { closed = true } } },
+  })
+  child.cmd("Review diff HEAD~1")
+  wait_notice("1 file to review")
+  child.lua("_G.asked = nil; vim.fn.confirm = function(msg) _G.asked = msg return 2 end")
+  child.cmd("ReviewClose!")
+  eq(child.lua_get("_G.asked"):find("HEAD..worktree", 1, true) ~= nil, true)
+  eq(session_calls("close"), {})
+end
+
 T["orchestrator"]["<Plug> maps exist at plugin load without loading the orchestrator"] = function()
   eq(child.lua_get("vim.fn.maparg('<Plug>(reviewkit-comment)', 'n') ~= ''"), true)
   eq(child.lua_get("package.loaded['reviewkit.orchestrator'] == nil"), true)

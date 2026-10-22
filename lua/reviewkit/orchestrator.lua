@@ -417,16 +417,19 @@ local function attach()
 end
 
 ---@param session reviewkit.Session
-local function announce(session)
-  local n = #session.targets
-  local what
+---@return string
+local function label(session)
   if session.source.kind == "local" then
     local base = session.source.base_spec
-    what = base .. (vim.endswith(base, "...") and "" or "..") .. session.source.head_spec
-  else
-    what = ("#%d %s"):format(session.source.number, session.source.title)
+    return base .. (vim.endswith(base, "...") and "" or "..") .. session.source.head_spec
   end
-  notify(("%s: %d file%s to review"):format(what, n, n == 1 and "" or "s"))
+  return ("#%d %s"):format(session.source.number, session.source.title)
+end
+
+---@param session reviewkit.Session
+local function announce(session)
+  local n = #session.targets
+  notify(("%s: %d file%s to review"):format(label(session), n, n == 1 and "" or "s"))
   if session.pending_submit then
     vim.notify(
       "[reviewkit] an earlier GitHub submit was cut off; :ReviewSubmit github checks GitHub before sending again",
@@ -468,6 +471,28 @@ function M.review_pr(pr)
   open({ kind = "pr", pr = pr, cwd = vim.fn.getcwd() })
 end
 
+--- Opening it would only fail with checkout not found, and nothing else
+--- can delete a session that cannot be opened.
+---@param s reviewkit.ListedSession
+local function offer_delete(s)
+  local unsent = s.comments or 0
+  local question = ("Review %s of %s cannot be resumed: its checkout was moved or removed (move it back to resume it).\n"):format(
+    s.title or s.id,
+    vim.fn.fnamemodify(s.repo_root or "", ":~")
+  ) .. ("Delete this session%s?"):format(
+    unsent > 0 and (" and its %d unsent comment%s"):format(unsent, unsent == 1 and "" or "s") or ""
+  )
+  if vim.fn.confirm(question, "&Delete\n&Cancel", 2) ~= 1 then
+    return
+  end
+  core.close({ session = s.id, purge = true }, function(err)
+    if err then
+      return notify_error(err)
+    end
+    notify("deleted " .. (s.title or s.id))
+  end)
+end
+
 ---@param id? string
 function M.resume(id)
   attach()
@@ -486,8 +511,6 @@ function M.resume(id)
       prompt = "Resume review session",
       format_item = function(s)
         local root = s.repo_root or ""
-        -- Still selectable: opening it reports the moved checkout with a
-        -- hint, which a missing entry could not.
         return ("%s  %s  (%d comment%s, %s)%s"):format(
           s.here and vim.fs.basename(root) or vim.fn.fnamemodify(root, ":~"),
           s.title or s.id,
@@ -498,7 +521,9 @@ function M.resume(id)
         )
       end,
     }, function(choice)
-      if choice then
+      if choice and choice.missing then
+        offer_delete(choice)
+      elseif choice then
         M.resume(choice.id)
       end
     end)
@@ -934,8 +959,9 @@ function M.close(opts)
   -- posting its comments a second time.
   if opts.purge and (current.pending_submit or current.pending_apply) then
     local question = current.pending_submit
-        and "An earlier GitHub submit was cut off; deleting the session forgets what it may have posted. Delete anyway?"
-      or "A delivery is still waiting to be recorded; deleting the session forgets it. Delete anyway?"
+        and "An earlier GitHub submit was cut off; deleting the session forgets what it may have posted. Delete %s anyway?"
+      or "A delivery is still waiting to be recorded; deleting the session forgets it. Delete %s anyway?"
+    question = question:format(label(current))
     if vim.fn.confirm(question, "&Delete\n&Keep", 2) ~= 1 then
       return
     end
@@ -943,13 +969,14 @@ function M.close(opts)
   local unsent = #core.comments()
   if unsent > 0 then
     local what = ("%d comment%s still in the queue"):format(unsent, unsent == 1 and "" or "s")
-    local question = opts.purge and (what .. ". Close and delete them?")
+    local question = opts.purge and (what .. (". Close %s and delete them?"):format(label(current)))
       or (what .. ". Close anyway? (they stay saved and come back with :Review resume)")
     if vim.fn.confirm(question, "&Close\n&Keep", 2) ~= 1 then
       return
     end
   end
-  core.close(opts, function(err)
+  -- The session the confirmation named, even if another was opened meanwhile.
+  core.close(vim.tbl_extend("force", opts, { session = current.id }), function(err)
     if err then
       return notify_error(err)
     end

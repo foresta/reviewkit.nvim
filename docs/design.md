@@ -282,6 +282,7 @@ reviewkit session refresh --session ID [--path P ...]    -> session   Source 再
                                                                      --path は将来の部分更新用で、現状は受け取るだけで全体を再計算する
 reviewkit session close   --session ID [--purge]         -> data: { closed: true }   purge で worktree と state を消す。PR は共有の mirror から
                                                             その PR の参照（`refs/reviewkit/pr/<n>`、`refs/reviewkit/base/<n>`）も mirror.lock の中で消す
+                                                            local の purge は git を呼ばないので、チェックアウトが移動・削除されたセッションも消せる
 
 reviewkit target list --session ID                       -> data: Target[]
 reviewkit target viewed --session ID --path P [--undo]   -> session   既読の付け外し。head_blob を一緒に記録する
@@ -367,7 +368,9 @@ reviewkit thread resolve --session ID --thread TID [--undo] -> session       Git
   PR の取得はセッションごとの fetch.lock で直列にし、リポジトリごとの mirror は `mirror.lock` で守る（作成は一時ディレクトリから rename）。
   git の fetch / clone は `REVIEWKIT_GIT_TIMEOUT_MS`（既定 120 秒）で打ち切り、認証のプロンプトは出さない。部分 clone（`extensions.partialClone` か `remote.<name>.promisor=true`）では
   どのコマンドも足りない blob を取りに行きうるので、すべてのコマンドを同じ時間で打ち切る。チェックアウトが移動・削除されていれば、
-  git が無いのではなく「checkout not found」（E_GIT）として返す。読む rev 自体が無い（gc された base の sha、消された PR の mirror）ときも、
+  git が無いのではなく「checkout not found」（E_GIT）として返す。hint は「元の場所へ戻す」か「`:Review resume` から削除する」で、
+  `session open --session` / `session refresh` ではセッション id を入れた `reviewkit session close --purge --session ID` も示す。
+  `:ReviewClose!` は示さない（開いているセッションにしか効かず、別のセッションを消しうる）。読む rev 自体が無い（gc された base の sha、消された PR の mirror）ときも、
   path が無いとは読まず E_GIT（hint: refresh するか開き直す）で返す。作業ツリーの `git hash-object` が終了コードで
   ファイルを拒んだときだけはコマンドを止めない（実行できない clean filter、書き込めない objects。1 つのファイルで refresh 全体が失敗し続けるため）。
   git が起動できない・時間切れのときは、ほかと同じく E_TOOL_MISSING / E_GIT で返す。
@@ -522,7 +525,9 @@ lua/reviewkit/
                       範囲スレッドは start_side が side と同じときだけ start_line から line までを覆う（]t と同じ規則）
   view/preview.lua    送信前のプレビュー（SubmitPreview）を見せて確認する
   orchestrator.lua    :Review の配線、worktree の監視、既定キーマップ。:Review resume は core.list の順（今のリポジトリが先）。
-                      missing のセッションは "(moved)" を付けて並べ、選べる（開くと checkout not found とその hint を出す。選べなくすると開けない理由が伝わらない）
+                      missing のセッションは "(moved)" を付けて並べる。選ぶと開かずに、そのセッション（比べるもの・元の場所・未送信の
+                      コメント数）を名指しして削除するかを確かめ、削除ならその id だけを purge する（core.close の session）。
+                      開いても checkout not found になるだけで、ほかに消す手段が無いため
   sink/clipboard.lua  Lua 側 sink の最小例。本文が空の decision は写さないので、写しの成否によらず skipped
 plugin/reviewkit.lua  コマンドと maps.lua の <Plug>(reviewkit-*) の定義だけ（orchestrator は読み込まない）
 scripts/gen-types.lua `reviewkit schema` の JSON Schema から types.lua を生成
@@ -537,7 +542,8 @@ CLI を呼ぶものは非同期 `cb(err, result)`、キャッシュ読みは同�
 core.open(spec, cb)          spec = { kind = "pr", pr = 123 | url, cwd? } | { kind = "local", base = "HEAD~3", head?, cwd? }
 core.resume(id, cb)
 core.refresh(opts, cb)
-core.close(opts, cb)
+core.close(opts, cb)         -- opts = { purge?, session? }。session を省くと開いているセッション。id を渡すと開いていなくても
+                             -- そのセッションを閉じ、開いているセッションのキャッシュはそれと同じ id のときだけ捨てる
 core.list(cb)                -- session list。cwd を含む最も深い repo_root のセッションを先に、それぞれ updated_at の新しい順。
                              -- 各要素に here（今のリポジトリか）を足す。他のリポジトリのものも落とさない
 core.session() / core.targets() / core.comments() / core.decision() / core.threads()
@@ -593,7 +599,8 @@ require("reviewkit").setup({
 `:ReviewSubmit [herdr|github|clipboard]`（`:'<,'>ReviewSubmit` はキューの一覧で選んだ行だけ。範囲の有無によらず、sink を省くと `<leader>rs` と同じくセッションの主な送り先 = PR は github（確認あり。`sinks.github.confirm = false` で確認を省くと、プレビューなしで公開投稿される）、local は herdr。sink を書けばそれが優先）、`:ReviewClose[!]`、`:ReviewHistory`、`:ReviewInstall`、`:ReviewLog`。
 quickfix の一覧では、履歴の `r` でキューへ戻し、キューの `D` で配送済みを履歴へ移す（確認あり）。キューの一覧で行を選んで
 `<leader>rs`（visual）か `:'<,'>ReviewSubmit [sink]` を使うと、その行のコメントだけを送る（`comment_ids`）。送り先は範囲の無い形と同じ規則で決まり、選ばせない。`:ReviewClose` は未送信の
-コメントがあると確認する（`!` の purge ではコメントも消えると明示する）。diff ビューのバッファだけのキーは
+コメントがあると確認する（`!` の purge ではコメントも消えると明示し、消すセッションを名指しする）。
+チェックアウトが移動・削除されたセッションは `:Review resume` の一覧で "(moved)" になり、選ぶと削除するか（既定はキャンセル）を確かめる。diff ビューのバッファだけのキーは
 `]f` `[f`（ファイル）、`]h` `[h`（hunk）、`]t` `[t`（行のあるスレッド。outdated とファイル単位はスレッド一覧から）、
 `]u`（未読の次のファイル）。`setup()` を呼ばなくてもコマンドは使える。
 

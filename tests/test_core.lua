@@ -116,6 +116,36 @@ T["core"]["close fires ReviewSessionClosed and drops the cache"] = function()
   eq(child.lua_get("require('reviewkit.core').session()"), vim.NIL)
 end
 
+T["core"]["close by id purges that session and keeps another one open"] = function()
+  helpers.respond(dir, open_rules({ { match = { "session close" }, body = { ok = true, data = { closed = true } } } }))
+  open(child)
+  child.lua("_G.events = {}")
+  child.lua("require('reviewkit.core').close({ session = 'local/def/gone', purge = true }, _G.finish)")
+  eq(child.lua_get("_G.wait_done()").err, nil)
+  local calls = helpers.calls(dir)
+  eq(calls[#calls].args, { "session", "close", "--session", "local/def/gone", "--purge" })
+  eq(helpers.event_names(child), {})
+  eq(child.lua_get("require('reviewkit.core').session().id"), "local/abc/HEAD..worktree")
+end
+
+T["core"]["close by the open session's id drops the cache"] = function()
+  helpers.respond(dir, open_rules({ { match = { "session close" }, body = { ok = true, data = { closed = true } } } }))
+  open(child)
+  child.lua("_G.events = {}")
+  child.lua("require('reviewkit.core').close({ session = 'local/abc/HEAD..worktree', purge = true }, _G.finish)")
+  eq(child.lua_get("_G.wait_done()").err, nil)
+  eq(helpers.event_names(child), { "ReviewSessionClosed" })
+  eq(child.lua_get("require('reviewkit.core').session()"), vim.NIL)
+end
+
+T["core"]["close by id works with no session open"] = function()
+  helpers.respond(dir, { { match = { "session close" }, body = { ok = true, data = { closed = true } } } })
+  child.lua("require('reviewkit.core').close({ session = 'local/def/gone', purge = true }, _G.finish)")
+  eq(child.lua_get("_G.wait_done()").err, nil)
+  local calls = helpers.calls(dir)
+  eq(calls[#calls].args, { "session", "close", "--session", "local/def/gone", "--purge" })
+end
+
 T["core"]["submit through the CLI merges configured sink options and fires ReviewSubmitted"] = function()
   local result = {
     sink = "herdr",

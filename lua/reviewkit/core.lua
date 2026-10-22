@@ -266,17 +266,21 @@ function M.refresh(opts, cb)
   end)
 end
 
----@param opts? { purge?: boolean }
+---@param opts? { purge?: boolean, session?: string }
 ---@param cb fun(err: reviewkit.Error?)
 function M.close(opts, cb)
   opts = opts or {}
-  local session, err = require_session()
-  if not session then
-    return vim.schedule(function()
-      cb(err)
-    end)
+  local id = opts.session
+  if not id then
+    local session, err = require_session()
+    if not session then
+      return vim.schedule(function()
+        cb(err)
+      end)
+    end
+    id = session.id
   end
-  local args = { "session", "close", "--session", session.id }
+  local args = { "session", "close", "--session", id }
   if opts.purge then
     table.insert(args, "--purge")
   end
@@ -284,9 +288,11 @@ function M.close(opts, cb)
     if run_err then
       return cb(run_err)
     end
-    stop_watching()
-    fire("ReviewSessionClosed")
-    state.session = nil
+    if state.session and state.session.id == id then
+      stop_watching()
+      fire("ReviewSessionClosed")
+      state.session = nil
+    end
     cb(nil)
   end)
 end

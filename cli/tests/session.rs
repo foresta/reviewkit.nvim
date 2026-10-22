@@ -1091,36 +1091,43 @@ fn a_moved_checkout_is_reported_as_missing_not_as_a_missing_git() {
             .output()
             .unwrap(),
     );
+    let id = opened["session"]["id"].as_str().unwrap().to_string();
     let moved = repo.path().with_extension("moved");
     std::fs::rename(repo.path(), &moved).unwrap();
-    let out = Command::cargo_bin("reviewkit")
-        .unwrap()
-        .envs(common::ISOLATED_GIT)
-        .env("REVIEWKIT_GIT", real_git())
-        .arg("--state-dir")
-        .arg(state.path())
-        .args([
-            "session",
-            "refresh",
-            "--session",
-            opened["session"]["id"].as_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    std::fs::rename(&moved, repo.path()).unwrap();
-    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(body["error"]["code"], "E_GIT", "{body}");
-    assert!(
-        body["error"]["message"]
-            .as_str()
+    let run = |args: &[&str]| {
+        let out = Command::cargo_bin("reviewkit")
             .unwrap()
-            .contains("checkout not found"),
-        "{body}"
-    );
-    let hint = body["error"]["hint"].as_str().unwrap();
-    assert!(hint.contains(&repo.path().display().to_string()), "{body}");
-    assert!(hint.contains(":ReviewClose"), "{body}");
-    assert!(!hint.contains("open the review again"), "{body}");
+            .envs(common::ISOLATED_GIT)
+            .env("REVIEWKIT_GIT", real_git())
+            .arg("--state-dir")
+            .arg(state.path())
+            .args(args)
+            .output()
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let refreshed = run(&["session", "refresh", "--session", &id]);
+    let resumed = run(&["session", "open", "--session", &id]);
+    std::fs::rename(&moved, repo.path()).unwrap();
+    for body in [refreshed, resumed] {
+        assert_eq!(body["error"]["code"], "E_GIT", "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("checkout not found"),
+            "{body}"
+        );
+        let hint = body["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains(&repo.path().display().to_string()), "{body}");
+        assert!(hint.contains(":Review resume"), "{body}");
+        assert!(
+            hint.contains(&format!("reviewkit session close --purge --session {id}")),
+            "{body}"
+        );
+        assert!(!hint.contains(":ReviewClose"), "{body}");
+        assert!(!hint.contains("open the review again"), "{body}");
+    }
 }
 
 #[test]
@@ -1191,6 +1198,9 @@ fn reading_or_commenting_on_a_file_of_a_moved_checkout_names_the_checkout() {
                 .contains("checkout not found"),
             "{body}"
         );
+        let hint = body["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains(":Review resume"), "{body}");
+        assert!(!hint.contains(":ReviewClose"), "{body}");
     }
 }
 

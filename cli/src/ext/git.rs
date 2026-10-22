@@ -217,12 +217,41 @@ impl SystemGit {
     }
 }
 
+const CHECKOUT_NOT_FOUND: &str = "checkout_not_found";
+
 pub fn checkout_not_found(cwd: &Path) -> Error {
-    Error::tool("git", ErrorCode::EGit, format!("checkout not found: {}", cwd.display())).hint(format!(
-        "move the checkout back to {}, or delete this session (:ReviewClose!) \
-             (opening the review from the new place starts a new, empty session)",
+    Error::tool("git", ErrorCode::EGit, format!("checkout not found: {}", cwd.display()))
+        .hint(checkout_hint(cwd, None))
+        .details(serde_json::json!({ "reason": CHECKOUT_NOT_FOUND, "path": cwd.to_string_lossy() }))
+}
+
+/// Not `:ReviewClose!`: it acts on whichever session is open, which is not
+/// the one that failed when the failure came from resuming it.
+fn checkout_hint(cwd: &Path, session: Option<&str>) -> String {
+    let delete = match session {
+        Some(id) => format!("pick it in `:Review resume`, or run `reviewkit session close --purge --session {id}`"),
+        None => "pick it in `:Review resume`".to_string(),
+    };
+    format!(
+        "move the checkout back to {}, or delete the session: {delete} \
+         (opening the review from the new place starts a new, empty session)",
         cwd.display()
-    ))
+    )
+}
+
+pub fn name_session(err: Error, session: &str) -> Error {
+    if err.details.get("reason").and_then(|r| r.as_str()) != Some(CHECKOUT_NOT_FOUND) {
+        return err;
+    }
+    let Some(path) = err
+        .details
+        .get("path")
+        .and_then(|p| p.as_str())
+        .map(std::path::PathBuf::from)
+    else {
+        return err;
+    };
+    err.hint(checkout_hint(&path, Some(session)))
 }
 
 fn has_promisor(run: impl Fn(&[&str]) -> Result<Vec<u8>>) -> bool {
