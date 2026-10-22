@@ -138,6 +138,14 @@ pub fn reanchor(session: &mut Session, repo: &Repository<'_>) -> Result<()> {
     Ok(())
 }
 
+/// git's id of the empty blob, for SHA-1 and SHA-256 repositories.
+fn is_empty_blob(id: &str) -> bool {
+    matches!(
+        id,
+        "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391" | "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
+    )
+}
+
 struct Followed {
     start: u32,
     line: u32,
@@ -162,12 +170,19 @@ fn follow(
         stale: true,
     };
     let Some(file) = file else { return stale };
-    if file.binary || file.too_large {
+    // Made on a binary or too-large file: there is no text to check, and
+    // calling it stale would hold back a comment nothing contradicts. An
+    // empty text file has no context either, but its virtual first line is
+    // gone once content arrives.
+    if anchor.context.lines.is_empty() && !anchor.blob.as_deref().is_some_and(is_empty_blob) {
         return Followed {
             start,
             line,
-            stale: !anchor.context.lines.is_empty(),
+            stale: false,
         };
+    }
+    if file.binary || file.too_large {
+        return stale;
     }
     let matches = |s: u32, l: u32| {
         file.lines.get(s as usize - 1..l as usize).is_some_and(|actual| {
@@ -315,7 +330,7 @@ mod tests {
 
     #[test]
     fn shifting_past_the_end_of_the_file_is_stale() {
-        let a = anchor(Some("old"), &[]);
+        let a = anchor(Some("old"), &["x"]);
         let f = file(Some("new"), false, &["only"]);
         let out = follow(&a, Some(&f), 1, 1, |_, _| Some(vec![h(0, 0, 1, 1)]));
         assert!(out.stale);
@@ -327,6 +342,17 @@ mod tests {
         assert!(follow(&text, Some(&file(Some("new"), true, &[])), 1, 1, no_diff).stale);
         let bin = anchor(Some("old"), &[]);
         assert!(!follow(&bin, Some(&file(Some("new"), true, &[])), 1, 1, no_diff).stale);
+    }
+
+    #[test]
+    fn a_comment_made_without_context_stays_on_its_line_when_the_file_becomes_text() {
+        let a = anchor(Some("old"), &[]);
+        let f = file(Some("new"), false, &["a", "b", "c"]);
+        let out = follow(&a, Some(&f), 2, 2, |_, _| Some(vec![h(1, 1, 1, 3)]));
+        assert!(!out.stale);
+        assert_eq!((out.start, out.line), (2, 2));
+        let without_diff = follow(&a, Some(&f), 2, 2, no_diff);
+        assert!(!without_diff.stale);
     }
 
     #[test]

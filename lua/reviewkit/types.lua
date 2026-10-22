@@ -4,7 +4,7 @@
 local M = {}
 
 M.SCHEMA_VERSION = 1
-M.SCHEMA_REVISION = 13
+M.SCHEMA_REVISION = 14
 
 ---@alias reviewkit.AgentType "claude"|"plain"
 
@@ -250,6 +250,7 @@ M.SCHEMA_REVISION = 13
 ---@field decision boolean
 ---@field id string
 ---@field kind string
+---@field missing? boolean The local checkout was moved or removed, so opening it fails. Always false for a pull request, whose worktree a refresh rebuilds.
 ---@field repo_root string
 ---@field title? string
 ---@field updated_at string

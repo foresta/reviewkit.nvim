@@ -1152,3 +1152,35 @@ fn reading_or_commenting_on_a_file_of_a_moved_checkout_names_the_checkout() {
         );
     }
 }
+
+#[test]
+fn a_session_whose_checkout_moved_is_listed_as_missing() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    repo.write("keep.txt", "changed\n");
+    json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD"])
+            .output()
+            .unwrap(),
+    );
+    let list = || {
+        json(
+            &Command::cargo_bin("reviewkit")
+                .unwrap()
+                .envs(common::ISOLATED_GIT)
+                .env("REVIEWKIT_GIT", real_git())
+                .arg("--state-dir")
+                .arg(state.path())
+                .args(["session", "list"])
+                .output()
+                .unwrap(),
+        )
+    };
+    assert_eq!(list()["data"][0]["missing"], false);
+    let moved = repo.path().with_extension("moved");
+    std::fs::rename(repo.path(), &moved).unwrap();
+    let listed = list();
+    std::fs::rename(&moved, repo.path()).unwrap();
+    assert_eq!(listed["data"][0]["missing"], true, "{listed}");
+}
