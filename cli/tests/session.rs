@@ -1036,36 +1036,47 @@ fn a_large_file_deleted_or_only_large_at_the_head_commit_is_too_large() {
 
 #[test]
 fn a_git_command_that_hangs_in_a_partial_clone_times_out() {
-    for promisor in ["extensions.partialClone=origin", "remote.origin.promisor=true"] {
-        let (key, value) = promisor.split_once('=').unwrap();
-        let state = tempfile::tempdir().unwrap();
-        let repo = Repo::new();
-        repo.git(&["config", key, value]);
-        repo.write("keep.txt", "changed\n");
-        let bin = tempfile::tempdir().unwrap();
-        let slow_git = bin.path().join("git");
-        // A partial clone fetches missing blobs inside commands like diff, with
-        // no deadline of their own.
-        std::fs::write(
-            &slow_git,
-            format!(
-                "#!/bin/sh\ncase \"$*\" in *\" diff \"*) sleep 30 ;; esac\nexec {} \"$@\"\n",
-                real_git().display()
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&slow_git, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-        let started = std::time::Instant::now();
-        let out = reviewkit(&state, &repo)
-            .env("REVIEWKIT_GIT", &slow_git)
-            .env("REVIEWKIT_GIT_TIMEOUT_MS", "500")
-            .args(["session", "open", "--local", "--base", "HEAD"])
-            .output()
+    let cases = ["extensions.partialClone=origin", "remote.origin.promisor=true"].map(|promisor| {
+        std::thread::spawn(move || {
+            let (key, value) = promisor.split_once('=').unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let repo = Repo::new();
+            repo.git(&["config", key, value]);
+            repo.write("keep.txt", "changed\n");
+            let bin = tempfile::tempdir().unwrap();
+            let slow_git = bin.path().join("git");
+            // A partial clone fetches missing blobs inside commands like diff, with
+            // no deadline of their own.
+            std::fs::write(
+                &slow_git,
+                format!(
+                    "#!/bin/sh\ncase \"$*\" in *\" diff \"*) sleep 60 ;; esac\nexec {} \"$@\"\n",
+                    real_git().display()
+                ),
+            )
             .unwrap();
-        assert!(started.elapsed() < std::time::Duration::from_secs(20));
-        let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-        assert_eq!(body["error"]["code"], "E_GIT");
-        assert!(body["error"]["message"].as_str().unwrap().contains("did not finish"));
+            std::fs::set_permissions(&slow_git, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+            let started = std::time::Instant::now();
+            // Every command of a partial clone is bounded, and some of their
+            // failures are read as an answer rather than an error; a deadline
+            // near a loaded machine's spawn time can trip one of those first.
+            let out = reviewkit(&state, &repo)
+                .env("REVIEWKIT_GIT", &slow_git)
+                .env("REVIEWKIT_GIT_TIMEOUT_MS", "2000")
+                .args(["session", "open", "--local", "--base", "HEAD"])
+                .output()
+                .unwrap();
+            assert!(started.elapsed() < std::time::Duration::from_secs(30), "{promisor}");
+            let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(body["error"]["code"], "E_GIT", "{promisor}: {body}");
+            assert!(
+                body["error"]["message"].as_str().unwrap().contains("did not finish"),
+                "{promisor}: {body}"
+            );
+        })
+    });
+    for case in cases {
+        case.join().unwrap();
     }
 }
 
@@ -1120,6 +1131,31 @@ fn reading_or_commenting_on_a_file_of_a_moved_checkout_names_the_checkout() {
             .unwrap(),
     );
     let id = opened["session"]["id"].as_str().unwrap().to_string();
+    let restorable = json(
+        &reviewkit(&state, &repo)
+            .args(["comment", "add", "--session", &id])
+            .write_stdin(r#"{"path": "keep.txt", "side": "head", "line": 1, "body": "restorable"}"#)
+            .output()
+            .unwrap(),
+    )["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    json(
+        &reviewkit(&state, &repo)
+            .args(["submit", "apply", "--session", &id])
+            .write_stdin(format!(
+                r#"{{"sink": "slack", "sent": [{{"comment_id": "{restorable}"}}], "failed": [], "skipped": [], "decision": "not_applicable"}}"#
+            ))
+            .output()
+            .unwrap(),
+    );
+    json(
+        &reviewkit(&state, &repo)
+            .args(["comment", "clear", "--session", &id, "--delivered"])
+            .output()
+            .unwrap(),
+    );
     let moved = repo.path().with_extension("moved");
     std::fs::rename(repo.path(), &moved).unwrap();
     let run = |args: &[&str], stdin: &str| {
@@ -1140,8 +1176,65 @@ fn reading_or_commenting_on_a_file_of_a_moved_checkout_names_the_checkout() {
         &["comment", "add", "--session", &id],
         r#"{"path": "keep.txt", "side": "head", "line": 1, "body": "x"}"#,
     );
+    let restored = run(&["history", "restore", "--session", &id, "--id", &restorable], "");
     std::fs::rename(&moved, repo.path()).unwrap();
-    for body in [base, added] {
+    for body in [base, added, restored] {
+        assert_eq!(body["error"]["code"], "E_GIT", "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("checkout not found"),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn reading_the_head_of_a_commit_session_on_a_moved_checkout_names_the_checkout() {
+    let state = tempfile::tempdir().unwrap();
+    let repo = Repo::new();
+    let sha = String::from_utf8(
+        Process::new(real_git())
+            .envs(common::ISOLATED_GIT)
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    let opened = json(
+        &reviewkit(&state, &repo)
+            .args(["session", "open", "--local", "--base", "HEAD~1", "--head", &sha])
+            .output()
+            .unwrap(),
+    );
+    let id = opened["session"]["id"].as_str().unwrap().to_string();
+    let moved = repo.path().with_extension("moved");
+    std::fs::rename(repo.path(), &moved).unwrap();
+    let run = |args: &[&str], stdin: &str| {
+        let out = Command::cargo_bin("reviewkit")
+            .unwrap()
+            .envs(common::ISOLATED_GIT)
+            .env("REVIEWKIT_GIT", real_git())
+            .arg("--state-dir")
+            .arg(state.path())
+            .args(args)
+            .write_stdin(stdin)
+            .output()
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    let head = run(&["file", "head", "--session", &id, "--path", "keep.txt"], "");
+    let added = run(
+        &["comment", "add", "--session", &id],
+        r#"{"path": "keep.txt", "side": "head", "line": 1, "body": "x"}"#,
+    );
+    std::fs::rename(&moved, repo.path()).unwrap();
+    for body in [head, added] {
         assert_eq!(body["error"]["code"], "E_GIT", "{body}");
         assert!(
             body["error"]["message"]

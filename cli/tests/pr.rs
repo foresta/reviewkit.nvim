@@ -522,8 +522,10 @@ fn a_pull_request_refresh_does_not_lock_out_other_commands_while_it_fetches() {
     );
     let mut rules: Vec<serde_json::Value> =
         serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
+    let hold = gh.dir.path().join("hold");
+    std::fs::write(&hold, "").unwrap();
     for rule in rules.iter_mut() {
-        rule["sleep"] = serde_json::json!(3);
+        rule["hold_while"] = serde_json::json!(hold);
     }
     std::fs::write(
         gh.dir.path().join("responses.json"),
@@ -562,6 +564,7 @@ fn a_pull_request_refresh_does_not_lock_out_other_commands_while_it_fetches() {
             .unwrap(),
     );
     assert_eq!(decided["session"]["decision"]["body"], "meanwhile");
+    std::fs::remove_file(&hold).unwrap();
 
     let refreshed = refresh.wait_with_output().unwrap();
     assert!(refreshed.status.success());
@@ -582,8 +585,12 @@ fn reopening_a_pull_request_does_not_lock_out_other_commands_while_it_fetches() 
     );
     let mut rules: Vec<serde_json::Value> =
         serde_json::from_str(&std::fs::read_to_string(gh.dir.path().join("responses.json")).unwrap()).unwrap();
+    let hold = gh.dir.path().join("hold");
+    std::fs::write(&hold, "").unwrap();
     for rule in rules.iter_mut() {
-        rule["sleep"] = serde_json::json!(4);
+        if rule["match"].to_string().contains("graphql") {
+            rule["hold_while"] = serde_json::json!(hold);
+        }
     }
     std::fs::write(
         gh.dir.path().join("responses.json"),
@@ -628,6 +635,7 @@ fn reopening_a_pull_request_does_not_lock_out_other_commands_while_it_fetches() 
             .unwrap(),
     );
     assert_eq!(decided["session"]["decision"]["body"], "meanwhile");
+    std::fs::remove_file(&hold).unwrap();
 
     let reopened = reopen.wait_with_output().unwrap();
     assert!(reopened.status.success());
