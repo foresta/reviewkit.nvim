@@ -90,15 +90,28 @@ jobs:
       # SHA256SUMS makes installers fall back to building from source.
       # A rerun after a failed publish finds the draft already there, so it
       # re-uploads over it instead of creating it again.
+      # Only gh's "release not found" means there is none: taking a network
+      # or server error for it would create a release that may already exist.
       - run: |
-          draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          if draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>"$RUNNER_TEMP/view.err"); then
+            :
+          elif grep -q '^release not found$' "$RUNNER_TEMP/view.err"; then
+            draft=missing
+          else
+            cat "$RUNNER_TEMP/view.err" >&2
+            echo "could not read the release $GITHUB_REF_NAME"
+            exit 1
+          fi
           if [ "$draft" = false ]; then
             echo "$GITHUB_REF_NAME is already published; leaving its assets alone"
             exit 0
           elif [ "$draft" = true ]; then
             gh release upload "$GITHUB_REF_NAME" --clobber dist/*
-          else
+          elif [ "$draft" = missing ]; then
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes dist/*
+          else
+            echo "unexpected isDraft for $GITHUB_REF_NAME: $draft"
+            exit 1
           fi
           gh release edit "$GITHUB_REF_NAME" --draft=false
         env:
