@@ -277,9 +277,6 @@ fn degrade<T: serde::de::DeserializeOwned>(value: Option<&mut serde_json::Value>
     }
 }
 
-/// The sink's own code is kept in `details.code` (`details.reported_code`
-/// when the sink's details already use `code`) and in the message, which is
-/// what `last_error` shows.
 fn degrade_error(error: &mut serde_json::Value, sink: &str) {
     if is_known::<Error>(error) {
         return;
@@ -293,7 +290,7 @@ fn degrade_error(error: &mut serde_json::Value, sink: &str) {
     };
     let known_code = serde_json::from_value::<crate::error::ErrorCode>(original.clone()).ok();
     let mut degraded = Error::new(known_code.unwrap_or(crate::error::ErrorCode::ETool), message);
-    // The sink's own details are kept for diagnosis whatever else was broken.
+    // Not dropped with the broken fields: they are all that diagnoses the sink.
     let mut details = match field("details") {
         serde_json::Value::Object(map) => map,
         _ => serde_json::Map::new(),

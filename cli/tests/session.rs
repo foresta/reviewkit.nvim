@@ -1117,6 +1117,10 @@ fn a_moved_checkout_is_reported_as_missing_not_as_a_missing_git() {
             .contains("checkout not found"),
         "{body}"
     );
+    let hint = body["error"]["hint"].as_str().unwrap();
+    assert!(hint.contains(&repo.path().display().to_string()), "{body}");
+    assert!(hint.contains(":ReviewClose"), "{body}");
+    assert!(!hint.contains("open the review again"), "{body}");
 }
 
 #[test]
@@ -1292,12 +1296,13 @@ fn a_checkout_whose_objects_cannot_be_written_still_takes_comments_and_refreshes
     let id = opened["session"]["id"].as_str().unwrap().to_string();
     repo.write("keep.txt", "changed again\n");
     let objects = repo.path().join(".git/objects");
-    let set_mode = |mode: u32| {
-        for entry in walk(&objects) {
-            std::fs::set_permissions(&entry, std::os::unix::fs::PermissionsExt::from_mode(mode)).unwrap();
-        }
-    };
-    set_mode(0o555);
+    let read_only = ReadOnlyDirs::new(walk(&objects));
+    let probe = objects.join("probe");
+    if std::fs::write(&probe, "").is_ok() {
+        let _ = std::fs::remove_file(&probe);
+        eprintln!("skipped: the objects dir stays writable after chmod (running as root?)");
+        return;
+    }
     let added = reviewkit(&state, &repo)
         .args(["comment", "add", "--session", &id])
         .write_stdin(r#"{"path": "keep.txt", "side": "head", "line": 1, "body": "x"}"#)
@@ -1307,12 +1312,36 @@ fn a_checkout_whose_objects_cannot_be_written_still_takes_comments_and_refreshes
         .args(["session", "refresh", "--session", &id])
         .output()
         .unwrap();
-    set_mode(0o755);
+    drop(read_only);
     let added: serde_json::Value = serde_json::from_slice(&added.stdout).unwrap();
     let refreshed: serde_json::Value = serde_json::from_slice(&refreshed.stdout).unwrap();
     assert_eq!(added["ok"], true, "{added}");
     assert_eq!(refreshed["ok"], true, "{refreshed}");
     assert_eq!(refreshed["session"]["comments"].as_array().unwrap().len(), 1);
+}
+
+/// Restores the modes on drop, so a failed assertion does not leave a
+/// directory the temp dir cleanup cannot remove.
+struct ReadOnlyDirs(Vec<std::path::PathBuf>);
+
+impl ReadOnlyDirs {
+    fn new(dirs: Vec<std::path::PathBuf>) -> Self {
+        let guard = Self(dirs);
+        guard.set_mode(0o555);
+        guard
+    }
+
+    fn set_mode(&self, mode: u32) {
+        for dir in &self.0 {
+            let _ = std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(mode));
+        }
+    }
+}
+
+impl Drop for ReadOnlyDirs {
+    fn drop(&mut self) {
+        self.set_mode(0o755);
+    }
 }
 
 fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {

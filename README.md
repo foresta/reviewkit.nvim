@@ -117,14 +117,15 @@ the plugin, and whether `git`, `gh` and `herdr` are available.
 | `:Review pr <number\|url>` | review a pull request |
 | `:Review resume [id]` / `:Review refresh` | reopen a saved session (this repository's first) / recompute it |
 | `:Review threads [refresh]` | list the pull request's review threads |
-| `:ReviewSubmit [herdr\|github\|clipboard]` / `:'<,'>ReviewSubmit <sink>` | send the queue (the range form, in the queue list, sends only the selected comments); without a sink, to the session's own destination; comments leave it only at the session's own destination (GitHub for a PR, the agent for a local diff), so a PR review can go to an agent first and to GitHub later; GitHub submits are previewed first (`sinks.github.confirm = false` skips it) |
+| `:ReviewSubmit [herdr\|github\|clipboard]` / `:'<,'>ReviewSubmit [sink]` | send the queue (the range form, in the queue list, sends only the selected comments); without a sink, either form goes to the session's own destination; comments leave it only at the session's own destination (GitHub for a PR, the agent for a local diff), so a PR review can go to an agent first and to GitHub later; GitHub submits are previewed first; with `sinks.github.confirm = false` they are posted, publicly, with no preview, the default submit of a PR session included |
 | `:ReviewClose[!]` | close the session (`!` also deletes its state); asks first while comments are unsent |
 | `:ReviewHistory` | list the comments that left the queue; `r` puts back one that `D` moved there (a comment that reached its destination stays, since editing it would deliver it twice) |
 | `:ReviewInstall` | install or update the CLI (release download, else `cargo build`) |
 | `:ReviewLog` | show recent CLI calls and errors |
 
 To send only some comments, select their lines in the queue list (`<leader>rq`) and press
-`<leader>rs`, or run `:'<,'>ReviewSubmit <sink>` there. A selection never carries the decision
+`<leader>rs`, or run `:'<,'>ReviewSubmit [sink]` there; without a sink they go to the session's own
+destination, like the whole queue. A selection never carries the decision
 or thread actions, so you can ask the agent to fix a few things and post the rest, decision
 included, to GitHub later.
 

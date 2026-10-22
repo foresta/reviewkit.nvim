@@ -726,6 +726,10 @@ local function ensure_recorded(session, cb)
       if not fresh.pending_apply then
         return cb(nil, fresh)
       end
+      -- Only a newer CLI can record it, so draining here cannot clear it.
+      if fresh.pending_apply_newer then
+        return refuse(fresh)
+      end
       local function drain(tries)
         -- One drain at a time: a second one would only meet the first's lock.
         if state.draining and tries > 0 then

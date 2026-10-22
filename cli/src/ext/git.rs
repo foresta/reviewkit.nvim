@@ -218,8 +218,11 @@ impl SystemGit {
 }
 
 pub fn checkout_not_found(cwd: &Path) -> Error {
-    Error::tool("git", ErrorCode::EGit, format!("checkout not found: {}", cwd.display()))
-        .hint("it was moved or removed; open the review again from where the checkout is now")
+    Error::tool("git", ErrorCode::EGit, format!("checkout not found: {}", cwd.display())).hint(format!(
+        "move the checkout back to {}, or delete this session (:ReviewClose!) \
+             (opening the review from the new place starts a new, empty session)",
+        cwd.display()
+    ))
 }
 
 fn has_promisor(run: impl Fn(&[&str]) -> Result<Vec<u8>>) -> bool {
